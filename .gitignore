@@ -1,0 +1,18 @@
+node_modules/
+dist/
+
+# env
+.env
+.env.*
+!.env.example
+
+# session data
+.bitbank-mock/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# logs
+*.log

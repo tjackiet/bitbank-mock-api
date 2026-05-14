@@ -1,0 +1,24 @@
+{
+  "name": "bitbank-mock-api",
+  "version": "0.0.1",
+  "description": "bitbank.cc API 互換の mock サーバ。bot を実弾なしで動かすためのローカル開発環境。",
+  "type": "module",
+  "license": "MIT",
+  "author": "tjackiet",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tjackiet/bitbank-mock-api.git"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "test": "vitest"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^2"
+  }
+}
