@@ -183,3 +183,4 @@ bitbank-mock-api/
 ## 関連リポジトリ
 
 - [tjackiet/bitbank-cli-skills](https://github.com/tjackiet/bitbank-cli-skills) — bitbank API への CLI アクセス層。`paper-trade` 機能がこの mock の前段
+- [bitbankinc/bitbank-api-docs](https://github.com/bitbankinc/bitbank-api-docs) — bitbank 公式の REST / WebSocket API 仕様。互換実装の参照元
