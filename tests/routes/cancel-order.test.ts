@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildOrder, buildState } from "../engine/helpers.ts";
-import { buildTestServer } from "./helpers.ts";
+import { setupBuildTestServer } from "./helpers.ts";
 
 describe("POST /v1/user/spot/cancel_order", () => {
+  const build = setupBuildTestServer();
+
   it("cancels an open order", async () => {
     const state = buildState({
       balances: { jpy: 10_000_000 },
       openOrders: [buildOrder({ id: "123", pair: "btc_jpy" })],
     });
-    const { fastify, store } = await buildTestServer(state);
+    const { fastify, store } = await build(state);
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/cancel_order",
@@ -22,7 +24,7 @@ describe("POST /v1/user/spot/cancel_order", () => {
   });
 
   it("returns 50009 when order not found", async () => {
-    const { fastify } = await buildTestServer();
+    const { fastify } = await build();
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/cancel_order",
@@ -35,6 +37,8 @@ describe("POST /v1/user/spot/cancel_order", () => {
 });
 
 describe("POST /v1/user/spot/cancel_orders", () => {
+  const build = setupBuildTestServer();
+
   it("cancels multiple", async () => {
     const state = buildState({
       balances: { jpy: 10_000_000 },
@@ -44,7 +48,7 @@ describe("POST /v1/user/spot/cancel_orders", () => {
         buildOrder({ id: "3", price: 5_200_000 }),
       ],
     });
-    const { fastify, store } = await buildTestServer(state);
+    const { fastify, store } = await build(state);
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/cancel_orders",

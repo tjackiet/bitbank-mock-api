@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildState } from "../engine/helpers.ts";
-import { buildTestServer } from "./helpers.ts";
+import { setupBuildTestServer } from "./helpers.ts";
 
 describe("GET /v1/user/spot/trade_history", () => {
+  const build = setupBuildTestServer();
+
   it("returns trades newest-first", async () => {
     const state = buildState({
       history: [
@@ -28,7 +30,7 @@ describe("GET /v1/user/spot/trade_history", () => {
         },
       ],
     });
-    const { fastify } = await buildTestServer(state);
+    const { fastify } = await build(state);
     const res = await fastify.inject({ method: "GET", url: "/v1/user/spot/trade_history" });
     const body = res.json() as {
       success: number;
@@ -65,7 +67,7 @@ describe("GET /v1/user/spot/trade_history", () => {
         },
       ],
     });
-    const { fastify } = await buildTestServer(state);
+    const { fastify } = await build(state);
     const res = await fastify.inject({
       method: "GET",
       url: "/v1/user/spot/trade_history?count=1",

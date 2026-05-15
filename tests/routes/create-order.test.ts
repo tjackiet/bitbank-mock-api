@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildState, candle } from "../engine/helpers.ts";
-import { buildTestServer } from "./helpers.ts";
+import { setupBuildTestServer } from "./helpers.ts";
 
 describe("POST /v1/user/spot/order", () => {
+  const build = setupBuildTestServer();
+
   it("creates a limit buy and adds to open orders", async () => {
-    const { fastify, store } = await buildTestServer(
+    const { fastify, store } = await build(
       buildState({ balances: { jpy: 10_000_000 } }),
     );
     const res = await fastify.inject({
@@ -20,7 +22,7 @@ describe("POST /v1/user/spot/order", () => {
   });
 
   it("rejects limit buy when funds insufficient", async () => {
-    const { fastify } = await buildTestServer(buildState({ balances: { jpy: 100 } }));
+    const { fastify } = await build(buildState({ balances: { jpy: 100 } }));
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",
@@ -33,7 +35,7 @@ describe("POST /v1/user/spot/order", () => {
 
   it("fills market buy at latest candle close", async () => {
     const now = Date.now();
-    const { fastify, store } = await buildTestServer(
+    const { fastify, store } = await build(
       buildState({ balances: { jpy: 10_000_000 } }),
       { btc_jpy: [candle(now - 60_000, 4_990_000, 5_010_000, 4_980_000, 5_000_000)] },
     );
@@ -52,7 +54,7 @@ describe("POST /v1/user/spot/order", () => {
   });
 
   it("rejects invalid pair", async () => {
-    const { fastify } = await buildTestServer();
+    const { fastify } = await build();
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",
@@ -63,7 +65,7 @@ describe("POST /v1/user/spot/order", () => {
   });
 
   it("rejects bad payload", async () => {
-    const { fastify } = await buildTestServer();
+    const { fastify } = await build();
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildOrder, buildState } from "../engine/helpers.ts";
-import { buildTestServer } from "./helpers.ts";
+import { setupBuildTestServer } from "./helpers.ts";
 
 describe("GET /v1/user/assets", () => {
+  const build = setupBuildTestServer();
+
   it("returns assets with locked/free split", async () => {
     const state = buildState({
       balances: { jpy: 1_000_000, btc: 0.5 },
@@ -10,7 +12,7 @@ describe("GET /v1/user/assets", () => {
         buildOrder({ id: "1", side: "buy", price: 5_000_000, amount: 0.1 }),
       ],
     });
-    const { fastify } = await buildTestServer(state);
+    const { fastify } = await build(state);
     const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { assets: { asset: string; free_amount: string; locked_amount: string; onhand_amount: string }[] } };
