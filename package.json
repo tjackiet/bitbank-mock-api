@@ -11,12 +11,18 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "test": "vitest"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
   },
+  "dependencies": {
+    "undici": "^6",
+    "zod": "^3"
+  },
   "devDependencies": {
+    "@types/node": "^20",
     "tsx": "^4",
     "typescript": "^5",
     "vitest": "^2"
