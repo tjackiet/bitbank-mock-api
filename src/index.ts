@@ -1,57 +1,36 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { runTick } from "./engine/match.ts";
-import { loadState, saveState } from "./engine/persist.ts";
-import { genId, nowIso, type PaperState } from "./engine/state.ts";
+import { buildServer } from "./server/http.ts";
+import { loadOrInitDefault } from "./store/session.ts";
+
+const DEFAULT_PORT = 14000;
+const DEFAULT_INITIAL_JPY = 1_000_000;
+
+function parsePort(argv: string[]): number {
+  const i = argv.indexOf("--port");
+  if (i >= 0 && argv[i + 1]) {
+    const n = Number(argv[i + 1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  if (process.env.BITBANK_MOCK_PORT) {
+    const n = Number(process.env.BITBANK_MOCK_PORT);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return DEFAULT_PORT;
+}
 
 async function main() {
-  const dir = mkdtempSync(join(tmpdir(), "bitbank-mock-smoke-"));
-  const path = join(dir, "state.json");
-  const now = nowIso();
-  const state: PaperState = {
-    version: 2,
-    createdAt: now,
-    updatedAt: now,
-    initialJpy: 1_000_000,
-    balances: { jpy: 1_000_000 },
-    history: [],
-    lastTickAt: now,
-    openOrders: [
-      {
-        id: genId(),
-        pair: "btc_jpy",
-        side: "buy",
-        type: "limit",
-        price: 5_000_000,
-        amount: 0.001,
-        createdAt: now,
-      },
-    ],
-  };
-  await saveState(path, state);
-  const t0 = Date.parse(now);
-  const r = runTick(state, {
-    candles: [
-      {
-        open: 5_010_000,
-        high: 5_020_000,
-        low: 4_999_000,
-        close: 5_005_000,
-        vol: 0.1,
-        timestamp: t0 + 60_000,
-      },
-    ],
-    nowMs: t0 + 120_000,
-    feeRate: 0.0012,
+  const argv = process.argv.slice(2);
+  const cmd = argv[0] ?? "serve";
+  if (cmd !== "serve") {
+    console.error(`unknown command: ${cmd}`);
+    process.exit(1);
+  }
+  const port = parsePort(argv);
+  const store = await loadOrInitDefault(DEFAULT_INITIAL_JPY, {
     logger: { warn: (m) => console.warn(m), info: (m) => console.log(m) },
   });
-  await saveState(path, r.state);
-  const reloaded = await loadState(path);
-  console.log("filled:", r.filled.length);
-  console.log("balance jpy:", r.state.balances.jpy);
-  console.log("balance btc:", r.state.balances.btc);
-  console.log("reload ok:", reloaded.success);
+  const fastify = await buildServer({ store, logger: true });
+  await fastify.listen({ port, host: "0.0.0.0" });
+  console.log(`bitbank-mock-api listening on http://localhost:${port}`);
 }
 
 main().catch((e) => {
