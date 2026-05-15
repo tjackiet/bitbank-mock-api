@@ -5,14 +5,16 @@ const DEFAULT_PORT = 14000;
 const DEFAULT_INITIAL_JPY = 1_000_000;
 
 function parsePort(argv: string[]): number {
+  const isValidPort = (n: number): boolean =>
+    Number.isInteger(n) && n >= 1 && n <= 65535;
   const i = argv.indexOf("--port");
   if (i >= 0 && argv[i + 1]) {
     const n = Number(argv[i + 1]);
-    if (Number.isFinite(n) && n > 0) return n;
+    if (isValidPort(n)) return n;
   }
   if (process.env.BITBANK_MOCK_PORT) {
     const n = Number(process.env.BITBANK_MOCK_PORT);
-    if (Number.isFinite(n) && n > 0) return n;
+    if (isValidPort(n)) return n;
   }
   return DEFAULT_PORT;
 }

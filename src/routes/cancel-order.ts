@@ -20,7 +20,9 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     if (!target) return err(ErrorCode.ORDER_NOT_FOUND);
     store.replace({
       ...state,
-      openOrders: state.openOrders.filter((o) => o.id !== target.id),
+      openOrders: state.openOrders.filter(
+        (o) => !(o.id === target.id && o.pair === target.pair),
+      ),
     });
     await store.persist();
     return ok(formatCanceledOrder(target));
@@ -43,7 +45,9 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     const targetIds = new Set(targets.map((o) => o.id));
     store.replace({
       ...state,
-      openOrders: state.openOrders.filter((o) => !targetIds.has(o.id)),
+      openOrders: state.openOrders.filter(
+        (o) => !(targetIds.has(o.id) && o.pair === parsed.data.pair),
+      ),
     });
     await store.persist();
     return ok({ orders: targets.map(formatCanceledOrder) });

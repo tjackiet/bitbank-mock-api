@@ -45,7 +45,7 @@ export class SessionStore {
   }
 
   nextOrderId(): string {
-    this.orderCounter = (this.orderCounter + 1) % 1000;
+    this.orderCounter += 1;
     return `${Date.now() * 1000 + this.orderCounter}`;
   }
 
@@ -53,6 +53,7 @@ export class SessionStore {
     const result = new Map<string, Candle[]>();
     const pairs = new Set(this._state.openOrders.map((o) => o.pair));
     const lastMs = Date.parse(this._state.lastTickAt);
+    let totalFilled = 0;
     for (const pair of pairs) {
       const r = await this.fetchCandles(pair, lastMs, nowMs);
       if (!r.success) {
@@ -72,6 +73,7 @@ export class SessionStore {
         feeRate: this.feeRate,
         logger: this.logger,
       });
+      totalFilled += sr.filled.length;
       this._state = {
         ...sr.state,
         openOrders: [...sr.state.openOrders, ...others],
@@ -79,6 +81,7 @@ export class SessionStore {
     }
     const ts = new Date(nowMs).toISOString();
     this._state = { ...this._state, lastTickAt: ts, updatedAt: ts };
+    if (totalFilled > 0) await this.persist();
     return result;
   }
 

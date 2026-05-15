@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-const numStr = z.union([z.number(), z.string().transform((s) => Number(s))]);
+const numStr = z.coerce.number().finite();
 
 export const CreateOrderRequestSchema = z.object({
   pair: z.string().min(1),
-  amount: numStr.refine((n) => Number.isFinite(n) && n > 0, "amount must be > 0"),
+  amount: numStr.refine((n) => n > 0, "amount must be > 0"),
   price: numStr.optional(),
   side: z.enum(["buy", "sell"]),
   type: z.enum(["market", "limit"]),
@@ -28,5 +28,5 @@ export const ActiveOrdersQuerySchema = z.object({
 
 export const TradeHistoryQuerySchema = z.object({
   pair: z.string().optional(),
-  count: numStr.optional(),
+  count: numStr.int().positive().optional(),
 });
