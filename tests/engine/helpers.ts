@@ -1,5 +1,5 @@
 import type { Candle } from "../../src/engine/candles.ts";
-import type { OrderRecord, PaperState } from "../../src/engine/state.ts";
+import type { OrderRecord, PaperState, TradeRecord } from "../../src/engine/state.ts";
 
 export function buildState(overrides: Partial<PaperState> = {}): PaperState {
   return {
@@ -31,6 +31,22 @@ export function buildOrder(overrides: Partial<OrderRecord> = {}): OrderRecord {
     orderedAt: "2026-01-01T00:00:00.000Z",
     canceledAt: null,
     updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildTrade(overrides: Partial<TradeRecord> = {}): TradeRecord {
+  return {
+    tradeId: "1",
+    orderId: "1",
+    pair: "btc_jpy",
+    side: "buy",
+    type: "limit",
+    amount: 0.001,
+    price: 5_000_000,
+    feeQuote: 6,
+    makerTaker: "maker",
+    executedAt: "2026-01-01T00:01:00.000Z",
     ...overrides,
   };
 }

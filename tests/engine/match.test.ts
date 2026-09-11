@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyFill, runTick } from "../../src/engine/match.ts";
+import { activeOrders } from "../../src/engine/state.ts";
 import type { Logger } from "../../src/engine/types.ts";
 import { buildOrder, buildState, candle } from "./helpers.ts";
 
@@ -8,22 +9,22 @@ const MIN = 60_000;
 
 describe("applyFill", () => {
   it("buy: decreases quote (incl fee), increases base", () => {
-    const state = buildState({ balances: { jpy: 1_000_000 } });
-    const order = buildOrder({ side: "buy", price: 100_000, amount: 1 });
+    const order = buildOrder({ side: "buy", price: 100_000, startAmount: 1 });
+    const state = buildState({ balances: { jpy: 1_000_000 }, orders: [order] });
     const c = candle(T0, 100_000, 100_000, 100_000, 100_000);
-    const r = applyFill(state, order, c, 0.001);
+    const r = applyFill(state, order.id, c, 0.001);
     expect(r.state.balances.jpy).toBeCloseTo(1_000_000 - 100_000 - 100, 6);
     expect(r.state.balances.btc).toBeCloseTo(1, 6);
-    expect(r.entry.feeJpy).toBeCloseTo(100, 6);
-    expect(r.state.openOrders).toHaveLength(0);
-    expect(r.state.history).toHaveLength(1);
+    expect(r.trade.feeQuote).toBeCloseTo(100, 6);
+    expect(activeOrders(r.state)).toHaveLength(0);
+    expect(r.state.trades).toHaveLength(1);
   });
 
   it("sell: decreases base, increases quote (net of fee)", () => {
-    const state = buildState({ balances: { jpy: 0, btc: 1 } });
-    const order = buildOrder({ side: "sell", price: 100_000, amount: 1 });
+    const order = buildOrder({ side: "sell", price: 100_000, startAmount: 1 });
+    const state = buildState({ balances: { jpy: 0, btc: 1 }, orders: [order] });
     const c = candle(T0, 100_000, 100_000, 100_000, 100_000);
-    const r = applyFill(state, order, c, 0.001);
+    const r = applyFill(state, order.id, c, 0.001);
     expect(r.state.balances.btc).toBeCloseTo(0, 6);
     expect(r.state.balances.jpy).toBeCloseTo(100_000 - 100, 6);
   });
@@ -31,15 +32,15 @@ describe("applyFill", () => {
   it("filledAt = candle.timestamp + 1min (close of bar)", () => {
     const order = buildOrder();
     const c = candle(T0, 1, 1, 1, 1);
-    const r = applyFill(buildState(), order, c, 0);
-    expect(r.entry.filledAt).toBe(new Date(T0 + MIN).toISOString());
+    const r = applyFill(buildState({ orders: [order] }), order.id, c, 0);
+    expect(r.trade.executedAt).toBe(new Date(T0 + MIN).toISOString());
   });
 });
 
 describe("runTick fill judgment", () => {
   it("buy fills when candle.low <= price", () => {
     const state = buildState({
-      openOrders: [buildOrder({ side: "buy", price: 100, amount: 1 })],
+      orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
       balances: { jpy: 10_000 },
     });
     const r = runTick(state, {
@@ -48,12 +49,12 @@ describe("runTick fill judgment", () => {
       feeRate: 0,
     });
     expect(r.filled).toHaveLength(1);
-    expect(r.state.openOrders).toHaveLength(0);
+    expect(activeOrders(r.state)).toHaveLength(0);
   });
 
   it("buy does NOT fill when candle.low > price", () => {
     const state = buildState({
-      openOrders: [buildOrder({ side: "buy", price: 100, amount: 1 })],
+      orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
     });
     const r = runTick(state, {
       candles: [candle(T0 + MIN, 110, 120, 105, 115)],
@@ -61,13 +62,13 @@ describe("runTick fill judgment", () => {
       feeRate: 0,
     });
     expect(r.filled).toHaveLength(0);
-    expect(r.state.openOrders).toHaveLength(1);
+    expect(activeOrders(r.state)).toHaveLength(1);
   });
 
   it("sell fills when candle.high >= price", () => {
     const state = buildState({
       balances: { jpy: 0, btc: 1 },
-      openOrders: [buildOrder({ side: "sell", price: 100, amount: 1 })],
+      orders: [buildOrder({ side: "sell", price: 100, startAmount: 1 })],
     });
     const r = runTick(state, {
       candles: [candle(T0 + MIN, 90, 101, 80, 95)],
@@ -77,14 +78,14 @@ describe("runTick fill judgment", () => {
     expect(r.filled).toHaveLength(1);
   });
 
-  it("ignores candles older than order.createdAt", () => {
+  it("ignores candles older than order.orderedAt", () => {
     const state = buildState({
-      openOrders: [
+      orders: [
         buildOrder({
-          createdAt: new Date(T0 + 5 * MIN).toISOString(),
+          orderedAt: new Date(T0 + 5 * MIN).toISOString(),
           side: "buy",
           price: 100,
-          amount: 1,
+          startAmount: 1,
         }),
       ],
     });
@@ -122,7 +123,7 @@ describe("runTick fill judgment", () => {
   it("filters candles outside [fromMs, nowMs]", () => {
     const state = buildState({
       lastTickAt: new Date(T0 + 5 * MIN).toISOString(),
-      openOrders: [buildOrder({ side: "buy", price: 100, amount: 1 })],
+      orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
     });
     const r = runTick(state, {
       candles: [
@@ -140,7 +141,7 @@ describe("runTick fill judgment", () => {
     const infos: string[] = [];
     const logger: Logger = { warn: () => {}, info: (m) => infos.push(m) };
     const state = buildState({
-      openOrders: [buildOrder({ side: "buy", price: 100, amount: 1 })],
+      orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
     });
     runTick(state, {
       candles: [candle(T0 + MIN, 110, 110, 50, 105)],
