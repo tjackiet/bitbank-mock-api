@@ -2,12 +2,7 @@ import type { Candle } from "../engine/candles.ts";
 import { defaultFetchCandles } from "../engine/candles.ts";
 import { runTick } from "../engine/match.ts";
 import { defaultStatePath, loadState, saveState } from "../engine/persist.ts";
-import {
-  DEFAULT_TAKER_FEE_RATE,
-  nowIso,
-  type PaperHistoryEntry,
-  type PaperState,
-} from "../engine/state.ts";
+import { activeOrders, DEFAULT_TAKER_FEE_RATE, nowIso, type PaperState } from "../engine/state.ts";
 import type { FetchCandles, Logger } from "../engine/types.ts";
 import { noopLogger } from "../engine/types.ts";
 
@@ -26,7 +21,6 @@ export class SessionStore {
   private readonly path: string | null;
   readonly feeRate: number;
   private readonly logger: Logger;
-  private orderCounter = 0;
 
   constructor(state: PaperState, opts: SessionStoreOptions = {}) {
     this._state = state;
@@ -44,15 +38,11 @@ export class SessionStore {
     this._state = next;
   }
 
-  nextOrderId(): string {
-    this.orderCounter += 1;
-    return `${Date.now() * 1000 + this.orderCounter}`;
-  }
-
   async tick(nowMs: number = Date.now()): Promise<Map<string, Candle[]>> {
     const result = new Map<string, Candle[]>();
-    const pairs = new Set(this._state.openOrders.map((o) => o.pair));
+    const pairs = new Set(activeOrders(this._state).map((o) => o.pair));
     const lastMs = Date.parse(this._state.lastTickAt);
+    const tickFrom = this._state.lastTickAt;
     let totalFilled = 0;
     for (const pair of pairs) {
       const r = await this.fetchCandles(pair, lastMs, nowMs);
@@ -62,22 +52,15 @@ export class SessionStore {
         continue;
       }
       result.set(pair, r.data);
-      const others = this._state.openOrders.filter((o) => o.pair !== pair);
-      const subState: PaperState = {
-        ...this._state,
-        openOrders: this._state.openOrders.filter((o) => o.pair === pair),
-      };
-      const sr = runTick(subState, {
+      const sr = runTick({ ...this._state, lastTickAt: tickFrom }, {
         candles: r.data,
         nowMs,
+        pair,
         feeRate: this.feeRate,
         logger: this.logger,
       });
       totalFilled += sr.filled.length;
-      this._state = {
-        ...sr.state,
-        openOrders: [...sr.state.openOrders, ...others],
-      };
+      this._state = sr.state;
     }
     const ts = new Date(nowMs).toISOString();
     this._state = { ...this._state, lastTickAt: ts, updatedAt: ts };
@@ -89,10 +72,6 @@ export class SessionStore {
     const r = await this.fetchCandles(pair, nowMs - LATEST_LOOKBACK_MS, nowMs);
     if (!r.success || r.data.length === 0) return null;
     return r.data.reduce((a, b) => (a.timestamp >= b.timestamp ? a : b)).close;
-  }
-
-  appendHistory(entry: PaperHistoryEntry): void {
-    this._state = { ...this._state, history: [...this._state.history, entry] };
   }
 
   async persist(): Promise<void> {
@@ -121,13 +100,15 @@ export async function loadOrInitDefault(
 export function freshState(initialJpy: number): PaperState {
   const now = nowIso();
   return {
-    version: 2,
+    version: 3,
     createdAt: now,
     updatedAt: now,
     initialJpy,
     balances: { jpy: initialJpy },
-    history: [],
     lastTickAt: now,
-    openOrders: [],
+    orders: [],
+    trades: [],
+    nextOrderSeq: 1,
+    nextTradeSeq: 1,
   };
 }

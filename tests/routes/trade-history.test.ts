@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildState } from "../engine/helpers.ts";
+import { buildState, buildTrade } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 
 describe("GET /v1/user/spot/trade_history", () => {
@@ -7,27 +7,24 @@ describe("GET /v1/user/spot/trade_history", () => {
 
   it("returns trades newest-first", async () => {
     const state = buildState({
-      history: [
-        {
-          id: "1",
-          pair: "btc_jpy",
+      trades: [
+        buildTrade({
+          tradeId: "1",
+          orderId: "1",
           side: "buy",
           type: "limit",
-          amount: 0.001,
-          fillPrice: 5_000_000,
-          feeJpy: 6,
-          filledAt: "2026-01-01T00:01:00.000Z",
-        },
-        {
-          id: "2",
-          pair: "btc_jpy",
+          executedAt: "2026-01-01T00:01:00.000Z",
+        }),
+        buildTrade({
+          tradeId: "2",
+          orderId: "2",
           side: "sell",
           type: "market",
-          amount: 0.001,
-          fillPrice: 5_100_000,
-          feeJpy: 6.12,
-          filledAt: "2026-01-01T00:02:00.000Z",
-        },
+          price: 5_100_000,
+          feeQuote: 6.12,
+          makerTaker: "taker",
+          executedAt: "2026-01-01T00:02:00.000Z",
+        }),
       ],
     });
     const { fastify } = await build(state);
@@ -44,27 +41,15 @@ describe("GET /v1/user/spot/trade_history", () => {
 
   it("respects count limit", async () => {
     const state = buildState({
-      history: [
-        {
-          id: "1",
-          pair: "btc_jpy",
-          side: "buy",
-          type: "limit",
-          amount: 0.001,
-          fillPrice: 5_000_000,
-          feeJpy: 6,
-          filledAt: "2026-01-01T00:01:00.000Z",
-        },
-        {
-          id: "2",
-          pair: "btc_jpy",
+      trades: [
+        buildTrade({ tradeId: "1", orderId: "1", executedAt: "2026-01-01T00:01:00.000Z" }),
+        buildTrade({
+          tradeId: "2",
+          orderId: "2",
           side: "sell",
-          type: "limit",
-          amount: 0.001,
-          fillPrice: 5_100_000,
-          feeJpy: 6,
-          filledAt: "2026-01-01T00:02:00.000Z",
-        },
+          price: 5_100_000,
+          executedAt: "2026-01-01T00:02:00.000Z",
+        }),
       ],
     });
     const { fastify } = await build(state);

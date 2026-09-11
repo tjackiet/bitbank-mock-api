@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { activeOrders } from "../engine/state.ts";
 import { ActiveOrdersQuerySchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
 import { formatOpenOrder } from "./format.ts";
@@ -11,7 +12,7 @@ export const activeOrdersRoutes: FastifyPluginAsync = async (fastify) => {
       return err(ErrorCode.INVALID_PARAMETER);
     }
     await fastify.store.tick();
-    const open = fastify.store.state().openOrders;
+    const open = activeOrders(fastify.store.state());
     const filtered = parsed.data.pair ? open.filter((o) => o.pair === parsed.data.pair) : open;
     return ok({ orders: filtered.map(formatOpenOrder) });
   });

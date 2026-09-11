@@ -1,12 +1,13 @@
-import type { OpenOrder, PaperHistoryEntry, PaperState } from "../engine/state.ts";
-import { computeLocked, DEFAULT_TAKER_FEE_RATE } from "../engine/state.ts";
-
-export type OrderStatus =
-  | "UNFILLED"
-  | "PARTIALLY_FILLED"
-  | "FULLY_FILLED"
-  | "CANCELED_UNFILLED"
-  | "CANCELED_PARTIALLY_FILLED";
+import {
+  averagePriceOf,
+  computeLocked,
+  DEFAULT_TAKER_FEE_RATE,
+  remainingOf,
+  type OrderRecord,
+  type OrderStatus,
+  type PaperState,
+  type TradeRecord,
+} from "../engine/state.ts";
 
 const KNOWN_ASSETS = ["jpy", "btc", "eth", "xrp", "ltc", "bcc", "mona", "xlm", "qtum", "bat"];
 
@@ -24,43 +25,37 @@ type OrderShape = {
   status: OrderStatus;
 };
 
-export function formatOpenOrder(o: OpenOrder): OrderShape {
+function displayPrice(o: OrderRecord): number {
+  if (o.price != null) return o.price;
+  return averagePriceOf(o);
+}
+
+export function formatOrder(o: OrderRecord): OrderShape {
   return {
     order_id: toIdOut(o.id),
     pair: o.pair,
     side: o.side,
     type: o.type,
-    start_amount: String(o.amount),
-    remaining_amount: String(o.amount),
-    executed_amount: "0",
-    price: String(o.price),
-    average_price: "0",
-    ordered_at: Date.parse(o.createdAt),
-    status: "UNFILLED",
+    start_amount: String(o.startAmount),
+    remaining_amount: String(remainingOf(o)),
+    executed_amount: String(o.executedAmount),
+    price: String(displayPrice(o)),
+    average_price: String(averagePriceOf(o)),
+    ordered_at: Date.parse(o.orderedAt),
+    status: o.status,
   };
 }
 
-export function formatHistoryAsOrder(h: PaperHistoryEntry): OrderShape {
-  return {
-    order_id: toIdOut(h.id),
-    pair: h.pair,
-    side: h.side,
-    type: h.type,
-    start_amount: String(h.amount),
-    remaining_amount: "0",
-    executed_amount: String(h.amount),
-    price: String(h.fillPrice),
-    average_price: String(h.fillPrice),
-    ordered_at: Date.parse(h.filledAt),
-    status: "FULLY_FILLED",
-  };
+export function formatOpenOrder(o: OrderRecord): OrderShape {
+  return formatOrder(o);
 }
 
-export function formatCanceledOrder(o: OpenOrder): OrderShape {
-  return {
-    ...formatOpenOrder(o),
-    status: "CANCELED_UNFILLED",
-  };
+export function formatHistoryAsOrder(o: OrderRecord): OrderShape {
+  return formatOrder(o);
+}
+
+export function formatCanceledOrder(o: OrderRecord): OrderShape {
+  return formatOrder(o);
 }
 
 export type TradeShape = {
@@ -77,19 +72,19 @@ export type TradeShape = {
   executed_at: number;
 };
 
-export function formatTrade(h: PaperHistoryEntry): TradeShape {
+export function formatTrade(t: TradeRecord): TradeShape {
   return {
-    trade_id: toIdOut(h.id),
-    order_id: toIdOut(h.id),
-    pair: h.pair,
-    side: h.side,
-    type: h.type,
-    amount: String(h.amount),
-    price: String(h.fillPrice),
-    maker_taker: h.type === "limit" ? "maker" : "taker",
+    trade_id: toIdOut(t.tradeId),
+    order_id: toIdOut(t.orderId),
+    pair: t.pair,
+    side: t.side,
+    type: t.type,
+    amount: String(t.amount),
+    price: String(t.price),
+    maker_taker: t.makerTaker,
     fee_amount_base: "0",
-    fee_amount_quote: String(h.feeJpy),
-    executed_at: Date.parse(h.filledAt),
+    fee_amount_quote: String(t.feeQuote),
+    executed_at: Date.parse(t.executedAt),
   };
 }
 
