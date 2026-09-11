@@ -15,9 +15,9 @@
 
 | 項目 | モックの挙動 | 根拠 | 本物との差異 | 推測 | DCL / 証明への含意 |
 | --- | --- | --- | --- | --- | --- |
-| 注文照会 | Phase 2 で `GET /v1/user/spot/order` と `POST /v1/user/spot/orders_info` を実装する | REST API: Fetch order information / Fetch multiple orders | 実装前 | いいえ | `orders_info` を Reconcile の主経路にする |
-| 存在しない単一注文 ID | `GET order` は `50009` を返す予定 | 公式は「3 か月超の終端注文は 50009」のみ明記 | 存在しない ID 自体の明記はない | はい | snapshot を取得できない注文は DCL が stale / fail-closed と扱う |
-| 存在しない一括照会 ID | `orders_info` はエラーにせず該当 ID を `orders` から除外する予定 | 公式は「3 か月超の終端注文は返さない」と明記 | 存在しない ID への適用は未明記 | はい | Nyx 側は欠落 ID の再照会上限を持つ必要がある |
+| 注文照会 | `GET /v1/user/spot/order`（query: `pair`, `order_id`）と `POST /v1/user/spot/orders_info`（body: `pair`, `order_ids`）を実装する。ヒットした `OrderRecord` を `formatOrder()` で返す | REST API: Fetch order information / Fetch multiple orders | 3 か月超の履歴削除はしない。モック上の全注文が引ける | いいえ | `orders_info` を Reconcile の主経路にする |
+| 存在しない単一注文 ID | `GET order` は `50009` を返す。`pair` 不一致も `50009` | 公式は「3 か月超の終端注文は 50009」のみ明記 | 存在しない ID 自体の明記はない | はい | snapshot を取得できない注文は DCL が stale / fail-closed と扱う |
+| 存在しない一括照会 ID | `orders_info` はエラーにせず該当 ID を `orders` から除外する。0 件でも `success: 1`。応答順はリクエストの `order_ids` 順 | 公式は「3 か月超の終端注文は返さない」と明記 | 存在しない ID への適用と配列順は未明記 | はい | Nyx 側は欠落 ID の再照会上限を持つ必要がある |
 | 注文状態 | `INACTIVE` を含む公式の 7 値を `OrderRecord.status` に持つ。Plan A で `INACTIVE` は到達しない | REST API: Fetch order information | 逆指値等は未実装 | いいえ | 終端状態の不変性を検証対象にする |
 | 注文 ID | 状態の `nextOrderSeq`（初期値 1）を永続化し、発注のたびに単調増加させる | 公式は数値の order id を定義 | 実取引所の桁数・採番方式とは異なる。v2 から移行した巨大 ID（旧 `Date.now() * 1000 + counter`）がある場合は、その最大値 + 1 から続くので桁が大きく残る | はい | シナリオの再現性と再起動後の一意性を優先 |
 | trade ID | 注文 ID とは別の `nextTradeSeq`（初期値 1）を永続化する。v2 の `history.id` は使わず 1 から振り直す | 公式の trade history は trade_id を持つ | 本物の採番とは一致しない | はい | 部分約定でも trade を一意に参照できる |
@@ -26,13 +26,16 @@
 | 指値の約定価格 | `fillOrder()` は指値に対し、買いは `price <= order.price`、売りは `price >= order.price` だけを受け付ける。成行には適用しない。違反は状態を変えず `INVALID_PRICE` | 指値注文の `price` は order price と定義される（REST API: Create new order） | 約定可能価格の明文規定は確認できていない | はい（2026-09-11 に研究要件として決定） | `reserved = price × size` を上限とする Nyx の予算不変量を守る |
 | 手数料 | Plan A は maker / taker 表示に関わらずテイカー 0.12% 固定で計算する | 計画書 9 節の決定 | 実取引所は通貨ペア・maker/taker 別の料率 | はい | Exposure は手数料を含めない。Plan B で見直す |
 | 拘束額 | 買いの `locked_amount` は注文残量の価格と手数料から計算する | 現行 `computeLocked()` | 本物が手数料を拘束額に含めるか公式 docs に明記なし | はい | DCL の `reserved`（手数料なし）との差を考慮する |
-| 数量・価格の精度 | btc_jpy は数量 4 桁、価格 0 桁に量子化・固定小数文字列化する予定 | pair list / `GET /spot/pairs` | Plan A は btc_jpy に限定 | いいえ | 円・satoshi の整数表現との変換誤差を防ぐ |
-| 取消済み・約定済みの取消 | Phase 2 でそれぞれ `50026` / `50027` を返す予定 | error codes | 現行はどちらも `50009` | いいえ | 終端状態の識別を保つ |
-| エラーコード | Phase 2 で残高不足は `60001`、必須項目欠落は対応する公式コードへ是正する予定 | error codes | 現行の一部コードは誤用。全 error code の網羅はしない | いいえ | DCL がコードで失敗原因を区別できる |
-| 注文の固定フィールド | **Phase 2 で実装予定**: `post_only: false`、`expire_at: null`、`user_cancelable` はアクティブ注文だけ `true` | REST API: Fetch order information | post only・期限・注文訂正を実装しない | はい | DCL はこれらの値で分岐しない前提 |
+| 数量・価格の精度 | 応答の数量はペア桁で `toFixed`（btc_jpy は数量 4 桁 `"0.0010"`、価格 0 桁 `"5000000"`）。未登録ペアも同じ桁を仮置きする。発注 `amount` が桁に収まらなければ `60004`。trade の `fee_amount_quote` は JPY 4 桁 | pair list / `GET /spot/pairs` の `amount_digits` / `price_digits` | 公式 `60004` は「数量がしきい値を下回る」。モックは桁溢れ拒否に流用。価格の桁溢れは `20003`。ゼロ数量は `"0.0000"`、未約定の `average_price` だけは `"0"` | はい（60004 の流用・未登録ペアの桁・fee 桁） | 円・satoshi の整数表現との変換誤差を防ぐ |
+| 平均約定価格の丸め | `average_price = executedNotional / executedAmount` を価格桁に四捨五入（`executedAmount == 0` なら除算せず `"0"`）。部分約定で平均が価格単位に乗らないとき、`executed_amount × average_price` と約定代金の差は `executed_amount × 価格単位 × 0.5` 以下 | REST API の `average_price` は文字列 | 内部は JS 倍精度のまま。丸めは応答文字列だけ | はい | DCL が `committed` をこの積で再計算すると同じ誤差が乗る |
+| 取消済み・約定済みの取消 | 取消済み（`CANCELED_*`）は `50026`、約定済み（`FULLY_FILLED`）は `50027`。`REJECTED` は `50009`。`cancel_orders` はリクエスト順で終端が混ざるとエラーを返し、1 件も取消しない | error codes | 公式のバッチ混在時の挙動は未確認。`REJECTED` への取消コードも未明記 | はい（REJECTED とバッチ fail-closed） | 終端状態の識別を保つ。部分成功は起きない |
+| エラーコード | 残高不足 `60001`。欠落: amount `30001`、price `30012`、side `30013`、type `30015`、order_id `30006`、order_ids `30007`。その他の不正値は `20003`（公式の ACCESS-KEY 欠落コードをパラメータエラーに流用） | error codes | 全 error code は網羅しない。HTTP は欠落・不正値を 400、業務エラーを 200 のまま | はい（20003 の流用、HTTP 区分） | DCL がコードで失敗原因を区別できる |
+| 注文の固定フィールド | `post_only: false`（指値のみ。成行では省略）、`expire_at: null`、`user_cancelable` はアクティブ注文だけ `true`。成行の `price` は省略し `average_price` に約定値を載せる。`canceled_at` は取消時のみ | REST API: Fetch order information | post only・期限・注文訂正を実装しない | はい | DCL はこれらの値で分岐しない前提 |
+| active_orders の絞り込み | `count` / `from_id` / `end_id` / `since` / `end` を受け、生成順のまま絞る。`from_id`/`end_id` は inclusive、`since`/`end` は `ordered_at` のミリ秒 inclusive | REST API: Fetch active orders | 公式の since/end が秒かミリ秒かは明記なし | はい | 発注応答を取りこぼした DCL が自分の注文を探す経路 |
+| trade_history の絞り込み | `order_id` / `since` / `end` / `order(asc\|desc)` を追加。既定は `desc`（新しい順）。`count` 指定時は最大 1000。未指定なら全件 | REST API: Fetch trade history | 公式の既定件数は未確認。モックは未指定で全件返す | はい | DCL が注文単位で約定を突き合わせられる |
 | maker / taker 表示 | 指値の trade は `maker`、成行は `taker` と表示する | REST API の trade history | 手数料がテイカー固定 0.12% であり、指値の表示と計算が整合しない | はい | Plan A の Exposure 判定には影響しない |
 | 注文訂正 | 注文訂正 API を提供しない | Nyx 提案書 14.1 | bitbank の対応可否も含め、本モックの対象外 | いいえ | DCL は発注後の価格・数量変更を前提にしない |
-| 部分約定を取り消した注文 | `CANCELED_PARTIALLY_FILLED` でも `executed_amount` と trade 記録を保持する予定 | REST API の status enum、Nyx 提案書 14.1 | 現行は部分約定を持たない | はい | DCL の累計約定量は取消後も減らない |
+| 部分約定を取り消した注文 | `CANCELED_PARTIALLY_FILLED` でも `executed_amount` と trade 記録を保持する | REST API の status enum、Nyx 提案書 14.1 | 本物の保持期間（3 か月）はモックに無い | はい | DCL の累計約定量は取消後も減らない |
 | 成行注文の価格上限 | 成行に価格上限は設けない予定 | Nyx 提案書 14.1 | 指値だけに価格制約を適用する | はい | 価格上限が必要な実験は指値で行う |
 | 認証 | Plan A は認証ヘッダを検証しない | REST API は private API に認証を要求 | 意図的に未実装 | はい | DCL の HMAC 送信は通過するが認証の検証対象にはしない |
 | レート制限 | 実装しない | REST API: QUERY 10/s、UPDATE 6/s、超過時 429 | 意図的に未実装 | いいえ | 負荷・429 復旧の実験には使えない |

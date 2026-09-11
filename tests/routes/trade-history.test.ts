@@ -60,4 +60,28 @@ describe("GET /v1/user/spot/trade_history", () => {
     const body = res.json() as { data: { trades: unknown[] } };
     expect(body.data.trades).toHaveLength(1);
   });
+
+  it("filters by order_id and respects asc order", async () => {
+    const state = buildState({
+      trades: [
+        buildTrade({ tradeId: "1", orderId: "10", executedAt: "2026-01-01T00:01:00.000Z" }),
+        buildTrade({
+          tradeId: "2",
+          orderId: "10",
+          side: "sell",
+          price: 5_100_000,
+          executedAt: "2026-01-01T00:02:00.000Z",
+        }),
+        buildTrade({ tradeId: "3", orderId: "11", executedAt: "2026-01-01T00:03:00.000Z" }),
+      ],
+    });
+    const { fastify } = await build(state);
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/trade_history?order_id=10&order=asc",
+    });
+    const body = res.json() as { data: { trades: { trade_id: number; order_id: number }[] } };
+    expect(body.data.trades.map((t) => t.trade_id)).toEqual([1, 2]);
+    expect(body.data.trades.every((t) => t.order_id === 10)).toBe(true);
+  });
 });
