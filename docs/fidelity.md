@@ -2,7 +2,7 @@
 
 この表は bitbank API に対する本モックの互換範囲と意図的な差異を記録する、Nyx Foundation 共同研究の前提条件書である。公式ドキュメントに明記されない挙動を決めたときは、実装と同じ PR で必ず追記する。
 
-最終確認は Phase 4 で行う。現時点の状態は **draft**。
+**状態: v0.1.0 / Plan A 凍結**（2026-09-11）。Nyx への引き渡しはこの版を前提にする。以後の変更は改訂として記録する。API 担当レビュー後に「確認済み／要修正」列を足す。private stream（R4）は Phase 5 の予定行のまま。
 
 ## 出典
 
@@ -36,7 +36,7 @@
 | maker / taker 表示 | 指値の trade は `maker`、成行は `taker` と表示する | REST API の trade history | 手数料がテイカー固定 0.12% であり、指値の表示と計算が整合しない | はい | Plan A の Exposure 判定には影響しない |
 | 注文訂正 | 注文訂正 API を提供しない | Nyx 提案書 14.1 | bitbank の対応可否も含め、本モックの対象外 | いいえ | DCL は発注後の価格・数量変更を前提にしない |
 | 部分約定を取り消した注文 | `CANCELED_PARTIALLY_FILLED` でも `executed_amount` と trade 記録を保持する | REST API の status enum、Nyx 提案書 14.1 | 本物の保持期間（3 か月）はモックに無い | はい | DCL の累計約定量は取消後も減らない |
-| 成行注文の価格上限 | 成行に価格上限は設けない予定 | Nyx 提案書 14.1 | 指値だけに価格制約を適用する | はい | 価格上限が必要な実験は指値で行う |
+| 成行注文の価格上限 | 成行に価格上限は設けない | Nyx 提案書 14.1 | 指値だけに価格制約を適用する | はい | 価格上限が必要な実験は指値で行う |
 | 認証 | Plan A は認証ヘッダを検証しない | REST API は private API に認証を要求 | 意図的に未実装 | はい | DCL の HMAC 送信は通過するが認証の検証対象にはしない |
 | レート制限 | 実装しない | REST API: QUERY 10/s、UPDATE 6/s、超過時 429 | 意図的に未実装 | いいえ | 負荷・429 復旧の実験には使えない |
 | `/_control/` | `BITBANK_MOCK_CONTROL=1` のときだけ登録する。素の JSON（bitbank 封筒ではない）。`POST /_control/orders/:id/fill`、`POST /_control/tick`、`POST /_control/reset`、`GET /_control/state`。無効時は 404 | 本モック固有 | bitbank API に存在しない | はい | DCL / 本番 API の仕様に control の存在を混入させない |

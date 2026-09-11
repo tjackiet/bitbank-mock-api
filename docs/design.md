@@ -1,5 +1,7 @@
 # bitbank-mock-api 設計（MVP）
 
+> **注記（Plan A / v0.1.0）**: 現行の開発計画は [`plan-lab-mock.md`](plan-lab-mock.md)、公開ドキュメントとの対応は [`fidelity.md`](fidelity.md)。本書は移管前の MVP 設計メモである。ダッシュボード・WS public プロキシ・サンプル bot などは Plan A の対象外。
+
 ## このドキュメントの目的
 
 bitbank-mock-api の MVP リリースまでの設計合議を残す。実装開始時にこのドキュメントを起点にする。
