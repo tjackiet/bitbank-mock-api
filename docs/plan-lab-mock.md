@@ -232,7 +232,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 **有効化**: 環境変数 `BITBANK_MOCK_CONTROL=1` のときのみルートを登録する（既定は無効。無効時は 404）。
 
-**自動 tick の停止**: `BITBANK_MOCK_FILL_MODE=market | manual`（既定 `market` = 現行挙動）。`manual` では `store.tick()` が実市場の足を取りに行かず、`/_control/` からの操作でのみ状態が動く。**シナリオ再現の受入条件（実市場に依存しない）を満たすには `manual` が必要。** control 有効時の既定を `manual` にするかは要判断（推奨: control を有効にしたら `manual` を既定にする。市場連動で試したい場合だけ明示する）。
+**自動 tick の停止**: `BITBANK_MOCK_FILL_MODE=market | manual`。`manual` では `store.tick()` が実市場の足を取りに行かず、`/_control/` からの操作でのみ状態が動く。**既定は control の有効・無効に連動させる（決定済み、2026-09-11）**: `BITBANK_MOCK_CONTROL` 未設定なら `market`（現行挙動）、設定時は `manual`。control を使いながら市場連動で試したい場合だけ `FILL_MODE=market` を明示する。設定忘れでシナリオの再現性が壊れないようにするため。
 
 **エンドポイント**（すべて JSON、bitbank 封筒ではなく素の JSON で返す。bitbank API と誤解されないため）:
 
@@ -362,7 +362,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | リスク | 兆候 | 対応 |
 |---|---|---|
 | Phase 1 が 9/26 を越える | 9/24 時点で routes テストが赤のまま | **R1 最小版に切り替える**: v3 モデルは入れず、`history` と新設の `canceledOrders[]` から `GET order` を組み立てる。`ordered_at` の誤りは対応表に明記して Nyx に伝える。R3 は 11 月へ。この場合 R2 の `fill` は現行 `applyFill` を直接呼ぶ |
-| 実市場の足で勝手に約定してシナリオが崩れる | Nyx の結合確認で再現性が無いと報告 | `FILL_MODE=manual` を control 有効時の既定にする（3.3 節の推奨案） |
+| 実市場の足で勝手に約定してシナリオが崩れる | Nyx の結合確認で再現性が無いと報告 | control 有効時は `FILL_MODE=manual` が既定（3.3 節、決定済み）。残るのは明示的に `market` を指定した場合のみ |
 | 公式 doc に無い挙動を推測で決めた箇所が仕様に漏れる | | 対応表の「推測」列と PR テンプレのチェックで機械的に拾う。API 担当レビューを 10/13 週に固定 |
 | bitbankinc への transfer が遅れる | | コードは `tjackiet` 配下で v0.1.0 を切って Nyx に渡せる。README の免責は transfer 前から入れておく |
 | **bitbank-lab-mcp が接続先を差し替えられない**（本リポジトリ外の前提条件） | MCP → DCL → モックの経路が組めず、Nyx が DCL 単体でしか試験できない | 提案書 11.1 の「接続点の提供」として、MCP 側に base URL の上書き手段（環境変数）を足す小さな変更を bitbank 側で 10/23 までに用意する。当面は Nyx が DCL のテストから直接モックを叩く形で進められる |
@@ -372,7 +372,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 ## 9. 要判断事項（着手前に決めたいこと）
 
-1. `BITBANK_MOCK_CONTROL=1` のときの `FILL_MODE` 既定を `manual` にするか（推奨: する）
+1. ~~`BITBANK_MOCK_CONTROL=1` のときの `FILL_MODE` 既定を `manual` にするか~~ → **決定: `manual` を既定にする**（2026-09-11、3.3 節に反映済み）
 2. 注文 ID を連番（`1, 2, 3, ...`）にするか、本物に近い桁数の連番（例: `10_000_000_001` 起点）にするか（推奨: 連番。桁数は対応表に記録）
 3. 指値約定の手数料をメイカー料率に変えるか、現状のテイカー 0.12% を維持して対応表に載せるか（推奨: プラン A では維持。DCL の Exposure は約定代金で手数料を含まないため影響が小さい。API 担当レビューで確認）
 4. `fast-check` の導入可否（推奨: 導入。不変量テストが Lean の証明対象と対応するため研究上の説明材料にもなる）
