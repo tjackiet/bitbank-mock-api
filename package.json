@@ -1,7 +1,7 @@
 {
-  "name": "bitbank-mock-api",
-  "version": "0.0.1",
-  "description": "bitbank.cc API 互換の mock サーバ。bot を実弾なしで動かすためのローカル開発環境。",
+  "name": "bitbank-lab-mock",
+  "version": "0.1.0",
+  "description": "Nyx 共同研究向け bitbank Private REST モック。注文状態を持つ挙動確認用であり、公式テスト環境ではない。",
   "type": "module",
   "license": "MIT",
   "author": "tjackiet",

@@ -43,7 +43,7 @@ async function main() {
   });
   await fastify.listen({ port, host });
   console.log(
-    `bitbank-mock-api listening on http://${host}:${port} fillMode=${mode}${control ? " control=on" : ""}`,
+    `bitbank-lab-mock listening on http://${host}:${port} fillMode=${mode}${control ? " control=on" : ""}`,
   );
 }
 
