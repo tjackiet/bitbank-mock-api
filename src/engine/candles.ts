@@ -17,6 +17,13 @@ export type Candle = {
   timestamp: number;
 };
 
+export function isValidCandle(c: Candle): boolean {
+  const { open, high, low, close, vol, timestamp } = c;
+  if (![open, high, low, close, vol, timestamp].every((n) => Number.isFinite(n))) return false;
+  if (!(open > 0 && high > 0 && low > 0 && close > 0)) return false;
+  return low <= open && open <= high && low <= close && close <= high;
+}
+
 const numStr = z.union([z.number(), z.string().transform((s) => Number(s))]);
 
 const CandlestickSchema = z.object({

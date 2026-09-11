@@ -5,6 +5,7 @@ import { defaultStatePath, loadState, saveState } from "../engine/persist.ts";
 import { activeOrders, DEFAULT_TAKER_FEE_RATE, nowIso, type PaperState } from "../engine/state.ts";
 import type { FetchCandles, Logger } from "../engine/types.ts";
 import { noopLogger } from "../engine/types.ts";
+import { fillMode, type FillMode } from "../server/config.ts";
 
 const LATEST_LOOKBACK_MS = 5 * 60_000;
 
@@ -13,6 +14,7 @@ export type SessionStoreOptions = {
   path?: string | null;
   feeRate?: number;
   logger?: Logger;
+  fillMode?: FillMode;
 };
 
 export class SessionStore {
@@ -20,6 +22,7 @@ export class SessionStore {
   private readonly fetchCandles: FetchCandles;
   private readonly path: string | null;
   readonly feeRate: number;
+  readonly fillMode: FillMode;
   private readonly logger: Logger;
 
   constructor(state: PaperState, opts: SessionStoreOptions = {}) {
@@ -27,6 +30,7 @@ export class SessionStore {
     this.fetchCandles = opts.fetchCandles ?? defaultFetchCandles();
     this.path = opts.path === undefined ? defaultStatePath("default") : opts.path;
     this.feeRate = opts.feeRate ?? DEFAULT_TAKER_FEE_RATE;
+    this.fillMode = opts.fillMode ?? fillMode();
     this.logger = opts.logger ?? noopLogger;
   }
 
@@ -40,6 +44,7 @@ export class SessionStore {
 
   async tick(nowMs: number = Date.now()): Promise<Map<string, Candle[]>> {
     const result = new Map<string, Candle[]>();
+    if (this.fillMode === "manual") return result;
     const pairs = new Set(activeOrders(this._state).map((o) => o.pair));
     const lastMs = Date.parse(this._state.lastTickAt);
     const tickFrom = this._state.lastTickAt;
@@ -59,8 +64,12 @@ export class SessionStore {
         feeRate: this.feeRate,
         logger: this.logger,
       });
-      totalFilled += sr.filled.length;
-      this._state = sr.state;
+      if (!sr.success) {
+        this.logger.warn(`tick: runTick failed for ${pair}: ${sr.error}`);
+        continue;
+      }
+      totalFilled += sr.data.filled.length;
+      this._state = sr.data.state;
     }
     const ts = new Date(nowMs).toISOString();
     this._state = { ...this._state, lastTickAt: ts, updatedAt: ts };

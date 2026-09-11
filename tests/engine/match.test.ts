@@ -2,10 +2,19 @@ import { describe, expect, it } from "vitest";
 import { applyFill, runTick } from "../../src/engine/match.ts";
 import { activeOrders } from "../../src/engine/state.ts";
 import type { Logger } from "../../src/engine/types.ts";
+import type { PaperState } from "../../src/engine/state.ts";
+import type { RunTickOptions } from "../../src/engine/match.ts";
 import { buildOrder, buildState, candle } from "./helpers.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00.000Z");
 const MIN = 60_000;
+
+function tickOk(state: PaperState, opts: RunTickOptions) {
+  const r = runTick(state, opts);
+  expect(r.success).toBe(true);
+  if (!r.success) throw new Error(r.error);
+  return r.data;
+}
 
 describe("applyFill", () => {
   it("buy: decreases quote (incl fee), increases base", () => {
@@ -43,7 +52,7 @@ describe("runTick fill judgment", () => {
       orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
       balances: { jpy: 10_000 },
     });
-    const r = runTick(state, {
+    const r = tickOk(state, {
       candles: [candle(T0 + MIN, 110, 110, 99, 105)],
       nowMs: T0 + 2 * MIN,
       feeRate: 0,
@@ -56,7 +65,7 @@ describe("runTick fill judgment", () => {
     const state = buildState({
       orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
     });
-    const r = runTick(state, {
+    const r = tickOk(state, {
       candles: [candle(T0 + MIN, 110, 120, 105, 115)],
       nowMs: T0 + 2 * MIN,
       feeRate: 0,
@@ -70,7 +79,7 @@ describe("runTick fill judgment", () => {
       balances: { jpy: 0, btc: 1 },
       orders: [buildOrder({ side: "sell", price: 100, startAmount: 1 })],
     });
-    const r = runTick(state, {
+    const r = tickOk(state, {
       candles: [candle(T0 + MIN, 90, 101, 80, 95)],
       nowMs: T0 + 2 * MIN,
       feeRate: 0,
@@ -89,7 +98,7 @@ describe("runTick fill judgment", () => {
         }),
       ],
     });
-    const r = runTick(state, {
+    const r = tickOk(state, {
       candles: [candle(T0 + MIN, 110, 110, 50, 105)],
       nowMs: T0 + 10 * MIN,
       feeRate: 0,
@@ -98,7 +107,7 @@ describe("runTick fill judgment", () => {
   });
 
   it("advances lastTickAt to nowMs even when nothing fills", () => {
-    const r = runTick(buildState(), {
+    const r = tickOk(buildState(), {
       candles: [],
       nowMs: T0 + 10 * MIN,
       feeRate: 0,
@@ -111,7 +120,7 @@ describe("runTick fill judgment", () => {
     const warnings: string[] = [];
     const logger: Logger = { warn: (m) => warnings.push(m), info: () => {} };
     const state = buildState({ lastTickAt: new Date(T0).toISOString() });
-    runTick(state, {
+    tickOk(state, {
       candles: [],
       nowMs: T0 + 48 * 60 * MIN,
       feeRate: 0,
@@ -125,7 +134,7 @@ describe("runTick fill judgment", () => {
       lastTickAt: new Date(T0 + 5 * MIN).toISOString(),
       orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
     });
-    const r = runTick(state, {
+    const r = tickOk(state, {
       candles: [
         candle(T0 + MIN, 110, 110, 50, 105),
         candle(T0 + 10 * MIN, 110, 110, 50, 105),
@@ -143,12 +152,27 @@ describe("runTick fill judgment", () => {
     const state = buildState({
       orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
     });
-    runTick(state, {
+    tickOk(state, {
       candles: [candle(T0 + MIN, 110, 110, 50, 105)],
       nowMs: T0 + 2 * MIN,
       feeRate: 0,
       logger,
     });
     expect(infos.some((m) => m.includes("filled"))).toBe(true);
+  });
+
+  it("rejects invalid candles without mutating state", () => {
+    const state = buildState({
+      orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
+    });
+    const r = runTick(state, {
+      candles: [candle(T0 + MIN, 110, Number.POSITIVE_INFINITY, 50, 105)],
+      nowMs: T0 + 2 * MIN,
+      feeRate: 0,
+    });
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error).toBe("INVALID_CANDLE");
+    expect(activeOrders(state)).toHaveLength(1);
   });
 });

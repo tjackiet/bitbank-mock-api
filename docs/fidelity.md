@@ -39,8 +39,10 @@
 | 成行注文の価格上限 | 成行に価格上限は設けない予定 | Nyx 提案書 14.1 | 指値だけに価格制約を適用する | はい | 価格上限が必要な実験は指値で行う |
 | 認証 | Plan A は認証ヘッダを検証しない | REST API は private API に認証を要求 | 意図的に未実装 | はい | DCL の HMAC 送信は通過するが認証の検証対象にはしない |
 | レート制限 | 実装しない | REST API: QUERY 10/s、UPDATE 6/s、超過時 429 | 意図的に未実装 | いいえ | 負荷・429 復旧の実験には使えない |
-| `/_control/` | `BITBANK_MOCK_CONTROL=1` のときだけ、ローカル実験用の状態操作 API を公開する予定 | 本モック固有 | bitbank API に存在しない | はい | DCL / 本番 API の仕様に control の存在を混入させない |
-| control 時の自動約定 | control 有効時の既定を `BITBANK_MOCK_FILL_MODE=manual` とし、明示指定時だけ市場連動 tick を行う予定 | 計画書 9 節の決定 | 本物の取引所には対応する切替がない | はい | 同一シナリオを市場価格に依存せず再現できる |
+| `/_control/` | `BITBANK_MOCK_CONTROL=1` のときだけ登録する。素の JSON（bitbank 封筒ではない）。`POST /_control/orders/:id/fill`、`POST /_control/tick`、`POST /_control/reset`、`GET /_control/state`。無効時は 404 | 本モック固有 | bitbank API に存在しない | はい | DCL / 本番 API の仕様に control の存在を混入させない |
+| control のアクセス境界 | control 有効時の listen 既定は `127.0.0.1`（`BITBANK_MOCK_HOST` で上書き可）。非ループバックは `X-Control-Token` が `BITBANK_MOCK_CONTROL_TOKEN` と一致しない限り 403。トークン未設定なら非ループバックは常に 403 | 本モック固有 | 本物の取引所には無い | はい | 同一ネットワークからの誤操作を防ぐ。DCL は control を叩かない |
+| control 時の自動約定 | control 有効時の既定は `BITBANK_MOCK_FILL_MODE=manual`。`store.tick()` は足を取らず約定しない。明示で `market` にすると REST 経路は現行どおり市場連動 | 計画書 9 節の決定 | 本物の取引所には対応する切替がない | はい | 同一シナリオを市場価格に依存せず再現できる |
+| control の fill / tick 検証 | 存在しない注文 404、終端 409。`amount` が非正・残量超過・桁溢れは 400 `INVALID_AMOUNT`。`price` が非正・非有限は 400 `INVALID_PRICE`。足は `0 < low <= open <= high` かつ `low <= close <= high` の有限値。拒否時は状態を変えない | 本モック固有（不変量 1 の防御） | 本物には無い | はい | 実験用の部分約定は control からのみ起こす。DCL の通常経路では使わない |
 | private stream | Phase 5 で PubNub ではなく素の WebSocket を提供する予定 | private stream docs のメッセージ形 | 接続・配信トランスポートが異なる | はい | Nyx 側は PubNub SDK ではなく WebSocket 接続層を使う |
 | private stream の順序 | 配信順序・重複なしを保証しない | private stream docs に順序保証の記載なし | Plan A では障害注入は提供しない | はい | DCL は順不同・重複を許容して状態を解釈する |
 

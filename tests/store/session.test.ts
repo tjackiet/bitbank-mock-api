@@ -18,6 +18,7 @@ describe("SessionStore.tick", () => {
     });
     const store = new SessionStore(state, {
       path: null,
+      fillMode: "market",
       fetchCandles: stubFetchCandles({
         btc_jpy: [candle(T0 + MIN, 110, 110, 50, 105)],
         eth_jpy: [candle(T0 + MIN, 110, 110, 50, 105)],
@@ -27,5 +28,26 @@ describe("SessionStore.tick", () => {
     await store.tick(T0 + 2 * MIN);
     expect(activeOrders(store.state())).toHaveLength(0);
     expect(store.state().trades).toHaveLength(2);
+  });
+
+  it("does not fetch or fill in manual fillMode", async () => {
+    let fetched = 0;
+    const store = new SessionStore(
+      buildState({
+        balances: { jpy: 10_000_000 },
+        orders: [buildOrder({ id: "1", side: "buy", price: 100, startAmount: 1 })],
+      }),
+      {
+        path: null,
+        fillMode: "manual",
+        fetchCandles: async () => {
+          fetched += 1;
+          return { success: true, data: [candle(T0 + MIN, 110, 110, 50, 105)] };
+        },
+      },
+    );
+    await store.tick(T0 + 2 * MIN);
+    expect(fetched).toBe(0);
+    expect(activeOrders(store.state())).toHaveLength(1);
   });
 });

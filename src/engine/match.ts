@@ -1,8 +1,9 @@
 import type { Candle } from "./candles.ts";
+import { isValidCandle } from "./candles.ts";
 import { remainingOf, type OrderRecord, type PaperState, type TradeRecord } from "./state.ts";
 import { DEFAULT_TAKER_FEE_RATE } from "./state.ts";
 import { fillOrder } from "./transitions.ts";
-import { type Logger, noopLogger } from "./types.ts";
+import { type Logger, noopLogger, type Result } from "./types.ts";
 
 const ONE_MIN_MS = 60_000;
 const MAX_LOOKBACK_MS = 24 * 60 * 60 * 1000;
@@ -36,8 +37,11 @@ export type RunTickResult = {
   lastTickAt: string;
 };
 
-export function runTick(state: PaperState, opts: RunTickOptions): RunTickResult {
+export function runTick(state: PaperState, opts: RunTickOptions): Result<RunTickResult> {
   const { nowMs, candles, pair } = opts;
+  if (candles.some((c) => !isValidCandle(c))) {
+    return { success: false, error: "INVALID_CANDLE" };
+  }
   const feeRate = opts.feeRate ?? DEFAULT_TAKER_FEE_RATE;
   const logger = opts.logger ?? noopLogger;
   const newLastTickAt = new Date(nowMs).toISOString();
@@ -66,7 +70,7 @@ export function runTick(state: PaperState, opts: RunTickOptions): RunTickResult 
   }
   if (filled.length > 0) logger.info(`filled ${filled.length} order(s)`);
   working = { ...working, lastTickAt: newLastTickAt, updatedAt: newLastTickAt };
-  return { state: working, filled, lastTickAt: newLastTickAt };
+  return { success: true, data: { state: working, filled, lastTickAt: newLastTickAt } };
 }
 
 function matches(order: OrderRecord, candle: Candle): boolean {
