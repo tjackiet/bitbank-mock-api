@@ -3,6 +3,7 @@ import { activeOrdersRoutes } from "../routes/active-orders.ts";
 import { assetsRoutes } from "../routes/assets.ts";
 import { cancelOrderRoutes } from "../routes/cancel-order.ts";
 import { createOrderRoutes } from "../routes/create-order.ts";
+import { orderInfoRoutes } from "../routes/order-info.ts";
 import { tradeHistoryRoutes } from "../routes/trade-history.ts";
 import type { SessionStore } from "../store/session.ts";
 
@@ -24,6 +25,7 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
   await fastify.register(activeOrdersRoutes);
   await fastify.register(tradeHistoryRoutes);
   await fastify.register(createOrderRoutes);
+  await fastify.register(orderInfoRoutes);
   await fastify.register(cancelOrderRoutes);
   return fastify;
 }

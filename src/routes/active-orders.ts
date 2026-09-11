@@ -1,8 +1,43 @@
 import type { FastifyPluginAsync } from "fastify";
-import { activeOrders } from "../engine/state.ts";
+import { activeOrders, parseNumericId, type OrderRecord } from "../engine/state.ts";
 import { ActiveOrdersQuerySchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
 import { formatOpenOrder } from "./format.ts";
+
+function filterActiveOrders(
+  orders: OrderRecord[],
+  q: {
+    pair?: string;
+    count?: number;
+    from_id?: number;
+    end_id?: number;
+    since?: number;
+    end?: number;
+  },
+): OrderRecord[] {
+  let out = orders;
+  if (q.pair) out = out.filter((o) => o.pair === q.pair);
+  if (q.from_id !== undefined) {
+    out = out.filter((o) => {
+      const id = parseNumericId(o.id);
+      return id !== null && id >= q.from_id!;
+    });
+  }
+  if (q.end_id !== undefined) {
+    out = out.filter((o) => {
+      const id = parseNumericId(o.id);
+      return id !== null && id <= q.end_id!;
+    });
+  }
+  if (q.since !== undefined) {
+    out = out.filter((o) => Date.parse(o.orderedAt) >= q.since!);
+  }
+  if (q.end !== undefined) {
+    out = out.filter((o) => Date.parse(o.orderedAt) <= q.end!);
+  }
+  if (q.count !== undefined) out = out.slice(0, q.count);
+  return out;
+}
 
 export const activeOrdersRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/v1/user/spot/active_orders", async (request, reply) => {
@@ -12,8 +47,7 @@ export const activeOrdersRoutes: FastifyPluginAsync = async (fastify) => {
       return err(ErrorCode.INVALID_PARAMETER);
     }
     await fastify.store.tick();
-    const open = activeOrders(fastify.store.state());
-    const filtered = parsed.data.pair ? open.filter((o) => o.pair === parsed.data.pair) : open;
+    const filtered = filterActiveOrders(activeOrders(fastify.store.state()), parsed.data);
     return ok({ orders: filtered.map(formatOpenOrder) });
   });
 };

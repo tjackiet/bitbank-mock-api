@@ -31,7 +31,7 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(50008);
+    expect(body.data.code).toBe(60001);
   });
 
   it("fills market buy at latest candle close", async () => {
@@ -48,11 +48,11 @@ describe("POST /v1/user/spot/order", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
       success: number;
-      data: { status: string; price: string; average_price: string };
+      data: { status: string; price?: string; average_price: string };
     };
     expect(body.success).toBe(1);
     expect(body.data.status).toBe("FULLY_FILLED");
-    expect(Number(body.data.price)).toBe(5_000_000);
+    expect(body.data.price).toBeUndefined();
     expect(Number(body.data.average_price)).toBe(5_000_000);
     expect(store.state().balances.btc).toBe(0.001);
     expect(store.state().trades).toHaveLength(1);
@@ -116,5 +116,65 @@ describe("POST /v1/user/spot/order", () => {
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(20003);
+  });
+
+  it("returns 30001 when amount is missing", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", price: "5000000", side: "buy", type: "limit" },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.data.code).toBe(30001);
+  });
+
+  it("returns 30013 when side is missing", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", price: "5000000", type: "limit" },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.data.code).toBe(30013);
+  });
+
+  it("returns 30015 when type is missing", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", price: "5000000", side: "buy" },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.data.code).toBe(30015);
+  });
+
+  it("returns 30012 when limit price is missing", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", side: "buy", type: "limit" },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.data.code).toBe(30012);
+  });
+
+  it("returns 60004 when amount exceeds pair digits", async () => {
+    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.00001", price: "5000000", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(60004);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
-import { buildOrder, buildState } from "../engine/helpers.ts";
+import { buildOrder, buildState, buildTrade } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 
 describe("POST /v1/user/spot/cancel_order", () => {
@@ -21,6 +21,7 @@ describe("POST /v1/user/spot/cancel_order", () => {
     const body = res.json() as { success: number; data: { status: string } };
     expect(body.success).toBe(1);
     expect(body.data.status).toBe("CANCELED_UNFILLED");
+    expect(typeof (body.data as { canceled_at?: number }).canceled_at).toBe("number");
     expect(activeOrders(store.state())).toHaveLength(0);
   });
 
@@ -34,6 +35,64 @@ describe("POST /v1/user/spot/cancel_order", () => {
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(50009);
+  });
+
+  it("returns 50026 when the order is already canceled", async () => {
+    const { fastify } = await build(
+      buildState({
+        orders: [
+          buildOrder({
+            id: "123",
+            status: "CANCELED_UNFILLED",
+            canceledAt: "2026-01-01T00:01:00.000Z",
+          }),
+        ],
+      }),
+    );
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "btc_jpy", order_id: 123 },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(50026);
+  });
+
+  it("returns 50027 when the order is already filled", async () => {
+    const { fastify } = await build(
+      buildState({
+        orders: [
+          buildOrder({
+            id: "123",
+            status: "FULLY_FILLED",
+            executedAmount: 0.001,
+            executedNotional: 5000,
+          }),
+        ],
+        trades: [buildTrade({ tradeId: "1", orderId: "123" })],
+      }),
+    );
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "btc_jpy", order_id: 123 },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(50027);
+  });
+
+  it("returns 30006 when order_id is missing", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "btc_jpy" },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.data.code).toBe(30006);
   });
 });
 
@@ -61,5 +120,28 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     const open = activeOrders(store.state());
     expect(open).toHaveLength(1);
     expect(open[0]?.id).toBe("3");
+  });
+
+  it("does not cancel remaining ids when a terminal order is in the batch", async () => {
+    const state = buildState({
+      orders: [
+        buildOrder({
+          id: "1",
+          status: "CANCELED_UNFILLED",
+          canceledAt: "2026-01-01T00:01:00.000Z",
+        }),
+        buildOrder({ id: "2", price: 5_100_000 }),
+      ],
+    });
+    const { fastify, store } = await build(state);
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: [1, 2] },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(50026);
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
   });
 });
