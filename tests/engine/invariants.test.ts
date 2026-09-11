@@ -63,16 +63,25 @@ describe("invariants", () => {
   it("flags canceled statuses that do not match executed amount", () => {
     const unfilled = buildOrder({
       status: "CANCELED_UNFILLED",
+      startAmount: 1,
       executedAmount: 0.1,
-      executedNotional: 10,
+      executedNotional: 500_000,
     });
-    expect(invariantViolations(buildState({ orders: [unfilled] }))).not.toEqual([]);
+    const unfilledState = buildState({
+      orders: [unfilled],
+      trades: [buildTrade({ orderId: unfilled.id, amount: 0.1, price: 5_000_000, feeQuote: 0 })],
+    });
+    expect(invariantViolations(unfilledState).some((v) => v.includes("CANCELED_UNFILLED"))).toBe(true);
     const partial = buildOrder({
       status: "CANCELED_PARTIALLY_FILLED",
       executedAmount: 0,
       executedNotional: 0,
     });
-    expect(invariantViolations(buildState({ orders: [partial] }))).not.toEqual([]);
+    expect(
+      invariantViolations(buildState({ orders: [partial] })).some((v) =>
+        v.includes("CANCELED_PARTIALLY_FILLED"),
+      ),
+    ).toBe(true);
   });
 
   it("flags trades without an order", () => {
