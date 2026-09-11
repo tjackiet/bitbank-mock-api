@@ -170,6 +170,23 @@ describe("/_control routes", () => {
     expect(store.state().trades).toHaveLength(0);
   });
 
+  it("returns 400 when a supplied fill price has extra digits", async () => {
+    const { fastify, store } = await setup(
+      buildState({
+        balances: { jpy: 0, btc: 0.001 },
+        orders: [buildOrder({ id: "1", side: "sell", price: 5_000_000, startAmount: 0.001 })],
+      }),
+    );
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/orders/1/fill",
+      payload: { price: 5_000_000.5 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "INVALID_PRICE" });
+    expect(store.state().trades).toHaveLength(0);
+  });
+
   it("returns 400 when price is not a finite positive number", async () => {
     const { fastify } = await setup();
     const res = await fastify.inject({
@@ -200,6 +217,18 @@ describe("/_control routes", () => {
       method: "POST",
       url: "/_control/tick",
       payload: { pair: "btc_jpy", candle: { open: 1, high: Number.POSITIVE_INFINITY, low: 1, close: 1 } },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "INVALID_CANDLE" });
+    expect(activeOrders(store.state())).toHaveLength(1);
+  });
+
+  it("rejects a candle with non-finite volume", async () => {
+    const { fastify, store } = await setup();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/tick",
+      payload: { pair: "btc_jpy", candle: { open: 1, high: 1, low: 1, close: 1, vol: "invalid" } },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: "INVALID_CANDLE" });

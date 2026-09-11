@@ -19,8 +19,12 @@ curl -sS "$BASE/v1/user/spot/order?pair=btc_jpy&order_id=${order_id}"
 echo
 
 echo "control fill:"
+control_headers=(-H "content-type: application/json")
+if [[ -n "${BITBANK_MOCK_CONTROL_TOKEN:-}" ]]; then
+  control_headers+=(-H "X-Control-Token: ${BITBANK_MOCK_CONTROL_TOKEN}")
+fi
 curl -sS -X POST "$BASE/_control/orders/${order_id}/fill" \
-  -H "content-type: application/json" \
+  "${control_headers[@]}" \
   -d '{}'
 echo
 

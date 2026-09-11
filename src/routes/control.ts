@@ -118,8 +118,12 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
     }
 
     const remaining = remainingOf(order);
+    const digits = precisionOf(order.pair);
     const price = body.price === undefined ? order.price : Number(body.price);
     if (price == null || !Number.isFinite(price) || price <= 0) {
+      return reply.code(400).send({ error: "INVALID_PRICE" });
+    }
+    if (body.price !== undefined && !fitsDigits(price, digits.priceDigits)) {
       return reply.code(400).send({ error: "INVALID_PRICE" });
     }
 
@@ -129,7 +133,6 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
       if (!Number.isFinite(amount) || amount <= 0 || amount > remaining) {
         return reply.code(400).send({ error: "INVALID_AMOUNT", remaining });
       }
-      const digits = precisionOf(order.pair);
       if (!fitsDigits(amount, digits.amountDigits)) {
         return reply.code(400).send({ error: "INVALID_AMOUNT", remaining });
       }
