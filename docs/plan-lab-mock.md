@@ -255,7 +255,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 設計だけ先に決めておく。
 
-- **トランスポート**: PubNub を模倣せず、素の WebSocket（`@fastify/websocket`）を `ws://host/_stream/private` で提供する。`GET /v1/user/subscribe` は公式通りの形で `pubnub_channel` / `pubnub_token` を返し、値はダミー。README に「PubNub SDK ではなく WebSocket で受ける」と明記する。理由: PubNub のプロトコル互換を作る労力に対して、DCL 側で必要なのはメッセージ本体の互換だけ
+- **トランスポート（決定済み、2026-09-11）**: PubNub を模倣せず、素の WebSocket（`@fastify/websocket`）を `ws://host/_stream/private` で提供する。`GET /v1/user/subscribe` は公式通りの形で `pubnub_channel` / `pubnub_token` を返し、値はダミー。README に「PubNub SDK ではなく WebSocket で受ける」と明記する。理由: PubNub のプロトコル互換を作る労力に対して、DCL 側で必要なのはメッセージ本体の互換だけ
 - **メッセージ**: 公式と同じ `{ message: { method, params } }`。`spot_order_new` / `spot_order` / `spot_trade` / `asset_update` の 4 種。`params` は `formatOrder()` の出力（スナップショット）
 - **発火点**: 3.1 の遷移関数が返す `{ order, trade }` を `SessionStore` がイベントとして emit する（`store.on("order", ...)`）。REST 経路も control 経路も同じ遷移関数を通るため、発火漏れが無い
 - **障害注入の余地**: emit と WebSocket 送信の間に `DeliveryPolicy` インタフェース（`deliver(events) => events`）を 1 つ挟む。プラン A では恒等写像。プラン B で重複・順序入替・欠落を差し込む
@@ -365,7 +365,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | 実市場の足で勝手に約定してシナリオが崩れる | Nyx の結合確認で再現性が無いと報告 | control 有効時は `FILL_MODE=manual` が既定（3.3 節、決定済み）。残るのは明示的に `market` を指定した場合のみ |
 | 公式 doc に無い挙動を推測で決めた箇所が仕様に漏れる | | 対応表の「推測」列と PR テンプレのチェックで機械的に拾う。API 担当レビューを 10/13 週に固定 |
 | bitbankinc への transfer が遅れる | | コードは `tjackiet` 配下で v0.1.0 を切って Nyx に渡せる。README の免責は transfer 前から入れておく |
-| **bitbank-lab-mcp が接続先を差し替えられない**（本リポジトリ外の前提条件） | MCP → DCL → モックの経路が組めず、Nyx が DCL 単体でしか試験できない | 提案書 11.1 の「接続点の提供」として、MCP 側に base URL の上書き手段（環境変数）を足す小さな変更を bitbank 側で 10/23 までに用意する。当面は Nyx が DCL のテストから直接モックを叩く形で進められる |
+| **bitbank-lab-mcp が接続先を差し替えられない**（本リポジトリ外の前提条件） | MCP → DCL → モックの経路が組めず、Nyx が DCL 単体でしか試験できない | MCP のメンテナが本計画の依頼者本人のため、MCP 側で base URL の上書き手段（環境変数）を足す。急ぎではなく、当面は Nyx が DCL のテストから直接モックを叩く形で進められる |
 | `orders_info` に存在しない ID が含まれない挙動を DCL が想定していない | リコンサイルで snapshot が届かず、DCL が Grant を stale にして fail-closed し続ける | 対応表の該当行を Nyx に事前共有し、DCL 側で「N 回引いても現れない ID は取引所に存在しない」と扱う規則を入れてもらう |
 
 ---
@@ -376,6 +376,6 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 2. 注文 ID を連番（`1, 2, 3, ...`）にするか、本物に近い桁数の連番（例: `10_000_000_001` 起点）にするか（推奨: 連番。桁数は対応表に記録）
 3. 指値約定の手数料をメイカー料率に変えるか、現状のテイカー 0.12% を維持して対応表に載せるか（推奨: プラン A では維持。DCL の Exposure は約定代金で手数料を含まないため影響が小さい。API 担当レビューで確認）
 4. `fast-check` の導入可否（推奨: 導入。不変量テストが Lean の証明対象と対応するため研究上の説明材料にもなる）
-5. R4 のトランスポートを素の WebSocket でよいか（推奨: よい。提案書はプラン A の障害注入を D2 側のテストで扱うとしており、モックの stream は本体のスナップショット配信だけで足りる。Nyx に事前確認）
-6. bitbank-lab-mcp の接続先上書きを誰がいつ入れるか（提案書 11.1 の「接続点の提供」。本リポジトリ外だが、経路を組む前提条件）
+5. ~~R4 のトランスポートを素の WebSocket でよいか~~ → **決定: 素の WebSocket で提供する**（2026-09-11、3.4 節）。DCL 側の接続層を差し替え可能にしてもらう点だけ Nyx に伝える
+6. ~~bitbank-lab-mcp の接続先上書きを誰がいつ入れるか~~ → **決定: MCP のメンテナ（本計画の依頼者本人）が MCP 側で対応する**（2026-09-11）。本リポジトリからは環境変数名の提案（`BITBANK_API_BASE_URL`）だけ出す
 7. Nyx に最新版の提案書本編（別紙が参照する v1.6）をもらい、対応表の出典の節番号を合わせるか（Phase 0 の作業として推奨）
