@@ -162,12 +162,22 @@ type OrderRecord = {
 type TradeRecord = {           // 旧 PaperHistoryEntry
   tradeId: string;
   orderId: string;
-  pair; side; type; amount; price; feeQuote; makerTaker; executedAt;
+  pair: string;
+  side: "buy" | "sell";
+  type: "limit" | "market";
+  amount: number;
+  price: number;
+  feeQuote: number;
+  makerTaker: "maker" | "taker";
+  executedAt: string;
 };
 
 type PaperState = {
   version: 3;
-  createdAt; updatedAt; initialJpy; lastTickAt;
+  createdAt: string;
+  updatedAt: string;
+  initialJpy: number;
+  lastTickAt: string;
   balances: Record<string, number>;
   orders: OrderRecord[];       // 単一の真実。生成順
   trades: TradeRecord[];       // 旧 history。orderId で orders に紐づく
@@ -189,7 +199,12 @@ export const remainingOf = (o) => o.startAmount - o.executedAmount;
 **状態遷移を 1 か所に集める**（`src/engine/transitions.ts`、新設）:
 
 ```ts
-placeOrder(state, input, now)             → { state, order }       // UNFILLED（market は即 fill まで進める）
+placeOrder(state, input, now, marketPrice?) → { state, order, trade?, touchedAssets }
+   // limit は UNFILLED で止まる。market は呼び出し側（ルート）が SessionStore.getLatestPrice() で
+   // 解決した価格を marketPrice に渡し、内部で fillOrder(remaining, marketPrice) まで進める。
+   // market で marketPrice 未指定なら Result.error（価格が取れないときは 70001 を返す現行挙動を踏襲）
+   // 戻り値の形は全遷移で共通: { state, order, trade?, touchedAssets: string[] }。
+   // state は次の永続化対象、touchedAssets は残高が動いた資産（asset_update の発火に使う）
 fillOrder(state, orderId, price, amount, at) → { state, order, trade }
    // amount < remaining なら PARTIALLY_FILLED、== remaining なら FULLY_FILLED
    // プラン A では呼び出し側が常に amount = remaining を渡す（部分約定は起こさない）
@@ -214,10 +229,10 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 移行時の ID 衝突を防ぐ規則:
 
-- 移行した `TradeRecord` の `tradeId` は、`history` の並び順に `1, 2, ...` を振り直す（v2 の `id` は注文 ID なので trade ID には使わない）。`nextTradeSeq` はその最大値 + 1
-- `nextOrderSeq` は、移行した注文 ID のうち数値として解釈できるものの最大値 + 1 とする。旧形式の巨大な ID（`Date.now() * 1000 + counter`）が残る場合はそこから続きを振るので、単調増加は保たれる（桁が大きいままになる点は対応表に記録）
+- 移行した `TradeRecord` の `tradeId` は、`history` の並び順に `1, 2, ...` を振り直す（v2 の `id` は注文 ID なので trade ID には使わない）。`nextTradeSeq` はその最大値 + 1（`history` が空なら `1`）
+- `nextOrderSeq` は、移行した注文 ID のうち数値として解釈できるものの最大値 + 1 とする（該当が無ければ `1`）。旧形式の巨大な ID（`Date.now() * 1000 + counter`）が残る場合はそこから続きを振るので、単調増加は保たれる（桁が大きいままになる点は対応表に記録）
 - `nextOrderSeq` / `nextTradeSeq` は状態に永続化し、再起動後もそこから続ける
-- テスト: v2 ファイルを読み込んで再起動し、以後の発注・約定の ID が既存レコードと衝突せず単調増加することを `tests/engine/state.test.ts` で確認する
+- テスト: v2 ファイルを読み込んで再起動し、以後の発注・約定の ID が既存レコードと衝突せず単調増加することを `tests/engine/state.test.ts` で確認する。`openOrders` / `history` がともに空の v2 からの移行も同じテストで扱う
 
 **注文 ID 採番（決定済み、2026-09-11）**: `Date.now() * 1000 + counter` をやめ、状態に持つ連番（`nextOrderSeq`、初期値 `1`）にする。理由は (a) 再起動で重複しない、(b) シナリオスクリプトで ID を予測でき、再現性が上がる、(c) 本物も単調増加の整数である点は同じ。桁数が本物と異なる点は対応表へ。
 
@@ -248,7 +263,9 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | 数値の整形 | 発注量 `0.1 + 0.2` 相当の演算を経ても `executed_amount` / `remaining_amount` がペアの桁数に収まった文字列であること |
 | DCL のリコンサイル模擬 | 発注 → 約定 → `orders_info` を 2 回引いて同一スナップショットが返ること。プラン A の全量約定では `executed_amount × average_price` が約定代金と厳密に一致すること。部分約定を含む場合は下記の丸め規則の許容差内であること |
 
-`average_price` の丸め規則: 内部では `executedNotional`（倍精度）を真値として保持し、`average_price = executedNotional / executedAmount` をペアの価格桁数（btc_jpy なら整数）に四捨五入して文字列化する。複数回の約定で平均が価格単位に乗らない場合（例: 100 と 101 で 0.5 ずつ約定 → 100.5）は丸めが入るため、`executed_amount × average_price` と約定代金の差は `executed_amount × 価格単位 × 0.5` 以下を許容する。DCL が `committed` をこの積で再計算する際に同じ誤差が乗ることは対応表に記録し、Nyx に伝える。内部演算を円・satoshi の整数に切り替えるかはプラン B（部分約定を実際に起こす段階）で判断する
+`average_price` の丸め規則: 内部では `executedNotional`（倍精度）を真値として保持し、`average_price = executedNotional / executedAmount` をペアの価格桁数（btc_jpy なら整数）に四捨五入して文字列化する。`executedAmount == 0`（`UNFILLED` / `CANCELED_UNFILLED` / `REJECTED`）のときは除算せず `"0"` を返す（現行 `formatOpenOrder` と同じ。発注 → `GET order` の初回応答で検証する）。複数回の約定で平均が価格単位に乗らない場合（例: 100 と 101 で 0.5 ずつ約定 → 100.5）は丸めが入るため、`executed_amount × average_price` と約定代金の差は `executed_amount × 価格単位 × 0.5` 以下を許容する。DCL が `committed` をこの積で再計算する際に同じ誤差が乗ることは対応表に記録し、Nyx に伝える。内部演算を円・satoshi の整数に切り替えるかはプラン B（部分約定を実際に起こす段階）で判断する
+
+数量の量子化: 発注（`POST order`）と control の `fill` は、`amount` がペアの数量桁数（btc_jpy なら 4 桁）に収まらない値を受け付けず、公式の `60004`（発注）または 400（control）で拒否する。これにより `executedAmount` は常に桁数に収まった値として記録され、文字列化で丸めが入ることがない。上記の許容差は価格の丸めにのみ由来する
 
 ### 3.3 R2: 約定を意図的に起こす仕組み（`/_control/`）
 
@@ -266,7 +283,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 | メソッド | パス | 入力 | 動作 |
 |---|---|---|---|
-| POST | `/_control/orders/:order_id/fill` | `{ price?, amount? }` | 指定注文を約定させる。`price` 省略時は指値価格、`amount` 省略時は残量全部。`amount < remaining` なら `PARTIALLY_FILLED`（プラン B 用。プラン A では受け付けるが、README では「未検証」と明記）。入力検証は下記 |
+| POST | `/_control/orders/:order_id/fill` | `{ price?, amount? }` | 指定注文を約定させる。`price` 省略時は指値価格、`amount` 省略時は残量全部。`amount < remaining` なら `PARTIALLY_FILLED`。プラン A でも受け付け、遷移・残高・約定記録・REST 応答（`status` / `executed_amount` / `remaining_amount` / `average_price`）をテストで検証する（4.3 節）。実験環境として部分約定を「意図的に起こす」運用はプラン B からだが、モックの機能として未検証のまま出さない。入力検証は下記 |
 | POST | `/_control/tick` | `{ pair, price }` または `{ pair, candle: { open, high, low, close, timestamp? } }` | 与えた価格を 1 本の足として `runTick()` を回す。`price` だけなら `high = low = price`。複数注文をまとめて動かす用 |
 | POST | `/_control/reset` | `{ initialJpy?, balances? }` | 状態を初期化。シナリオ冒頭で使う |
 | GET | `/_control/state` | | `PaperState` をそのまま返す（デバッグ用） |
@@ -282,7 +299,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | `amount` が有限の正数でない、または `amount > remaining` | 400 `{ error: "INVALID_AMOUNT", remaining }` |
 | `price` が有限の正数でない | 400 `{ error: "INVALID_PRICE" }` |
 
-検証は `fillOrder()` を呼ぶ前に行い、拒否時は注文・残高・約定記録のいずれも変更しない。`fillOrder()` 自身も同じ条件で `Result.error` を返す二重防御にする（不変量テストの対象）。`tick` の `candle` も `low <= high` と正数を検証する。
+検証は `fillOrder()` を呼ぶ前に行い、拒否時は注文・残高・約定記録のいずれも変更しない。`fillOrder()` 自身も同じ条件で `Result.error` を返す二重防御にする（不変量テストの対象）。`tick` の `candle` は 4 値がすべて有限の数値で、`0 < low <= open <= high` かつ `low <= close <= high` を満たすことを検証する（`Infinity` を通すと全売り注文が約定するため、`> 0` だけでは足りない）。`price` 指定の場合は同じ検証を `high = low = open = close = price` に適用する。`runTick()` 側も同じ検証で `Result.error` を返す二重防御にする。
 
 **R2 の受入条件と確認方法**
 
@@ -299,9 +316,9 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
   - `spot_order_new`（発注時）/ `spot_order`（更新時）: `params: [formatOrder(order)]`。注文のスナップショット
   - `spot_trade`: `params: [formatTrade(trade)]`。REST の `trade_history` と同じ形
   - `asset_update`: `params: [formatAssetUpdate(asset)]`。変化した資産だけを載せる。**公式はこのメッセージだけキーが camelCase**（`freeAmount` / `lockedAmount` / `onhandAmount` / `amountPrecision` / `withdrawingAmount`）なので、REST の `formatAssets` とは別の整形関数にする
-- **発火点**: 3.1 の遷移関数の戻り値を `{ order, trade?, touchedAssets: string[] }` に広げ、`SessionStore` が `order` / `trade` / `assets` の 3 種のイベントを emit する。REST 経路も control 経路も同じ遷移関数を通るため、発火漏れが無い
+- **発火点**: 3.1 の遷移関数の共通戻り値 `{ state, order, trade?, touchedAssets }` のうち `order` / `trade` / `touchedAssets` を使い、`SessionStore` が `order` / `trade` / `assets` の 3 種のイベントを emit する。REST 経路も control 経路も同じ遷移関数を通るため、発火漏れが無い
 - **障害注入の余地**: emit と WebSocket 送信の間に `DeliveryPolicy` インタフェース（`deliver(events) => events`）を 1 つ挟む。プラン A では恒等写像。プラン B で重複・順序入替・欠落を差し込む
-- **テスト**: `ws` クライアントで接続し、発注 → `/_control/` で約定 → 取消の流れで `spot_order_new` / `spot_order`（FULLY_FILLED と CANCELED_UNFILLED）/ `spot_trade` / `asset_update`（camelCase キー）の 4 種すべての形を検証する
+- **テスト**: `ws` クライアントで接続し、注文を 2 本発注し、1 本を `/_control/` で約定、もう 1 本を取消する流れで `spot_order_new`（2 回）/ `spot_order`（FULLY_FILLED と CANCELED_UNFILLED）/ `spot_trade` / `asset_update`（camelCase キー）の 4 種すべての形を検証する
 
 ---
 
@@ -340,7 +357,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | R3 | `tests/engine/state.test.ts` | v2→v3 移行: `openOrders` → `UNFILLED`、`history` → `FULLY_FILLED` + `trades` |
 | R1 | `tests/routes/order-info.test.ts` | 3.2 の表 |
 | R1 | 既存 routes テストへ追加 | `cancel_order` の `50026` / `50027`、`canceled_at`、`ordered_at` が発注時刻、エラーコード是正 |
-| R2 | `tests/routes/control.test.ts` / `tests/scenarios/plan-a.test.ts` | 3.3 節 |
+| R2 | `tests/routes/control.test.ts` / `tests/scenarios/plan-a.test.ts` | 3.3 節。`fill` は全量に加えて `amount < remaining` の部分約定も 1 ケース通し、`GET order` の `PARTIALLY_FILLED` / `executed_amount` / `remaining_amount` / `average_price` と `assets` の残高を検証する |
 | R4 | `tests/stream/private.test.ts` | 3.4 節 |
 
 ---
