@@ -24,6 +24,12 @@ export function invariantViolations(
     if (o.status === "REJECTED" && o.executedAmount !== 0) {
       violations.push(`2: order ${o.id} REJECTED with executedAmount=${o.executedAmount}`);
     }
+    if (o.status === "CANCELED_UNFILLED" && o.executedAmount !== 0) {
+      violations.push(`2: order ${o.id} CANCELED_UNFILLED with executedAmount=${o.executedAmount}`);
+    }
+    if (o.status === "CANCELED_PARTIALLY_FILLED" && o.executedAmount <= 0) {
+      violations.push(`2: order ${o.id} CANCELED_PARTIALLY_FILLED with executedAmount=${o.executedAmount}`);
+    }
 
     if (o.status === "FULLY_FILLED" && o.executedAmount !== o.startAmount) {
       violations.push(`3: order ${o.id} FULLY_FILLED executedAmount=${o.executedAmount}`);
@@ -42,6 +48,13 @@ export function invariantViolations(
       violations.push(
         `5: order ${o.id} tradeNotional=${notionalSum} executedNotional=${o.executedNotional}`,
       );
+    }
+  }
+
+  const orderIds = new Set(state.orders.map((o) => o.id));
+  for (const t of state.trades) {
+    if (!orderIds.has(t.orderId)) {
+      violations.push(`5: trade ${t.tradeId} has no order ${t.orderId}`);
     }
   }
 

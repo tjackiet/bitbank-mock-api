@@ -101,7 +101,7 @@ export function pairAssets(pair: string): [string, string] | null {
   const parts = pair.split("_");
   if (parts.length !== 2) return null;
   const [base, quote] = parts;
-  if (!base || !quote) return null;
+  if (!base || !quote || base === quote) return null;
   return [base, quote];
 }
 

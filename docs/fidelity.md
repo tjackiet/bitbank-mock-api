@@ -46,14 +46,14 @@
 `src/engine/invariants.ts` と `tests/engine/invariants.test.ts` で検証する。Nyx 仕様書 D1 の前提になる。
 
 1. `0 <= executedAmount <= startAmount`
-2. `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端（`INACTIVE` は Plan A では到達しない）
+2. `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端（`INACTIVE` は Plan A では到達しない）。`CANCELED_UNFILLED` / `REJECTED` も `executedAmount == 0`。`CANCELED_PARTIALLY_FILLED` は `executedAmount > 0`
 3. `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`）
 4. 終端状態（`FULLY_FILLED` / `CANCELED_*` / `REJECTED`）のレコードは以後の遷移で変化しない
-5. 各注文について、`trades` の `amount` 合計 == `executedAmount`、かつ `amount × price` 合計 == `executedNotional`
+5. 各注文について、`trades` の `amount` 合計 == `executedAmount`、かつ `amount × price` 合計 == `executedNotional`。`orderId` が注文に存在しない trade は禁止
 6. 各資産で残高は負にならず、`locked` は残高を超えない（`availableOf >= 0`。買いの拘束額は手数料込み）
 
 そのほか Phase 1 で決めた内部規則:
 
-- ペアは `base_quote` の 2 セグメントだけを受け付ける。`btc_jpy_x` のような余剰セグメントは `INVALID_PAIR`
-- `fillOrder` は残量との差が `1e-12` 以下なら全量約定として残量にクランプする（倍精度の塵で終端に届かないことを防ぐ。Phase 2 の桁数量子化が主防御）
+- ペアは `base_quote` の 2 セグメントだけを受け付ける。余剰セグメント（`btc_jpy_x`）と base == quote（`jpy_jpy`）は `INVALID_PAIR`。不正ペアの発注は `tick()` より前に拒否し、他注文を動かさない
+- `fillOrder` は残量との差が `1e-12` 以下なら全量約定として残量にクランプし、`executedAmount` を `startAmount` に揃える（倍精度の塵で終端に届かないことを防ぐ。Phase 2 の桁数量子化が主防御）
 - `rejectOrder` は `UNFILLED` / `INACTIVE`（`executedAmount == 0`）にだけ許す。部分約定済みは `CANCELED_PARTIALLY_FILLED` へ取消する

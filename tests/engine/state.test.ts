@@ -79,6 +79,7 @@ describe("pure helpers", () => {
     expect(pairAssets("btc")).toBeNull();
     expect(pairAssets("btc_jpy_x")).toBeNull();
     expect(pairAssets("_jpy")).toBeNull();
+    expect(pairAssets("jpy_jpy")).toBeNull();
   });
 });
 

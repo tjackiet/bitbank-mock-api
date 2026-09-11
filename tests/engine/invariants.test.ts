@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { invariantViolations } from "../../src/engine/invariants.ts";
 import { activeOrders, isTerminal, remainingOf, type PaperState } from "../../src/engine/state.ts";
 import { cancelOrder, fillOrder, placeOrder, rejectOrder } from "../../src/engine/transitions.ts";
-import { buildState } from "./helpers.ts";
+import { buildOrder, buildState, buildTrade } from "./helpers.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
@@ -58,6 +58,26 @@ function applyRandomOp(state: PaperState, kind: number, a: number, b: number): P
 describe("invariants", () => {
   it("hold on a fresh state", () => {
     expect(invariantViolations(buildState({ balances: { jpy: 10_000_000, btc: 1 } }), 0)).toEqual([]);
+  });
+
+  it("flags canceled statuses that do not match executed amount", () => {
+    const unfilled = buildOrder({
+      status: "CANCELED_UNFILLED",
+      executedAmount: 0.1,
+      executedNotional: 10,
+    });
+    expect(invariantViolations(buildState({ orders: [unfilled] }))).not.toEqual([]);
+    const partial = buildOrder({
+      status: "CANCELED_PARTIALLY_FILLED",
+      executedAmount: 0,
+      executedNotional: 0,
+    });
+    expect(invariantViolations(buildState({ orders: [partial] }))).not.toEqual([]);
+  });
+
+  it("flags trades without an order", () => {
+    const state = buildState({ trades: [buildTrade({ orderId: "missing" })] });
+    expect(invariantViolations(state).some((v) => v.includes("has no order"))).toBe(true);
   });
 
   it("hold after random place/fill/cancel/reject sequences", () => {

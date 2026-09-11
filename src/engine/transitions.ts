@@ -154,7 +154,8 @@ export function fillOrder(
   if (!Number.isFinite(amount) || amount <= 0 || amount - remaining > AMOUNT_EPS) {
     return fail(TransitionError.INVALID_AMOUNT);
   }
-  const fillAmount = remaining - amount <= AMOUNT_EPS ? remaining : amount;
+  const fully = remaining - amount <= AMOUNT_EPS;
+  const fillAmount = fully ? remaining : amount;
   if (!Number.isFinite(price) || price <= 0) return fail(TransitionError.INVALID_PRICE);
   if (current.type === "limit" && current.price != null) {
     const worse =
@@ -176,13 +177,13 @@ export function fillOrder(
     balances[quote] = (balances[quote] ?? 0) + (notional - feeQuote);
   }
 
-  const executedAmount = current.executedAmount + fillAmount;
+  const executedAmount = fully ? current.startAmount : current.executedAmount + fillAmount;
   const executedNotional = current.executedNotional + notional;
   const order: OrderRecord = {
     ...current,
     executedAmount,
     executedNotional,
-    status: fillAmount === remaining ? "FULLY_FILLED" : "PARTIALLY_FILLED",
+    status: fully ? "FULLY_FILLED" : "PARTIALLY_FILLED",
     updatedAt: at,
   };
   const trade: TradeRecord = {

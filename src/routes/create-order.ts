@@ -31,9 +31,9 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
       return err(ErrorCode.INVALID_PARAMETER);
     }
     const { pair, side, type, amount, price } = parsed.data;
+    if (!pairAssets(pair)) return err(ErrorCode.INVALID_PAIR);
     const store = fastify.store;
     await store.tick();
-    if (!pairAssets(pair)) return err(ErrorCode.INVALID_PAIR);
 
     const now = new Date().toISOString();
     if (type === "market") {

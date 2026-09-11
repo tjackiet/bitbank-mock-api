@@ -60,6 +60,18 @@ describe("placeOrder", () => {
     if (!r.success) expect(r.error).toBe(TransitionError.MARKET_PRICE_REQUIRED);
   });
 
+  it("rejects a pair whose base and quote are the same", () => {
+    const r = placeOrder(
+      buildState(),
+      { pair: "jpy_jpy", side: "buy", type: "limit", amount: 1, price: 0.5 },
+      NOW,
+      undefined,
+      0,
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toBe(TransitionError.INVALID_PAIR);
+  });
+
   it("rejects insufficient funds", () => {
     const r = placeOrder(
       buildState({ balances: { jpy: 100 } }),

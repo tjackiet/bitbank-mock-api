@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
-import { buildState, candle } from "../engine/helpers.ts";
+import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 
 describe("POST /v1/user/spot/order", () => {
@@ -68,6 +68,29 @@ describe("POST /v1/user/spot/order", () => {
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(10000);
+  });
+
+  it("does not tick existing orders when the pair is malformed", async () => {
+    const t0 = Date.parse("2026-01-01T00:00:00.000Z");
+    const { fastify, store } = await build(
+      buildState({
+        balances: { jpy: 10_000 },
+        lastTickAt: new Date(t0).toISOString(),
+        orders: [buildOrder({ id: "1", side: "buy", price: 100, startAmount: 1 })],
+      }),
+      { btc_jpy: [candle(t0 + 60_000, 110, 110, 50, 105)] },
+    );
+    const before = structuredClone(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(10000);
+    expect(store.state()).toEqual(before);
+    expect(activeOrders(store.state())).toHaveLength(1);
   });
 
   it("rejects a malformed pair on market before looking up a price", async () => {
