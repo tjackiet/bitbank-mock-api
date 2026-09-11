@@ -28,7 +28,7 @@
 | 数量・価格の精度 | btc_jpy は数量 4 桁、価格 0 桁に量子化・固定小数文字列化する予定 | pair list / `GET /spot/pairs` | Plan A は btc_jpy に限定 | いいえ | 円・satoshi の整数表現との変換誤差を防ぐ |
 | 取消済み・約定済みの取消 | Phase 2 でそれぞれ `50026` / `50027` を返す予定 | error codes | 現行はどちらも `50009` | いいえ | 終端状態の識別を保つ |
 | エラーコード | Phase 2 で残高不足は `60001`、必須項目欠落は対応する公式コードへ是正する予定 | error codes | 現行の一部コードは誤用。全 error code の網羅はしない | いいえ | DCL がコードで失敗原因を区別できる |
-| 注文の固定フィールド | `post_only: false`、`expire_at: null`。`user_cancelable` はアクティブ注文だけ `true` とする予定 | REST API: Fetch order information | post only・期限・注文訂正を実装しない | はい | DCL はこれらの値で分岐しない前提 |
+| 注文の固定フィールド | **Phase 2 で実装予定**: `post_only: false`、`expire_at: null`、`user_cancelable` はアクティブ注文だけ `true` | REST API: Fetch order information | post only・期限・注文訂正を実装しない | はい | DCL はこれらの値で分岐しない前提 |
 | maker / taker 表示 | 指値の trade は `maker` と表示する予定 | REST API の trade history | 手数料がテイカー固定 0.12% であり表示と計算が整合しない | はい | Plan A の Exposure 判定には影響しない |
 | 注文訂正 | 注文訂正 API を提供しない | Nyx 提案書 14.1 | bitbank の対応可否も含め、本モックの対象外 | いいえ | DCL は発注後の価格・数量変更を前提にしない |
 | 部分約定を取り消した注文 | `CANCELED_PARTIALLY_FILLED` でも `executed_amount` と trade 記録を保持する予定 | REST API の status enum、Nyx 提案書 14.1 | 現行は部分約定を持たない | はい | DCL の累計約定量は取消後も減らない |
