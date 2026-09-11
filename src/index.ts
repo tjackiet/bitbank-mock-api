@@ -1,4 +1,5 @@
 import { buildServer } from "./server/http.ts";
+import { fillMode, isControlEnabled, listenHost } from "./server/config.ts";
 import { loadOrInitDefault } from "./store/session.ts";
 
 const DEFAULT_PORT = 14000;
@@ -27,12 +28,23 @@ async function main() {
     process.exit(1);
   }
   const port = parsePort(argv);
+  const control = isControlEnabled();
+  const mode = fillMode();
+  const host = listenHost();
   const store = await loadOrInitDefault(DEFAULT_INITIAL_JPY, {
     logger: { warn: (m) => console.warn(m), info: (m) => console.log(m) },
+    fillMode: mode,
   });
-  const fastify = await buildServer({ store, logger: true });
-  await fastify.listen({ port, host: "0.0.0.0" });
-  console.log(`bitbank-mock-api listening on http://localhost:${port}`);
+  const fastify = await buildServer({
+    store,
+    logger: true,
+    controlEnabled: control,
+    controlToken: process.env.BITBANK_MOCK_CONTROL_TOKEN,
+  });
+  await fastify.listen({ port, host });
+  console.log(
+    `bitbank-mock-api listening on http://${host}:${port} fillMode=${mode}${control ? " control=on" : ""}`,
+  );
 }
 
 main().catch((e) => {

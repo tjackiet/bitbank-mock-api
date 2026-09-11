@@ -19,6 +19,7 @@ export async function buildTestServer(
 ) {
   const store = new SessionStore(state, {
     path: null,
+    fillMode: "market",
     fetchCandles: stubFetchCandles(candlesByPair),
   });
   const fastify = await buildServer({ store, logger: false });
