@@ -1,8 +1,8 @@
 # bitbank-lab-mock 開発計画（Nyx 共同研究プラン A 対応）
 
-作成日: 2026-09-11
+作成日: 2026-09-11（同日、Nyx 提案書との突き合わせを反映して改訂）
 対象: 「bitbank-lab-mock 研究用要件メモ」の R1〜R4 と 5〜7 節
-前提: 本計画は現行コード（`main` @ `0859aab`、テスト 45 件・`tsc --noEmit` 通過を確認済み）と、bitbank 公式 `bitbank-api-docs`（rest-api.md / private-stream.md / errors.md）を突き合わせて作成した。
+前提: 本計画は現行コード（`main` @ `0859aab`、テスト 45 件・`tsc --noEmit` 通過を確認済み）、bitbank 公式 `bitbank-api-docs`（rest-api.md / private-stream.md / errors.md）、および Nyx Foundation の「共同研究 提案書 兼 技術仕様案 v1.0」「技術別紙 v1.0」（いずれも 2026-08-20 発行）を突き合わせて作成した。提案書と要件メモが食い違う箇所は要件メモを優先し、食い違いは 1.4 節に列挙した。
 
 ---
 
@@ -12,7 +12,8 @@
 |---|---|
 | R1 と R3 を一体で扱うか | **一体で扱う。** 注文レコード（`OrderRecord`）を単一の真実にする R3 の構造変更を先に入れ、その上に R1 の 2 エンドポイントを「レコードを整形して返すだけ」として実装する。R1 単体の小手先対応（`history` や取消済みリストから逆引き）は、`ordered_at` の誤り・`executed_amount` の欠落・取消済み注文の消失を引きずるため採らない |
 | 着手順 | Phase 0（対応表の骨子・公式 doc 確認）→ Phase 1（R3 状態モデル）→ Phase 2（R1 照会 API）→ Phase 3（R2 control API）→ Phase 4（README 免責・対応表確定・v0.1.0 タグ）→ Phase 5（R4 private stream、11 月） |
-| 10 月中旬の目標 | **10/10（金）に v0.1.0（R1 + R2 + R3 の 3 値到達分）をタグ付けして Nyx に渡す。** 10/13 週はバッファと Nyx 側結合確認に充てる |
+| 期日の目安 | 提案書の立ち上げフェーズが終わる **10/23 までに v0.1.0（R1 + R2 + R3 の 3 値到達分）を Nyx に渡す**。週割りは 10/10 を狙って組み、2 週間の遅れを許容する。実装フェーズ最初の 1 週間（タスク 3.2）は現行モックでも成立する |
+| 提案書との整合 | DCL のリコンサイルは `orders_info` を使うので R1 は一括照会が主。数量・価格はペアの桁数で固定小数に整形する（DCL は円・satoshi の整数で扱う）。経路 MCP → DCL → モックには bitbank-lab-mcp 側の接続先上書きが要る（本リポジトリ外の前提条件） |
 | 既存テストへの影響 | 45 件中、書き換えが必要なのは約 20 件（engine/match 11 件のうち 8 件、engine/state 13 件のうち 5 件、routes 15 件のうち 7 件）。**削除するテストは無い。** アサーション対象を `state.openOrders` / `state.history` からビュー関数へ差し替えるのが主 |
 | 対応表 | Phase 0 で `docs/fidelity.md` を作り、以後すべての PR で「対応表を更新したか」をチェック項目にする。Phase 4 で API 担当レビュー（60 分）向けに凍結 |
 
@@ -69,6 +70,35 @@ private-stream.md より（R4 に直結）:
 - 注文系は `spot_order_new`（新規）/ `spot_order`（更新）で、**どちらも注文の全フィールドを含むスナップショット**。約定は `spot_trade`、残高は `asset_update`
 - シーケンス番号・順序保証の記述は無い（メモ通り）
 - 接続には `GET /v1/user/subscribe` で `pubnub_channel` / `pubnub_token` を得る。トークン TTL 12 時間
+
+### 1.4 Nyx 提案書（本編 v1.0・技術別紙 v1.0）との突き合わせ
+
+提案書のうち、このモックの設計に直接効く記述と、その反映先を挙げる。
+
+| 提案書の記述 | 出典 | 本計画への反映 |
+|---|---|---|
+| DCL の `Reconcile(ids)` は **REST の `orders_info` を引く**。`OrderSnapshot(id, status, executed, remaining, avg_price)` が「状態を決める唯一のイベント」 | 本編 6.3 | R1 は一括照会 `POST /v1/user/spot/orders_info` を主、単一照会 `GET /v1/user/spot/order` を従とする。`average_price` は `executedNotional / executedAmount` で正確に出す（3.2） |
+| `orders_info` で存在しない ID が「エラーも返さず含まれない」と、DCL 側ではその注文の snapshot が永遠に届かず stale 判定に落ちる | 本編 6.3、別紙 5.6 の fail-closed 規則 | 公式 doc 通りの挙動（含まれない）を採るが、対応表に「推測」として明記し、Nyx にこの挙動を前提に DCL を設計してもらう（3.2） |
+| 単調性・終端状態の優先・「異なる終端が複数届いたら矛盾」の 5 規則 | 別紙 5.6 | 3.1 の不変量 4（終端状態は不変）がこの規則の前提になる。不変量テストで必ず検証する |
+| committed を動かすのは `OrderSnapshot` だけ。`spot_trade` は価格取得にのみ使う | 本編 6.3 | R4 は `spot_order` のスナップショット配信が本体で、`spot_trade` は補助。R4 の優先度が低いままでよい根拠 |
+| プラン A では**部分約定を状態機械・実装・証明に含める**。実験環境での部分約定の注入だけが範囲外 | 本編 12.1 | R3 の 7 値モデルと `fillOrder(amount < remaining)` の受け口は必須。`/_control/orders/:id/fill` の `amount` 指定はプラン A から受け付けてよい（3.3） |
+| プラン A の障害注入（重複・順序入替）は **D2 のテストコード側**で扱う | 本編 8.3、10 章の表 | モックの R4 に障害注入を入れる必要はプラン A では無い。`DeliveryPolicy` の差し込み口だけ残す（3.4） |
+| 金額と数量は**整数の最小単位（円、satoshi）**で扱う。Cedar の decimal が 4 桁のため | 本編 8.1-5、別紙 5.3 | モックの数値は JS の倍精度なので、文字列化で `0.30000000000000004` のような値が出うる。**応答の `amount` / `price` はペアの桁数（btc_jpy なら数量 4 桁・価格整数）で固定小数に整形する**。桁数は公式 `pairs.md` / `GET /spot/pairs` で確認し対応表に載せる（3.2） |
+| 実験環境は `bitbankinc/mock-bitbankcc` を拡張する前提。拡張が困難なら Nyx が 8 人日でスタブを作る（R5） | 本編 10 章、13.3 R5、確認事項 14 | 確認事項 14 への回答は「mock-bitbankcc ではなく本リポジトリを使う」になる。README の棲み分け記述（7 節）を Nyx への回答文としても使う |
+| D2 は「bitbank-lab-mcp と bitbank 取引 API の間」に接続する。bitbank 側の分担は「接続点の提供」 | 本編 5.1、11.1 | 経路は MCP → DCL → モック。**bitbank-lab-mcp は `src/private/client.ts` に `api.bitbank.cc` を直書きしており、接続先を差し替えられない**（2026-08-24 の main で確認）。MCP 側に base URL の上書き手段を足す作業が「接続点の提供」にあたり、本リポジトリ外の前提条件になる（8 節） |
+| 実装の最初の 1 週間（10/28〜）で「確認トークンに累計が無い」ことを実験環境上で再現する（タスク 3.2） | 本編 8.1 末尾 | 分割回避シナリオ（9.9 万円 × 6 本）は約定を必要とせず、発注 6 本が通ればよい。**現行のモックでも再現可能**。R2 が無くても最初の 1 週間は止まらない |
+| 論点 6: 委譲元が発行する冪等キーを必須とする。bitbank API にはクライアント注文 ID の口が無い | 本編 4 章既定値、8.1-2 | 発注応答が届かなかった場合、DCL は `active_orders` から自分の注文を探すしかない。`active_orders` の `since` / `from_id` 対応を R1 の範囲に含める（3.2） |
+| 確認事項 1〜6（訂正なし・PubNub 順序非保証・INACTIVE の意味・レート制限・`CANCELED_PARTIALLY_FILLED` の `executed_amount`・成行の価格上限なし） | 本編 14.1 | **対応表の行として最初から載せる。** モックが公式 doc からどう決めたかを書けば、そのまま bitbank 側の回答の下書きになる（5 節） |
+| 手数料は損失に含める。プラン A は `loss_limit` 未設定で損失系の不変量は自明に成立 | 本編 4 章既定値、6.3 | プラン A の Exposure（累積約定代金）に手数料は乗らない。指値をテイカー 0.12% のまま維持しても DCL の判定に影響しない。9 節 3 の推奨を維持 |
+| DCL の `reserved` は `price × size`（手数料なし）。モックの `locked_amount` は `price × amount × (1 + fee)` | 本編 6.3、`state.ts` `computeLocked` | 委譲枠と口座残高が近いとき、DCL が許可した注文をモックが `60001`（残高不足）で拒否しうる。本物の bitbank が拘束額に手数料を含めるかは公式 doc に無い。対応表の「要確認」行にする |
+
+**提案書内の版ズレ（要件メモを優先した根拠）**
+
+- 本編の表紙は v1.0 だが、技術別紙は「本編: 共同研究提案書 v1.6」を参照している
+- 別紙が参照する本編の節番号が一致しない。別紙は「監査ログ 6.6」「完全媒介は確認事項 3」「2.2 の 280 回の Simulation」を指すが、手元の本編では監査ログは 6.5、完全媒介は確認事項 9、Simulation は確認事項 18 にある
+- 本編は実験環境を mock-bitbankcc としているが、要件メモは本リポジトリとしている
+
+いずれも本計画の技術判断には影響しない。Nyx に最新版の本編を 1 部もらい、対応表の「出典」列の節番号をそれに合わせる作業を Phase 0 に含める。
 
 ---
 
@@ -175,13 +205,14 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 | 追加 | 内容 |
 |---|---|
-| `GET /v1/user/spot/order` | query `pair`, `order_id`。`orders` から検索し `formatOrder()` で整形。見つからない、または `pair` 不一致なら `50009` |
-| `POST /v1/user/spot/orders_info` | body `pair`, `order_ids[]`。見つかったものだけ `{ orders: [...] }` で返す。0 件でも `success: 1` |
+| `POST /v1/user/spot/orders_info`（主） | body `pair`, `order_ids[]`。見つかったものだけ `{ orders: [...] }` で返す。0 件でも `success: 1`。DCL の `Reconcile(ids)` が使う経路（1.4 節） |
+| `GET /v1/user/spot/order`（従） | query `pair`, `order_id`。`orders` から検索し `formatOrder()` で整形。見つからない、または `pair` 不一致なら `50009` |
 
 同時に行う整合作業（すべて `OrderRecord` があれば自然にできるもの）:
 
 - `format.ts` を `formatOrder(o: OrderRecord)` 1 本に統合。`status` / `executed_amount` / `remaining_amount` / `average_price` / `ordered_at` をレコードから出す。`canceled_at`（取消時のみ）、`user_cancelable`（アクティブなら true）、`post_only: false`、`expire_at: null` を追加
-- `active_orders` を `activeOrders(state)` のビューに切り替え（`PARTIALLY_FILLED` も含む）。`count` / `since` / `end` / `from_id` / `end_id` を受け付ける（DCL が使わなくても、パラメータを無視して全件返すより安全）
+- **数量・価格の文字列化をペアの桁数で固定小数にする**（例: btc_jpy の数量は 4 桁、価格は整数）。DCL は円と satoshi の整数で扱うため、倍精度の丸め誤差が文字列に漏れると解析に失敗する（1.4 節）。桁数の出典は公式 `pairs.md` / `GET /spot/pairs` とし、プラン A では btc_jpy を定数で持つ
+- `active_orders` を `activeOrders(state)` のビューに切り替え（`PARTIALLY_FILLED` も含む）。`count` / `since` / `end` / `from_id` / `end_id` を受け付ける。発注応答を取りこぼした DCL が自分の注文を探す経路になるため、`since` / `from_id` は実際に絞り込みを効かせる（1.4 節）
 - `trade_history` に `order_id` / `since` / `end` / `order` を追加
 - `cancel_order` / `cancel_orders` の終端状態への応答を `50026` / `50027` に変更
 - エラーコードの是正: 残高不足 `60001`、amount 欠落 `30001`、price 欠落 `30012`、side 欠落 `30013`、type 欠落 `30015`、order_id 欠落 `30006`
@@ -194,6 +225,8 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | `status` 等 5 フィールドが正しい | 各経路で `status`, `executed_amount`, `remaining_amount`, `average_price`, `ordered_at` を検証。特に `ordered_at` が発注時刻で、約定後も変わらないこと |
 | 存在しない ID の挙動 | `GET order` → `50009`、`orders_info` → 含まれず `success: 1` |
 | `pair` 不一致 | `GET order` → `50009` |
+| 数値の整形 | 発注量 `0.1 + 0.2` 相当の演算を経ても `executed_amount` / `remaining_amount` がペアの桁数に収まった文字列であること |
+| DCL のリコンサイル模擬 | 発注 → 約定 → `orders_info` を 2 回引いて同一スナップショットが返り、`executed_amount × average_price` が約定代金と一致すること |
 
 ### 3.3 R2: 約定を意図的に起こす仕組み（`/_control/`）
 
@@ -283,14 +316,22 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
   - v2→v3 移行データの `ordered_at` が約定時刻である点
   - `/_control/` は bitbank に存在しない（当然だが、DCL の仕様に control の存在が漏れないよう明記）
   - private stream を PubNub でなく WebSocket で提供する点（R4）
+  - 拘束額（`locked_amount`）に手数料を含めている点。DCL の `reserved` は手数料を含まない（1.4 節。要確認）
+  - 数量・価格の桁数（btc_jpy の数量 4 桁・価格整数）の出典
+  - 提案書 14.1 の確認事項 1〜6 に対応する行。注文訂正 API が無いこと、PubNub の順序非保証、`INACTIVE` は逆指値のトリガー待ちでモックでは到達しないこと、レート制限をモックが持たないこと、`CANCELED_PARTIALLY_FILLED` で `executed_amount` が残ること、成行に価格上限指定が無いこと。**この 6 行はそのまま bitbank 側から Nyx への回答の下書きになる**
 - **各 PR で更新する。** PR テンプレート（`.github/pull_request_template.md`、新設）に「公式 doc に無い挙動を推測で決めた場合、`docs/fidelity.md` に追記したか」のチェックボックスを置く
 - **Phase 4（10/6 週）で凍結し、API 担当の 60 分レビューにかける。** レビュー結果は同ファイルに「確認済み／要修正」列として反映。Nyx の前提条件書には Phase 4 時点の版を渡す
 
 ---
 
-## 6. スケジュール（10 月中旬までの最小の道筋）
+## 6. スケジュール（目安）
 
-今日 2026-09-11（木）。R1・R2 の目標「10 月中旬」を **10/10（金）v0.1.0 タグ**と読む。実装フェーズ着手 10/28 の前に Nyx が結合確認できる時間を 2 週間確保する。
+今日 2026-09-11（木）。期日は厳密ではないので、以下は「何をどの順で終えるか」の目安として置く。提案書側の節目と合わせると、押さえるべき点は 2 つだけになる。
+
+- **10/23（立ち上げフェーズの終わり）までに v0.1.0（R1 + R2 + R3 の 3 値到達分）を Nyx に渡す。** 提案書 12.2 では立ち上げ 10/01〜10/23 に実験環境の準備（bitbank 主担当）が含まれる
+- **10/28 からの実装フェーズ最初の 1 週間（タスク 3.2）は現行のモックでも成立する**（分割回避シナリオは約定を要しない。1.4 節）。R2 が遅れてもここは止まらない
+
+以下は 10/10 に v0.1.0 を切る前提の週割り。2 週間遅れても 10/23 に間に合う。
 
 | 週 | 作業 | 完了条件 |
 |---|---|---|
@@ -324,6 +365,8 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | 実市場の足で勝手に約定してシナリオが崩れる | Nyx の結合確認で再現性が無いと報告 | `FILL_MODE=manual` を control 有効時の既定にする（3.3 節の推奨案） |
 | 公式 doc に無い挙動を推測で決めた箇所が仕様に漏れる | | 対応表の「推測」列と PR テンプレのチェックで機械的に拾う。API 担当レビューを 10/13 週に固定 |
 | bitbankinc への transfer が遅れる | | コードは `tjackiet` 配下で v0.1.0 を切って Nyx に渡せる。README の免責は transfer 前から入れておく |
+| **bitbank-lab-mcp が接続先を差し替えられない**（本リポジトリ外の前提条件） | MCP → DCL → モックの経路が組めず、Nyx が DCL 単体でしか試験できない | 提案書 11.1 の「接続点の提供」として、MCP 側に base URL の上書き手段（環境変数）を足す小さな変更を bitbank 側で 10/23 までに用意する。当面は Nyx が DCL のテストから直接モックを叩く形で進められる |
+| `orders_info` に存在しない ID が含まれない挙動を DCL が想定していない | リコンサイルで snapshot が届かず、DCL が Grant を stale にして fail-closed し続ける | 対応表の該当行を Nyx に事前共有し、DCL 側で「N 回引いても現れない ID は取引所に存在しない」と扱う規則を入れてもらう |
 
 ---
 
@@ -333,4 +376,6 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 2. 注文 ID を連番（`1, 2, 3, ...`）にするか、本物に近い桁数の連番（例: `10_000_000_001` 起点）にするか（推奨: 連番。桁数は対応表に記録）
 3. 指値約定の手数料をメイカー料率に変えるか、現状のテイカー 0.12% を維持して対応表に載せるか（推奨: プラン A では維持。DCL の Exposure は約定代金で手数料を含まないため影響が小さい。API 担当レビューで確認）
 4. `fast-check` の導入可否（推奨: 導入。不変量テストが Lean の証明対象と対応するため研究上の説明材料にもなる）
-5. R4 のトランスポートを素の WebSocket でよいか（推奨: よい。Nyx に事前確認）
+5. R4 のトランスポートを素の WebSocket でよいか（推奨: よい。提案書はプラン A の障害注入を D2 側のテストで扱うとしており、モックの stream は本体のスナップショット配信だけで足りる。Nyx に事前確認）
+6. bitbank-lab-mcp の接続先上書きを誰がいつ入れるか（提案書 11.1 の「接続点の提供」。本リポジトリ外だが、経路を組む前提条件）
+7. Nyx に最新版の提案書本編（別紙が参照する v1.6）をもらい、対応表の出典の節番号を合わせるか（Phase 0 の作業として推奨）
