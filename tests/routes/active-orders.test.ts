@@ -7,7 +7,7 @@ describe("GET /v1/user/spot/active_orders", () => {
 
   it("returns open orders", async () => {
     const state = buildState({
-      openOrders: [buildOrder({ id: "1" }), buildOrder({ id: "2", pair: "eth_jpy" })],
+      orders: [buildOrder({ id: "1" }), buildOrder({ id: "2", pair: "eth_jpy" })],
     });
     const { fastify } = await build(state);
     const res = await fastify.inject({ method: "GET", url: "/v1/user/spot/active_orders" });
@@ -18,7 +18,7 @@ describe("GET /v1/user/spot/active_orders", () => {
 
   it("filters by pair", async () => {
     const state = buildState({
-      openOrders: [buildOrder({ id: "1" }), buildOrder({ id: "2", pair: "eth_jpy" })],
+      orders: [buildOrder({ id: "1" }), buildOrder({ id: "2", pair: "eth_jpy" })],
     });
     const { fastify } = await build(state);
     const res = await fastify.inject({

@@ -8,8 +8,8 @@ describe("GET /v1/user/assets", () => {
   it("returns assets with locked/free split", async () => {
     const state = buildState({
       balances: { jpy: 1_000_000, btc: 0.5 },
-      openOrders: [
-        buildOrder({ id: "1", side: "buy", price: 5_000_000, amount: 0.1 }),
+      orders: [
+        buildOrder({ id: "1", side: "buy", price: 5_000_000, startAmount: 0.1 }),
       ],
     });
     const { fastify } = await build(state);

@@ -11,9 +11,9 @@ export const tradeHistoryRoutes: FastifyPluginAsync = async (fastify) => {
       return err(ErrorCode.INVALID_PARAMETER);
     }
     await fastify.store.tick();
-    let history = [...fastify.store.state().history].reverse();
-    if (parsed.data.pair) history = history.filter((h) => h.pair === parsed.data.pair);
-    if (parsed.data.count !== undefined) history = history.slice(0, parsed.data.count);
-    return ok({ trades: history.map(formatTrade) });
+    let trades = [...fastify.store.state().trades].reverse();
+    if (parsed.data.pair) trades = trades.filter((h) => h.pair === parsed.data.pair);
+    if (parsed.data.count !== undefined) trades = trades.slice(0, parsed.data.count);
+    return ok({ trades: trades.map(formatTrade) });
   });
 };

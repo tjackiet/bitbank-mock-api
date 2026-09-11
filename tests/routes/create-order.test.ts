@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { activeOrders } from "../../src/engine/state.ts";
 import { buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 
@@ -18,7 +19,7 @@ describe("POST /v1/user/spot/order", () => {
     const body = res.json() as { success: number; data: { order_id: number; status: string } };
     expect(body.success).toBe(1);
     expect(body.data.status).toBe("UNFILLED");
-    expect(store.state().openOrders).toHaveLength(1);
+    expect(activeOrders(store.state())).toHaveLength(1);
   });
 
   it("rejects limit buy when funds insufficient", async () => {
@@ -50,7 +51,7 @@ describe("POST /v1/user/spot/order", () => {
     expect(body.data.status).toBe("FULLY_FILLED");
     expect(Number(body.data.price)).toBe(5_000_000);
     expect(store.state().balances.btc).toBe(0.001);
-    expect(store.state().history).toHaveLength(1);
+    expect(store.state().trades).toHaveLength(1);
   });
 
   it("rejects invalid pair", async () => {
