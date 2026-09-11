@@ -6,10 +6,10 @@
 
 ## 出典
 
-- [bitbank Private REST API](https://github.com/bitbankinc/bitbank-api-docs/blob/master/rest-api.md)（2026-09-11 確認）
-- [bitbank error codes](https://github.com/bitbankinc/bitbank-api-docs/blob/master/errors.md)（2026-09-11 確認）
-- [bitbank pair list](https://github.com/bitbankinc/bitbank-api-docs/blob/master/pairs.md)（2026-09-11 確認）
-- Nyx Foundation「共同研究 提案書 兼 技術仕様案 v1.0」「技術別紙 v1.0」（2026-08-20、リポジトリ外の手元資料）
+- [bitbank Private REST API](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/rest-api.md)（2026-09-11 確認）
+- [bitbank error codes](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/errors.md)（2026-09-11 確認）
+- [bitbank pair list](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/pairs.md)（2026-09-11 確認）
+- 提案書 兼 技術仕様案 v1.0 / 技術別紙 v1.0（2026-08-20、Nyx Foundation）
 
 ## 対応表
 
