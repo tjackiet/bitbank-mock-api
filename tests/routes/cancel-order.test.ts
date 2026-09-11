@@ -144,4 +144,21 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     expect(body.data.code).toBe(50026);
     expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
   });
+
+  it("rejects an empty string id before cancelling any order", async () => {
+    const state = buildState({
+      orders: [buildOrder({ id: "2", price: 5_100_000 })],
+    });
+    const { fastify, store } = await build(state);
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: ["", 2] },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(20003);
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+  });
 });

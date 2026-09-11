@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const numStr = z.coerce.number().finite();
-const idValue = z.union([z.number(), z.string()]);
+const idValue = z.union([z.number(), z.string().min(1)]);
 
 export const CreateOrderRequestSchema = z.object({
   pair: z.string().min(1),
