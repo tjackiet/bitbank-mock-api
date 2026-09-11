@@ -49,5 +49,11 @@
 2. `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端（`INACTIVE` は Plan A では到達しない）
 3. `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`）
 4. 終端状態（`FULLY_FILLED` / `CANCELED_*` / `REJECTED`）のレコードは以後の遷移で変化しない
-5. 各注文について、`trades` の `amount` 合計 == `executedAmount`
-6. 資産ごとの `locked` == アクティブ注文の未約定分から計算した値（買いの拘束額は手数料込み）
+5. 各注文について、`trades` の `amount` 合計 == `executedAmount`、かつ `amount × price` 合計 == `executedNotional`
+6. 各資産で残高は負にならず、`locked` は残高を超えない（`availableOf >= 0`。買いの拘束額は手数料込み）
+
+そのほか Phase 1 で決めた内部規則:
+
+- ペアは `base_quote` の 2 セグメントだけを受け付ける。`btc_jpy_x` のような余剰セグメントは `INVALID_PAIR`
+- `fillOrder` は残量との差が `1e-12` 以下なら全量約定として残量にクランプする（倍精度の塵で終端に届かないことを防ぐ。Phase 2 の桁数量子化が主防御）
+- `rejectOrder` は `UNFILLED` / `INACTIVE`（`executedAmount == 0`）にだけ許す。部分約定済みは `CANCELED_PARTIALLY_FILLED` へ取消する

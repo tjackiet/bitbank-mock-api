@@ -3,12 +3,15 @@ import {
   DEFAULT_TAKER_FEE_RATE,
   isActive,
   isTerminal,
+  lockedAssetOf,
   pairAssets,
   remainingOf,
   type OrderRecord,
   type PaperState,
   type TradeRecord,
 } from "./state.ts";
+
+const AMOUNT_EPS = 1e-12;
 import type { Result } from "./types.ts";
 
 export const TransitionError = {
@@ -99,7 +102,7 @@ export function placeOrder(
         updatedAt: now,
       },
       order,
-      touchedAssets: [],
+      touchedAssets: [input.side === "buy" ? quote : base],
     });
   }
 
@@ -147,9 +150,11 @@ export function fillOrder(
   const current = state.orders.find((o) => o.id === orderId);
   if (!current) return fail(TransitionError.ORDER_NOT_FOUND);
   if (!isActive(current)) return fail(TransitionError.ORDER_NOT_ACTIVE);
-  if (!Number.isFinite(amount) || amount <= 0 || amount > remainingOf(current)) {
+  const remaining = remainingOf(current);
+  if (!Number.isFinite(amount) || amount <= 0 || amount - remaining > AMOUNT_EPS) {
     return fail(TransitionError.INVALID_AMOUNT);
   }
+  const fillAmount = remaining - amount <= AMOUNT_EPS ? remaining : amount;
   if (!Number.isFinite(price) || price <= 0) return fail(TransitionError.INVALID_PRICE);
   if (current.type === "limit" && current.price != null) {
     const worse =
@@ -160,24 +165,24 @@ export function fillOrder(
   const assets = pairAssets(current.pair);
   if (!assets) return fail(TransitionError.INVALID_PAIR);
   const [base, quote] = assets;
-  const notional = price * amount;
+  const notional = price * fillAmount;
   const feeQuote = notional * feeRate;
   const balances = { ...state.balances };
   if (current.side === "buy") {
     balances[quote] = (balances[quote] ?? 0) - (notional + feeQuote);
-    balances[base] = (balances[base] ?? 0) + amount;
+    balances[base] = (balances[base] ?? 0) + fillAmount;
   } else {
-    balances[base] = (balances[base] ?? 0) - amount;
+    balances[base] = (balances[base] ?? 0) - fillAmount;
     balances[quote] = (balances[quote] ?? 0) + (notional - feeQuote);
   }
 
-  const executedAmount = current.executedAmount + amount;
+  const executedAmount = current.executedAmount + fillAmount;
   const executedNotional = current.executedNotional + notional;
   const order: OrderRecord = {
     ...current,
     executedAmount,
     executedNotional,
-    status: executedAmount >= current.startAmount ? "FULLY_FILLED" : "PARTIALLY_FILLED",
+    status: fillAmount === remaining ? "FULLY_FILLED" : "PARTIALLY_FILLED",
     updatedAt: at,
   };
   const trade: TradeRecord = {
@@ -186,7 +191,7 @@ export function fillOrder(
     pair: current.pair,
     side: current.side,
     type: current.type,
-    amount,
+    amount: fillAmount,
     price,
     feeQuote,
     makerTaker: current.type === "limit" ? "maker" : "taker",
@@ -223,10 +228,11 @@ export function cancelOrder(
     canceledAt: at,
     updatedAt: at,
   };
+  const locked = lockedAssetOf(current.side, current.pair);
   return ok({
     state: replaceOrder(state, order),
     order,
-    touchedAssets: [],
+    touchedAssets: locked ? [locked] : [],
   });
 }
 
@@ -237,16 +243,19 @@ export function rejectOrder(
 ): Result<TransitionOk> {
   const current = state.orders.find((o) => o.id === orderId);
   if (!current) return fail(TransitionError.ORDER_NOT_FOUND);
-  if (isTerminal(current)) return fail(TransitionError.ORDER_NOT_ACTIVE);
+  if (current.status !== "UNFILLED" && current.status !== "INACTIVE") {
+    return fail(TransitionError.ORDER_NOT_ACTIVE);
+  }
 
   const order: OrderRecord = {
     ...current,
     status: "REJECTED",
     updatedAt: at,
   };
+  const locked = lockedAssetOf(current.side, current.pair);
   return ok({
     state: replaceOrder(state, order),
     order,
-    touchedAssets: [],
+    touchedAssets: locked ? [locked] : [],
   });
 }

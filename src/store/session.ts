@@ -42,6 +42,7 @@ export class SessionStore {
     const result = new Map<string, Candle[]>();
     const pairs = new Set(activeOrders(this._state).map((o) => o.pair));
     const lastMs = Date.parse(this._state.lastTickAt);
+    const tickFrom = this._state.lastTickAt;
     let totalFilled = 0;
     for (const pair of pairs) {
       const r = await this.fetchCandles(pair, lastMs, nowMs);
@@ -51,7 +52,7 @@ export class SessionStore {
         continue;
       }
       result.set(pair, r.data);
-      const sr = runTick(this._state, {
+      const sr = runTick({ ...this._state, lastTickAt: tickFrom }, {
         candles: r.data,
         nowMs,
         pair,

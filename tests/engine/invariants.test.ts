@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { invariantViolations } from "../../src/engine/invariants.ts";
-import { activeOrders, remainingOf, type PaperState } from "../../src/engine/state.ts";
+import { activeOrders, isTerminal, remainingOf, type PaperState } from "../../src/engine/state.ts";
 import { cancelOrder, fillOrder, placeOrder, rejectOrder } from "../../src/engine/transitions.ts";
 import { buildState } from "./helpers.ts";
 
@@ -71,7 +71,7 @@ describe("invariants", () => {
           let state = buildState({ balances: { jpy: 10_000_000, btc: 1 } });
           const terminals = new Map<string, string>();
           for (const [kind, a, b] of ops) {
-            const before = new Map(state.orders.filter((o) => o.status !== "UNFILLED" && o.status !== "PARTIALLY_FILLED" && o.status !== "INACTIVE").map((o) => [o.id, JSON.stringify(o)]));
+            const before = new Map(state.orders.filter(isTerminal).map((o) => [o.id, JSON.stringify(o)]));
             state = applyRandomOp(state, kind, a, b);
             expect(invariantViolations(state, 0)).toEqual([]);
             for (const [id, snap] of before) {
@@ -79,7 +79,7 @@ describe("invariants", () => {
               expect(after && JSON.stringify(after)).toBe(snap);
             }
             for (const o of state.orders) {
-              if (o.status !== "UNFILLED" && o.status !== "PARTIALLY_FILLED" && o.status !== "INACTIVE") {
+              if (isTerminal(o)) {
                 terminals.set(o.id, JSON.stringify(o));
               }
             }

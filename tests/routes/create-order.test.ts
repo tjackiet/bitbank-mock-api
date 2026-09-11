@@ -46,10 +46,14 @@ describe("POST /v1/user/spot/order", () => {
       payload: { pair: "btc_jpy", amount: "0.001", side: "buy", type: "market" },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { success: number; data: { status: string; price: string } };
+    const body = res.json() as {
+      success: number;
+      data: { status: string; price: string; average_price: string };
+    };
     expect(body.success).toBe(1);
     expect(body.data.status).toBe("FULLY_FILLED");
     expect(Number(body.data.price)).toBe(5_000_000);
+    expect(Number(body.data.average_price)).toBe(5_000_000);
     expect(store.state().balances.btc).toBe(0.001);
     expect(store.state().trades).toHaveLength(1);
   });
@@ -61,8 +65,21 @@ describe("POST /v1/user/spot/order", () => {
       url: "/v1/user/spot/order",
       payload: { pair: "btc", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
     });
-    const body = res.json() as { success: number };
+    const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
+    expect(body.data.code).toBe(10000);
+  });
+
+  it("rejects a malformed pair on market before looking up a price", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc", amount: "0.001", side: "buy", type: "market" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(10000);
   });
 
   it("rejects bad payload", async () => {

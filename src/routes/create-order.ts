@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { pairAssets } from "../engine/state.ts";
 import { placeOrder, TransitionError } from "../engine/transitions.ts";
 import { CreateOrderRequestSchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
@@ -32,6 +33,7 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     const { pair, side, type, amount, price } = parsed.data;
     const store = fastify.store;
     await store.tick();
+    if (!pairAssets(pair)) return err(ErrorCode.INVALID_PAIR);
 
     const now = new Date().toISOString();
     if (type === "market") {

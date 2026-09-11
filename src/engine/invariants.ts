@@ -1,11 +1,4 @@
-import {
-  activeOrders,
-  computeLocked,
-  DEFAULT_TAKER_FEE_RATE,
-  isTerminal,
-  remainingOf,
-  type PaperState,
-} from "./state.ts";
+import { computeLocked, DEFAULT_TAKER_FEE_RATE, isTerminal, type PaperState } from "./state.ts";
 
 export function invariantViolations(
   state: PaperState,
@@ -28,6 +21,9 @@ export function invariantViolations(
         violations.push(`2: order ${o.id} zero-exec non-terminal status=${o.status}`);
       }
     }
+    if (o.status === "REJECTED" && o.executedAmount !== 0) {
+      violations.push(`2: order ${o.id} REJECTED with executedAmount=${o.executedAmount}`);
+    }
 
     if (o.status === "FULLY_FILLED" && o.executedAmount !== o.startAmount) {
       violations.push(`3: order ${o.id} FULLY_FILLED executedAmount=${o.executedAmount}`);
@@ -36,33 +32,29 @@ export function invariantViolations(
       violations.push(`3: order ${o.id} fully executed but status=${o.status}`);
     }
 
-    const tradeSum = state.trades
-      .filter((t) => t.orderId === o.id)
-      .reduce((sum, t) => sum + t.amount, 0);
+    const fills = state.trades.filter((t) => t.orderId === o.id);
+    const tradeSum = fills.reduce((sum, t) => sum + t.amount, 0);
     if (Math.abs(tradeSum - o.executedAmount) > 1e-12) {
+      violations.push(`5: order ${o.id} trades=${tradeSum} executedAmount=${o.executedAmount}`);
+    }
+    const notionalSum = fills.reduce((sum, t) => sum + t.amount * t.price, 0);
+    if (Math.abs(notionalSum - o.executedNotional) > 1e-6) {
       violations.push(
-        `5: order ${o.id} trades=${tradeSum} executedAmount=${o.executedAmount}`,
+        `5: order ${o.id} tradeNotional=${notionalSum} executedNotional=${o.executedNotional}`,
       );
     }
   }
 
-  const expected: Record<string, number> = {};
-  for (const o of activeOrders(state)) {
-    const [base, quote] = o.pair.split("_");
-    if (!base || !quote) continue;
-    const remaining = remainingOf(o);
-    if (o.side === "buy") {
-      if (o.price == null) continue;
-      expected[quote] = (expected[quote] ?? 0) + o.price * remaining * (1 + feeRate);
-    } else {
-      expected[base] = (expected[base] ?? 0) + remaining;
-    }
-  }
   const locked = computeLocked(state, feeRate);
-  const keys = new Set([...Object.keys(expected), ...Object.keys(locked)]);
+  const keys = new Set([...Object.keys(state.balances), ...Object.keys(locked)]);
   for (const k of keys) {
-    if (Math.abs((expected[k] ?? 0) - (locked[k] ?? 0)) > 1e-9) {
-      violations.push(`6: locked[${k}] expected=${expected[k] ?? 0} actual=${locked[k] ?? 0}`);
+    const total = state.balances[k] ?? 0;
+    const lockedAmount = locked[k] ?? 0;
+    if (total < -1e-9) {
+      violations.push(`6: balance[${k}]=${total} is negative`);
+    }
+    if (lockedAmount - total > 1e-9) {
+      violations.push(`6: locked[${k}]=${lockedAmount} exceeds balance=${total}`);
     }
   }
 

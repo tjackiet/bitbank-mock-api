@@ -138,8 +138,8 @@ function migrateToV3(v2: PaperStateV2): PaperState {
     balances: v2.balances,
     orders,
     trades,
-    nextOrderSeq: numericIds.length === 0 ? 1 : Math.max(...numericIds) + 1,
-    nextTradeSeq: trades.length === 0 ? 1 : Math.max(...trades.map((t) => Number(t.tradeId))) + 1,
+    nextOrderSeq: numericIds.reduce((max, n) => (n > max ? n : max), 0) + 1,
+    nextTradeSeq: tradeSeq,
   };
 }
 

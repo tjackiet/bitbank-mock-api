@@ -130,6 +130,26 @@ describe("fillOrder", () => {
     expect(sellR.success).toBe(false);
   });
 
+  it("treats a one-ulp overshoot of remaining as a full fill", () => {
+    const order = buildOrder({ startAmount: 0.3, price: 100, executedAmount: 0, executedNotional: 0 });
+    let state = buildState({ balances: { jpy: 10_000 }, orders: [order] });
+    const first = fillOrder(state, order.id, 100, 0.1, NOW, 0);
+    expect(first.success).toBe(true);
+    if (!first.success) throw new Error("unreachable");
+    state = first.data.state;
+    const second = fillOrder(state, order.id, 100, 0.1, NOW, 0);
+    expect(second.success).toBe(true);
+    if (!second.success) throw new Error("unreachable");
+    state = second.data.state;
+    const rem = remainingOf(state.orders[0]!);
+    const r = fillOrder(state, order.id, 100, rem + 1e-16, LATER, 0);
+    expect(r.success).toBe(true);
+    if (!r.success) throw new Error("unreachable");
+    expect(r.data.order.status).toBe("FULLY_FILLED");
+    expect(r.data.order.executedAmount).toBeCloseTo(0.3, 12);
+    expect(invariantViolations(r.data.state, 0)).toEqual([]);
+  });
+
   it("rejects amount above remaining and does not mutate", () => {
     const order = buildOrder({ startAmount: 1, price: 100 });
     const state = buildState({ orders: [order] });
@@ -201,6 +221,20 @@ describe("cancelOrder / rejectOrder", () => {
     const snapshot = structuredClone(order);
     expect(cancelOrder(buildState({ orders: [order] }), order.id, LATER).success).toBe(false);
     expect(rejectOrder(buildState({ orders: [order] }), order.id, LATER).success).toBe(false);
+    expect(order).toEqual(snapshot);
+  });
+
+  it("refuses rejectOrder on a partially filled order", () => {
+    const order = buildOrder({
+      status: "PARTIALLY_FILLED",
+      startAmount: 1,
+      executedAmount: 0.3,
+      executedNotional: 30,
+    });
+    const snapshot = structuredClone(order);
+    const r = rejectOrder(buildState({ orders: [order] }), order.id, LATER);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toBe(TransitionError.ORDER_NOT_ACTIVE);
     expect(order).toEqual(snapshot);
   });
 

@@ -9,6 +9,7 @@ import {
   DEFAULT_TAKER_FEE_RATE,
   genId,
   nowIso,
+  pairAssets,
   PaperStateSchema,
 } from "../../src/engine/state.ts";
 import { placeOrder } from "../../src/engine/transitions.ts";
@@ -71,6 +72,13 @@ describe("pure helpers", () => {
 
   it("DEFAULT_TAKER_FEE_RATE matches bitbank docs", () => {
     expect(DEFAULT_TAKER_FEE_RATE).toBe(0.0012);
+  });
+
+  it("pairAssets accepts exactly two non-empty segments", () => {
+    expect(pairAssets("btc_jpy")).toEqual(["btc", "jpy"]);
+    expect(pairAssets("btc")).toBeNull();
+    expect(pairAssets("btc_jpy_x")).toBeNull();
+    expect(pairAssets("_jpy")).toBeNull();
   });
 });
 
@@ -140,6 +148,16 @@ describe("persist", () => {
           feeJpy: 480,
           filledAt: "2024-04-01T00:00:00.000Z",
         },
+        {
+          id: "8",
+          pair: "btc_jpy",
+          side: "buy",
+          type: "market",
+          amount: 0.05,
+          fillPrice: 4_100_000,
+          feeJpy: 246,
+          filledAt: "2024-04-02T00:00:00.000Z",
+        },
       ],
     };
     writeFileSync(statePath, JSON.stringify(v2));
@@ -149,15 +167,20 @@ describe("persist", () => {
     expect(r.data.version).toBe(3);
     const open = r.data.orders.find((o) => o.id === "10");
     const filled = r.data.orders.find((o) => o.id === "7");
+    const market = r.data.orders.find((o) => o.id === "8");
     expect(open?.status).toBe("UNFILLED");
     expect(open?.orderedAt).toBe("2024-05-01T00:00:00.000Z");
     expect(filled?.status).toBe("FULLY_FILLED");
     expect(filled?.orderedAt).toBe("2024-04-01T00:00:00.000Z");
-    expect(r.data.trades).toHaveLength(1);
+    expect(market?.price).toBeNull();
+    expect(market?.executedNotional).toBeCloseTo(4_100_000 * 0.05, 6);
+    expect(r.data.trades).toHaveLength(2);
     expect(r.data.trades[0]?.tradeId).toBe("1");
     expect(r.data.trades[0]?.orderId).toBe("7");
+    expect(r.data.trades[1]?.orderId).toBe("8");
+    expect(r.data.trades[1]?.makerTaker).toBe("taker");
     expect(r.data.nextOrderSeq).toBe(11);
-    expect(r.data.nextTradeSeq).toBe(2);
+    expect(r.data.nextTradeSeq).toBe(3);
   });
 
   it("migrates empty v2 and continues IDs from 1", async () => {

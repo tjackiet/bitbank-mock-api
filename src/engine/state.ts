@@ -98,9 +98,18 @@ export function averagePriceOf(o: OrderRecord): number {
 }
 
 export function pairAssets(pair: string): [string, string] | null {
-  const [base, quote] = pair.split("_");
+  const parts = pair.split("_");
+  if (parts.length !== 2) return null;
+  const [base, quote] = parts;
   if (!base || !quote) return null;
   return [base, quote];
+}
+
+export function lockedAssetOf(side: "buy" | "sell", pair: string): string | null {
+  const assets = pairAssets(pair);
+  if (!assets) return null;
+  const [base, quote] = assets;
+  return side === "buy" ? quote : base;
 }
 
 export function parseNumericId(id: string): number | null {
