@@ -191,13 +191,20 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 **不変量**（テストで検証し、そのまま Nyx の仕様書 D1 に渡せる形で `docs/fidelity.md` にも書く）:
 
 1. `0 <= executedAmount <= startAmount`
-2. `status ∈ {UNFILLED}` ⇔ `executedAmount == 0` かつ非終端
+2. `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端（`INACTIVE` はプラン A では到達しないが、7 値モデルの不変量としてはここに含める）
 3. `status ∈ {FULLY_FILLED}` ⇔ `executedAmount == startAmount`
 4. 終端状態（`FULLY_FILLED` / `CANCELED_*` / `REJECTED`）に達したレコードは以後いかなる遷移でも変化しない
 5. `trades` の `orderId` ごとの `amount` 合計 == その注文の `executedAmount`
 6. 資産ごとの `locked` == アクティブ注文の未約定分から計算した値（現行 `computeLocked` と同義）
 
 **永続化**: `PaperStateSchemaV3` を追加し、`persist.ts` の `migrateToLatest` に v2→v3 を足す。v2 の `openOrders` は `UNFILLED` のレコードに、`history` は `FULLY_FILLED` のレコード + `TradeRecord` に変換する（v2 には発注時刻が無いので `orderedAt = filledAt` とし、対応表に「移行データは `ordered_at` が不正確」と記録）。
+
+移行時の ID 衝突を防ぐ規則:
+
+- 移行した `TradeRecord` の `tradeId` は、`history` の並び順に `1, 2, ...` を振り直す（v2 の `id` は注文 ID なので trade ID には使わない）。`nextTradeSeq` はその最大値 + 1
+- `nextOrderSeq` は、移行した注文 ID のうち数値として解釈できるものの最大値 + 1 とする。旧形式の巨大な ID（`Date.now() * 1000 + counter`）が残る場合はそこから続きを振るので、単調増加は保たれる（桁が大きいままになる点は対応表に記録）
+- `nextOrderSeq` / `nextTradeSeq` は状態に永続化し、再起動後もそこから続ける
+- テスト: v2 ファイルを読み込んで再起動し、以後の発注・約定の ID が既存レコードと衝突せず単調増加することを `tests/engine/state.test.ts` で確認する
 
 **注文 ID 採番（決定済み、2026-09-11）**: `Date.now() * 1000 + counter` をやめ、状態に持つ連番（`nextOrderSeq`、初期値 `1`）にする。理由は (a) 再起動で重複しない、(b) シナリオスクリプトで ID を予測でき、再現性が上がる、(c) 本物も単調増加の整数である点は同じ。桁数が本物と異なる点は対応表へ。
 
@@ -226,11 +233,19 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | 存在しない ID の挙動 | `GET order` → `50009`、`orders_info` → 含まれず `success: 1` |
 | `pair` 不一致 | `GET order` → `50009` |
 | 数値の整形 | 発注量 `0.1 + 0.2` 相当の演算を経ても `executed_amount` / `remaining_amount` がペアの桁数に収まった文字列であること |
-| DCL のリコンサイル模擬 | 発注 → 約定 → `orders_info` を 2 回引いて同一スナップショットが返り、`executed_amount × average_price` が約定代金と一致すること |
+| DCL のリコンサイル模擬 | 発注 → 約定 → `orders_info` を 2 回引いて同一スナップショットが返ること。プラン A の全量約定では `executed_amount × average_price` が約定代金と厳密に一致すること。部分約定を含む場合は下記の丸め規則の許容差内であること |
+
+`average_price` の丸め規則: 内部では `executedNotional`（倍精度）を真値として保持し、`average_price = executedNotional / executedAmount` をペアの価格桁数（btc_jpy なら整数）に四捨五入して文字列化する。複数回の約定で平均が価格単位に乗らない場合（例: 100 と 101 で 0.5 ずつ約定 → 100.5）は丸めが入るため、`executed_amount × average_price` と約定代金の差は `executed_amount × 価格単位 × 0.5` 以下を許容する。DCL が `committed` をこの積で再計算する際に同じ誤差が乗ることは対応表に記録し、Nyx に伝える。内部演算を円・satoshi の整数に切り替えるかはプラン B（部分約定を実際に起こす段階）で判断する
 
 ### 3.3 R2: 約定を意図的に起こす仕組み（`/_control/`）
 
 **有効化**: 環境変数 `BITBANK_MOCK_CONTROL=1` のときのみルートを登録する（既定は無効。無効時は 404）。
+
+**アクセス境界**: 現状サーバは `0.0.0.0` で listen しているため、control を有効にすると同一ネットワークの誰でも状態を読み書きできる。次の 2 段で守る。
+
+- control 有効時は listen ホストの既定を `127.0.0.1` にする（`BITBANK_MOCK_HOST` で明示した場合のみ他のアドレスに bind できる）
+- `/_control/` の各ルートは、接続元がループバックでない場合は `X-Control-Token` ヘッダが `BITBANK_MOCK_CONTROL_TOKEN` と一致しない限り 403 で拒否する。トークン未設定なら非ループバックからは常に 403
+- テスト: ループバックからの成功、非ループバック + トークン無しの 403、非ループバック + 正しいトークンの成功を `tests/routes/control.test.ts` に含める（Fastify の `inject` で `remoteAddress` を差し替える）
 
 **自動 tick の停止**: `BITBANK_MOCK_FILL_MODE=market | manual`。`manual` では `store.tick()` が実市場の足を取りに行かず、`/_control/` からの操作でのみ状態が動く。**既定は control の有効・無効に連動させる（決定済み、2026-09-11）**: `BITBANK_MOCK_CONTROL` 未設定なら `market`（現行挙動）、設定時は `manual`。control を使いながら市場連動で試したい場合だけ `FILL_MODE=market` を明示する。設定忘れでシナリオの再現性が壊れないようにするため。
 
@@ -238,12 +253,23 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 | メソッド | パス | 入力 | 動作 |
 |---|---|---|---|
-| POST | `/_control/orders/:order_id/fill` | `{ price?, amount? }` | 指定注文を約定させる。`price` 省略時は指値価格、`amount` 省略時は残量全部。`amount < remaining` なら `PARTIALLY_FILLED`（プラン B 用。プラン A では受け付けるが、README では「未検証」と明記） |
+| POST | `/_control/orders/:order_id/fill` | `{ price?, amount? }` | 指定注文を約定させる。`price` 省略時は指値価格、`amount` 省略時は残量全部。`amount < remaining` なら `PARTIALLY_FILLED`（プラン B 用。プラン A では受け付けるが、README では「未検証」と明記）。入力検証は下記 |
 | POST | `/_control/tick` | `{ pair, price }` または `{ pair, candle: { open, high, low, close, timestamp? } }` | 与えた価格を 1 本の足として `runTick()` を回す。`price` だけなら `high = low = price`。複数注文をまとめて動かす用 |
 | POST | `/_control/reset` | `{ initialJpy?, balances? }` | 状態を初期化。シナリオ冒頭で使う |
 | GET | `/_control/state` | | `PaperState` をそのまま返す（デバッグ用） |
 
 `fill` は 3.1 の `fillOrder()` を直接呼ぶ。`tick` は `runTick()` に人工の足を渡す。どちらも既存の遷移関数を通るので、REST 経路と control 経路で状態の整合性が崩れない。
+
+`fill` の入力検証（不変量 1 を control 経路から壊させないため）:
+
+| 条件 | 応答 |
+|---|---|
+| 注文が存在しない | 404 `{ error: "ORDER_NOT_FOUND" }` |
+| 注文が終端状態 | 409 `{ error: "ORDER_NOT_ACTIVE", status }` |
+| `amount` が有限の正数でない、または `amount > remaining` | 400 `{ error: "INVALID_AMOUNT", remaining }` |
+| `price` が有限の正数でない | 400 `{ error: "INVALID_PRICE" }` |
+
+検証は `fillOrder()` を呼ぶ前に行い、拒否時は注文・残高・約定記録のいずれも変更しない。`fillOrder()` 自身も同じ条件で `Result.error` を返す二重防御にする（不変量テストの対象）。`tick` の `candle` も `low <= high` と正数を検証する。
 
 **R2 の受入条件と確認方法**
 
@@ -256,10 +282,13 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 設計だけ先に決めておく。
 
 - **トランスポート（決定済み、2026-09-11）**: PubNub を模倣せず、素の WebSocket（`@fastify/websocket`）を `ws://host/_stream/private` で提供する。`GET /v1/user/subscribe` は公式通りの形で `pubnub_channel` / `pubnub_token` を返し、値はダミー。README に「PubNub SDK ではなく WebSocket で受ける」と明記する。理由: PubNub のプロトコル互換を作る労力に対して、DCL 側で必要なのはメッセージ本体の互換だけ
-- **メッセージ**: 公式と同じ `{ message: { method, params } }`。`spot_order_new` / `spot_order` / `spot_trade` / `asset_update` の 4 種。`params` は `formatOrder()` の出力（スナップショット）
-- **発火点**: 3.1 の遷移関数が返す `{ order, trade }` を `SessionStore` がイベントとして emit する（`store.on("order", ...)`）。REST 経路も control 経路も同じ遷移関数を通るため、発火漏れが無い
+- **メッセージ**: 公式と同じ `{ message: { method, params } }`。`params` は公式通り配列。イベントごとに整形関数を分ける
+  - `spot_order_new`（発注時）/ `spot_order`（更新時）: `params: [formatOrder(order)]`。注文のスナップショット
+  - `spot_trade`: `params: [formatTrade(trade)]`。REST の `trade_history` と同じ形
+  - `asset_update`: `params: [formatAssetUpdate(asset)]`。変化した資産だけを載せる。**公式はこのメッセージだけキーが camelCase**（`freeAmount` / `lockedAmount` / `onhandAmount` / `amountPrecision` / `withdrawingAmount`）なので、REST の `formatAssets` とは別の整形関数にする
+- **発火点**: 3.1 の遷移関数の戻り値を `{ order, trade?, touchedAssets: string[] }` に広げ、`SessionStore` が `order` / `trade` / `assets` の 3 種のイベントを emit する。REST 経路も control 経路も同じ遷移関数を通るため、発火漏れが無い
 - **障害注入の余地**: emit と WebSocket 送信の間に `DeliveryPolicy` インタフェース（`deliver(events) => events`）を 1 つ挟む。プラン A では恒等写像。プラン B で重複・順序入替・欠落を差し込む
-- **テスト**: `ws` クライアントで接続し、`/_control/` で約定させて `spot_order`（FULLY_FILLED）と `spot_trade` が届くことを確認
+- **テスト**: `ws` クライアントで接続し、発注 → `/_control/` で約定 → 取消の流れで `spot_order_new` / `spot_order`（FULLY_FILLED と CANCELED_UNFILLED）/ `spot_trade` / `asset_update`（camelCase キー）の 4 種すべての形を検証する
 
 ---
 
