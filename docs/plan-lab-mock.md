@@ -11,7 +11,7 @@
 | 論点 | 結論 |
 |---|---|
 | R1 と R3 を一体で扱うか | **一体で扱う。** 注文レコード（`OrderRecord`）を単一の真実にする R3 の構造変更を先に入れ、その上に R1 の 2 エンドポイントを「レコードを整形して返すだけ」として実装する。R1 単体の小手先対応（`history` や取消済みリストから逆引き）は、`ordered_at` の誤り・`executed_amount` の欠落・取消済み注文の消失を引きずるため採らない |
-| 着手順 | Phase 0（対応表の骨子・公式 doc 確認）→ Phase 1（R3 状態モデル）→ Phase 2（R1 照会 API）→ Phase 3（R2 control API）→ Phase 4（README 免責・対応表確定・v0.1.0 タグ）→ Phase 5（R4 private stream、11 月） |
+| 着手順 | Phase 0（対応表の骨子・公式 doc 確認・CI 導入）→ Phase 1（R3 状態モデル）→ Phase 2（R1 照会 API）→ Phase 3（R2 control API）→ Phase 4（README 免責・対応表確定・v0.1.0 タグ）→ Phase 5（R4 private stream、11 月） |
 | 期日の目安 | 提案書の立ち上げフェーズが終わる **10/23 までに v0.1.0（R1 + R2 + R3 の 3 値到達分）を Nyx に渡す**。週割りは 10/10 を狙って組み、2 週間の遅れを許容する。実装フェーズ最初の 1 週間（タスク 3.2）は現行モックでも成立する |
 | 提案書との整合 | DCL のリコンサイルは `orders_info` を使うので R1 は一括照会が主。数量・価格はペアの桁数で固定小数に整形する（DCL は円・satoshi の整数で扱う）。経路 MCP → DCL → モックには bitbank-lab-mcp 側の接続先上書きが要る（本リポジトリ外の前提条件） |
 | 既存テストへの影響 | 45 件中、書き換えが必要なのは約 20 件（engine/match 11 件のうち 8 件、engine/state 13 件のうち 5 件、routes 15 件のうち 7 件）。**削除するテストは無い。** アサーション対象を `state.openOrders` / `state.history` からビュー関数へ差し替えるのが主 |
@@ -104,8 +104,21 @@ private-stream.md より（R4 に直結）:
 
 ## 2. 全体の進め方と順序
 
+### 2.1 Phase 0 に含める基盤作業: GitHub Actions
+
+現状 `.github/` が無く、テストと型検査はローカルの手動実行に頼っている。Phase 1 で既存テストの約半分を書き換えるため、その前に PR ごとの自動実行を入れる。姉妹リポジトリ bitbank-lab-cli の `.github/workflows/ci.yml` と `security.yml` をほぼそのまま流用する。
+
+| ワークフロー | 内容 | 判断 |
+|---|---|---|
+| `ci.yml` | PR と main への push で `npm ci` → `tsc --noEmit` → `vitest run` | 必須。Phase 1 より前に入れる |
+| `security.yml`（`npm audit --audit-level=high`） | 依存の脆弱性を high 以上でブロック。週 1 の定期実行付き | 入れる。依存が 3 つしか無いので落ちる要素が少なく、コストも低い |
+| `security.yml`（gitleaks） | git 全履歴の秘密情報スキャン。バージョンと SHA256 を固定 | 入れる。このモックは API キーを扱わないが、移管先の bitbankinc では CLI と MCP が既にやっており、揃えておく |
+| lint（biome） | 整形と静的解析 | 任意。入れるなら Phase 0 で `biome.json` を足し、`ci.yml` に `biome check src/ tests/` を加える |
+
+CD（自動デプロイ・npm 公開・GitHub Release）は作らない。Nyx への引き渡しは git のタグで足りる。`.nvmrc` が無いので `ci.yml` の `node-version-file` は `package.json` の `engines`（Node 20 以上）に合わせて `node-version: 20` を直書きするか、`.nvmrc` を追加する。
+
 ```
-Phase 0  対応表の骨子 / 公式 doc との差分洗い出し        9/15 週  （1〜2 日）
+Phase 0  対応表の骨子 / 公式 doc との差分洗い出し / CI    9/15 週  （1〜2 日）
 Phase 1  R3: 注文レコード中心の状態モデル（v3）         9/15〜9/26
 Phase 2  R1: GET order / POST orders_info + 周辺整合   9/22〜10/3   （Phase 1 と一部並行）
 Phase 3  R2: /_control/ 名前空間                       9/29〜10/8
@@ -364,7 +377,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 | 週 | 作業 | 完了条件 |
 |---|---|---|
-| 9/15〜9/19 | Phase 0: `docs/fidelity.md` 骨子、PR テンプレート。Phase 1 開始: ヘルパ・状態モデル v3・遷移関数・不変量テスト | engine テスト緑 |
+| 9/15〜9/19 | Phase 0: `docs/fidelity.md` 骨子、PR テンプレート、GitHub Actions（CI / Security Audit）。Phase 1 開始: ヘルパ・状態モデル v3・遷移関数・不変量テスト | engine テスト緑 |
 | 9/22〜9/26 | Phase 1 完了: ルート追随、v2→v3 移行。Phase 2 開始: `GET order` / `orders_info` | 45 件 + 新規が緑。`GET order` で約定済み・取消済みが引ける |
 | 9/29〜10/3 | Phase 2 完了: エラーコード是正、`canceled_at`、`active_orders` / `trade_history` パラメータ。Phase 3 開始: `/_control/` と `FILL_MODE=manual` | シナリオテスト `plan-a.test.ts` 緑 |
 | 10/6〜10/10 | Phase 3 完了、README 免責・棲み分け、対応表凍結、**v0.1.0 タグ**、Nyx へ引き渡し（`examples/scenario-plan-a.sh` 付き） | Nyx が curl だけで「発注 → 約定 → 残枠減」を再現できる |
