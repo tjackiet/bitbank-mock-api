@@ -80,6 +80,27 @@ describe("GET /v1/user/assets", () => {
       );
     }
   });
+
+  it("keeps fixed-decimal form for balances whose scaled units exceed 2^53", async () => {
+    // /reset は有限・非負なら上限なく残高を受ける。桁を掛けた値を number で
+    // 持つと 1e21 で指数表記に落ち、"1.e+21" のような壊れた金額になっていた。
+    const state = buildState({ balances: { jpy: 1e17, btc: 12_345_678.9 } });
+    const { fastify } = await build(state);
+    const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      data: { assets: { asset: string; free_amount: string; onhand_amount: string }[] };
+    };
+    const jpy = body.data.assets.find((a) => a.asset === "jpy");
+    const btc = body.data.assets.find((a) => a.asset === "btc");
+    expect(jpy?.onhand_amount).toBe("100000000000000000.0000");
+    expect(jpy?.free_amount).toBe("100000000000000000.0000");
+    expect(btc?.onhand_amount).toBe("12345678.90000000");
+    for (const a of body.data.assets) {
+      expect(a.onhand_amount).not.toMatch(/[eE]/);
+      expect(a.free_amount).not.toMatch(/[eE]/);
+    }
+  });
 });
 
 /** 固定桁の 10 進文字列を最小単位の BigInt にする。倍精度を経由しない。 */

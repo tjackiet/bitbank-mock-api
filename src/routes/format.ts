@@ -117,6 +117,10 @@ export type AssetShape = {
   stop_withdrawal: boolean;
 };
 
+/**
+ * `GET /v1/user/assets` の資産一覧を組み立てる。既知資産に state の残高と
+ * 拘束額のキーを足した集合を返し、金額は宣言する `amount_precision` の桁で揃える。
+ */
 export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_FEE_RATE): {
   assets: AssetShape[];
 } {
@@ -129,18 +133,13 @@ export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_
   const assets: AssetShape[] = [];
   for (const a of assetSet) {
     const digits = assetPrecision(a);
-    const factor = 10 ** digits;
-    // 最小単位の整数に落としてから差を取る。3 つを個別に丸めると
-    // free == onhand - locked が文字列として崩れうる。
-    const onhandUnits = Math.round((state.balances[a] ?? 0) * factor);
-    const lockedUnits = Math.round((locked[a] ?? 0) * factor);
-    const freeUnits = onhandUnits - lockedUnits;
+    const amounts = assetAmounts(state.balances[a] ?? 0, locked[a] ?? 0, digits);
     assets.push({
       asset: a,
-      free_amount: formatUnits(freeUnits, digits),
+      free_amount: amounts.free,
       amount_precision: digits,
-      onhand_amount: formatUnits(onhandUnits, digits),
-      locked_amount: formatUnits(lockedUnits, digits),
+      onhand_amount: amounts.onhand,
+      locked_amount: amounts.locked,
       withdrawal_fee: "0",
       stop_deposit: false,
       stop_withdrawal: false,
@@ -155,12 +154,61 @@ function assetPrecision(asset: string): number {
 }
 
 /**
- * 最小単位の整数を固定桁の 10 進文字列にする。倍精度の除算を挟まないので
- * 塵が戻らない。負値はそのまま負のまま出す（不変量 6 の違反を表示で隠さない）。
+ * 残高と拘束額を桁つきの 10 進文字列にする。最小単位の整数へ丸めてから free を
+ * 差で求めるので、3 値の間で free == onhand - locked が文字列として成り立つ。
+ * 非有限な値（壊れた state）は丸めずそのまま出し、異常を隠さない。
  */
-function formatUnits(units: number, digits: number): string {
-  const sign = units < 0 ? "-" : "";
-  const abs = Math.abs(units).toString();
+function assetAmounts(
+  onhand: number,
+  locked: number,
+  digits: number,
+): { free: string; onhand: string; locked: string } {
+  if (!Number.isFinite(onhand) || !Number.isFinite(locked)) {
+    return { free: String(onhand - locked), onhand: String(onhand), locked: String(locked) };
+  }
+  const onhandUnits = toMinimumUnits(onhand, digits);
+  const lockedUnits = toMinimumUnits(locked, digits);
+  return {
+    free: formatUnits(onhandUnits - lockedUnits, digits),
+    onhand: formatUnits(onhandUnits, digits),
+    locked: formatUnits(lockedUnits, digits),
+  };
+}
+
+/** `Number#toString` の 10 進表記を分解する（符号・整数部・小数部・指数部）。 */
+const DECIMAL_PARTS = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
+
+/**
+ * 有限の number を最小単位の整数へ四捨五入する。倍精度の乗算を挟まず
+ * 10 進表記を bigint で桁合わせするので、`Number.MAX_SAFE_INTEGER` を超える
+ * 桁でも指数表記に落ちない。端数は `Math.round` と同じく +∞ 方向へ寄せる。
+ */
+function toMinimumUnits(n: number, digits: number): bigint {
+  const parts = DECIMAL_PARTS.exec(n.toString());
+  if (!parts) return 0n;
+  const [, sign, int, frac = "", exp = "0"] = parts;
+  const mantissa = BigInt(int + frac);
+  // n = ±mantissa × 10^(exp - frac.length) なので、最小単位への換算はこの指数。
+  const shift = Number(exp) - frac.length + digits;
+  if (shift >= 0) {
+    const scaled = mantissa * 10n ** BigInt(shift);
+    return sign === "-" ? -scaled : scaled;
+  }
+  const divisor = 10n ** BigInt(-shift);
+  const quotient = mantissa / divisor;
+  const remainder = mantissa % divisor;
+  if (sign === "-") return remainder * 2n > divisor ? -(quotient + 1n) : -quotient;
+  return remainder * 2n >= divisor ? quotient + 1n : quotient;
+}
+
+/**
+ * 最小単位の整数を固定桁の 10 進文字列にする。bigint なので指数表記にならず、
+ * 倍精度の除算も挟まないので塵が戻らない。負値はそのまま負のまま出す
+ * （不変量 6 の違反を表示で隠さない）。
+ */
+function formatUnits(units: bigint, digits: number): string {
+  const sign = units < 0n ? "-" : "";
+  const abs = (units < 0n ? -units : units).toString();
   if (digits === 0) return sign + abs;
   const padded = abs.padStart(digits + 1, "0");
   const cut = padded.length - digits;
