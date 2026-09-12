@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
 import { buildOrder, buildState, buildTrade } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
+import {
+  OFFICIAL_CANCEL_ORDER_STATUSES,
+  UNIMPLEMENTED_ORDER_FIELDS,
+  orderShape,
+} from "./official-fields.ts";
 
 describe("POST /v1/user/spot/cancel_order", () => {
   const build = setupBuildTestServer();
@@ -160,5 +165,53 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(20003);
     expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+  });
+});
+
+describe("cancel official field set", () => {
+  const build = setupBuildTestServer();
+
+  it("POST /v1/user/spot/cancel_order returns exactly the fields the official cancel response defines", async () => {
+    // 公式の Cancel order の応答表だけが canceled_at を持つ。取消は必ず起きるので常に出る。
+    const { fastify } = await build(
+      buildState({ balances: { jpy: 10_000_000 }, orders: [buildOrder({ id: "123" })] }),
+    );
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "btc_jpy", order_id: 123 },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { data: Record<string, unknown> };
+    const s = orderShape(body.data, { type: "limit", canceled: true });
+    expect(s.actual).toEqual(s.expected);
+    expect(OFFICIAL_CANCEL_ORDER_STATUSES).toContain(body.data.status);
+    for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
+  });
+
+  it("POST /v1/user/spot/cancel_orders wraps the same objects under `orders`", async () => {
+    const { fastify } = await build(
+      buildState({
+        balances: { jpy: 10_000_000 },
+        orders: [buildOrder({ id: "1" }), buildOrder({ id: "2", price: 5_100_000 })],
+      }),
+    );
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: [1, 2] },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { data: Record<string, unknown> };
+    // 公式の応答は data 直下に orders だけを持つ。
+    expect(Object.keys(body.data)).toEqual(["orders"]);
+    const orders = body.data.orders as Record<string, unknown>[];
+    expect(orders).toHaveLength(2);
+    for (const o of orders) {
+      const s = orderShape(o, { type: "limit", canceled: true });
+      expect(s.actual).toEqual(s.expected);
+      expect(OFFICIAL_CANCEL_ORDER_STATUSES).toContain(o.status);
+      for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(o).not.toHaveProperty(f);
+    }
   });
 });

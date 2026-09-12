@@ -22,6 +22,13 @@ const JPY = "jpy";
 /** 代用掛け目。Plan A は信用取引を実装しないので 0 固定。 */
 const COLLATERAL_RATIO = "0";
 
+/**
+ * 注文オブジェクト。公式の「Fetch order information」「Create new order」
+ * 「Cancel order」「Fetch multiple orders」「Fetch active orders」は同一の形を返す
+ * （公式は後者 2 つを "list of object same as ..." と定義する）。`canceled_at` を
+ * 応答表に持つのは「Cancel order」だけで、他の節の表には無い。
+ * 未実装のため常に出さないフィールド: position_side / triggered_at / trigger_price。
+ */
 export type OrderShape = {
   order_id: number | string;
   pair: string;
@@ -60,26 +67,18 @@ export function formatOrder(o: OrderRecord): OrderShape {
     expire_at: null,
     status: o.status,
   };
+  // 公式は price と post_only の出現条件を別に定める。price は type = limit / stop_limit、
+  // post_only は type = limit。stop_limit は Plan A で未実装なので limit だけを見る。
   if (o.type === "limit" && o.price != null) {
     shape.price = formatPrice(o.pair, o.price);
+  }
+  if (o.type === "limit") {
     shape.post_only = false;
   }
   if (o.canceledAt != null) {
     shape.canceled_at = Date.parse(o.canceledAt);
   }
   return shape;
-}
-
-export function formatOpenOrder(o: OrderRecord): OrderShape {
-  return formatOrder(o);
-}
-
-export function formatHistoryAsOrder(o: OrderRecord): OrderShape {
-  return formatOrder(o);
-}
-
-export function formatCanceledOrder(o: OrderRecord): OrderShape {
-  return formatOrder(o);
 }
 
 export type TradeShape = {
@@ -93,10 +92,16 @@ export type TradeShape = {
   maker_taker: "maker" | "taker";
   fee_amount_base: string;
   fee_amount_quote: string;
+  fee_occurred_amount_quote: string;
   executed_at: number;
 };
 
+/**
+ * 約定オブジェクト。公式の「Fetch trade history」の応答表に対応する。
+ * 未実装のため常に出さないフィールド: position_side / profit_loss / interest。
+ */
 export function formatTrade(t: TradeRecord): TradeShape {
+  const quote = formatFixedQuote(t.feeQuote);
   return {
     trade_id: toIdOut(t.tradeId),
     order_id: toIdOut(t.orderId),
@@ -107,7 +112,9 @@ export function formatTrade(t: TradeRecord): TradeShape {
     price: formatPrice(t.pair, t.price),
     maker_taker: t.makerTaker,
     fee_amount_base: "0",
-    fee_amount_quote: formatFixedQuote(t.feeQuote),
+    fee_amount_quote: quote,
+    // 公式は「現物取引では fee_amount_quote と同値」と明記する。
+    fee_occurred_amount_quote: quote,
     executed_at: Date.parse(t.executedAt),
   };
 }

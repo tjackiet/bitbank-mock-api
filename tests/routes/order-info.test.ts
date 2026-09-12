@@ -4,6 +4,12 @@ import { priceUnit } from "../../src/engine/precision.ts";
 import { fillOrder } from "../../src/engine/transitions.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
+import {
+  IMPLEMENTED_ORDER_TYPES,
+  OFFICIAL_FETCH_ORDER_STATUSES,
+  UNIMPLEMENTED_ORDER_FIELDS,
+  orderShape,
+} from "./official-fields.ts";
 
 type OrderBody = {
   order_id: number;
@@ -274,5 +280,116 @@ describe("average_price rounding", () => {
 
   it("does not divide when executed amount is 0", () => {
     expect(formatAveragePrice(buildOrder())).toBe("0");
+  });
+});
+
+describe("official field set", () => {
+  const build = setupBuildTestServer();
+
+  it("GET /v1/user/spot/order returns exactly the fields the official order response defines", async () => {
+    // 未約定の指値: price と post_only が出る条件（type = limit）を満たす。
+    const { fastify } = await build(buildState({ orders: [buildOrder({ id: "1" })] }));
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/order?pair=btc_jpy&order_id=1",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Envelope<Record<string, unknown>>;
+    const s = orderShape(body.data, { type: "limit", canceled: false });
+    expect(s.actual).toEqual(s.expected);
+    expect(OFFICIAL_FETCH_ORDER_STATUSES).toContain(body.data.status);
+    expect(IMPLEMENTED_ORDER_TYPES).toContain(body.data.type);
+    for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
+  });
+
+  it("GET /v1/user/spot/order omits price and post_only for a market order", async () => {
+    // 公式の条件は type = limit。成行では両方とも出ない。
+    const now = Date.now();
+    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000 } }), {
+      btc_jpy: [candle(now - 60_000, 4_990_000, 5_010_000, 4_980_000, 5_000_000)],
+    });
+    const placed = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", side: "buy", type: "market" },
+    });
+    const placedBody = placed.json() as Envelope<Record<string, unknown>>;
+    const res = await fastify.inject({
+      method: "GET",
+      url: `/v1/user/spot/order?pair=btc_jpy&order_id=${placedBody.data.order_id}`,
+    });
+    const body = res.json() as Envelope<Record<string, unknown>>;
+    const s = orderShape(body.data, { type: "market", canceled: false });
+    expect(s.actual).toEqual(s.expected);
+  });
+
+  it("GET /v1/user/spot/order adds canceled_at only for a canceled order", async () => {
+    const { fastify } = await build(
+      buildState({
+        orders: [
+          buildOrder({
+            id: "1",
+            status: "CANCELED_UNFILLED",
+            canceledAt: "2026-01-01T00:01:00.000Z",
+          }),
+        ],
+      }),
+    );
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/order?pair=btc_jpy&order_id=1",
+    });
+    const body = res.json() as Envelope<Record<string, unknown>>;
+    const s = orderShape(body.data, { type: "limit", canceled: true });
+    expect(s.actual).toEqual(s.expected);
+  });
+
+  it("POST /v1/user/spot/orders_info wraps the same objects under `orders`", async () => {
+    const { fastify } = await build(
+      buildState({
+        orders: [
+          buildOrder({ id: "1" }),
+          buildOrder({
+            id: "2",
+            status: "CANCELED_UNFILLED",
+            canceledAt: "2026-01-01T00:01:00.000Z",
+          }),
+        ],
+      }),
+    );
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/orders_info",
+      payload: { pair: "btc_jpy", order_ids: [1, 2] },
+    });
+    const body = res.json() as Envelope<Record<string, unknown>>;
+    // 公式の応答は data 直下に orders だけを持つ。
+    expect(Object.keys(body.data)).toEqual(["orders"]);
+    const orders = body.data.orders as Record<string, unknown>[];
+    expect(orders).toHaveLength(2);
+    const open = orderShape(orders[0]!, { type: "limit", canceled: false });
+    expect(open.actual).toEqual(open.expected);
+    const canceled = orderShape(orders[1]!, { type: "limit", canceled: true });
+    expect(canceled.actual).toEqual(canceled.expected);
+  });
+});
+
+describe("post_only の出現条件", () => {
+  const build = setupBuildTestServer();
+
+  it("keeps post_only for a limit order that has no price", async () => {
+    // 公式は price を「type = limit または stop_limit のみ」、post_only を
+    // 「type = limit のみ」と別条件で定める。price 欠落は API 経由では作れないが、
+    // 永続化した state から復元しうるので、2 つの条件が独立であることを固定する。
+    const { fastify } = await build(
+      buildState({ orders: [buildOrder({ id: "1", type: "limit", price: null })] }),
+    );
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/order?pair=btc_jpy&order_id=1",
+    });
+    const body = res.json() as Envelope<Record<string, unknown>>;
+    expect(body.data).not.toHaveProperty("price");
+    expect(body.data.post_only).toBe(false);
   });
 });
