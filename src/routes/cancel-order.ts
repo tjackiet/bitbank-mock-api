@@ -3,7 +3,7 @@ import { isActive, type OrderRecord } from "../engine/state.ts";
 import { cancelOrder } from "../engine/transitions.ts";
 import { CancelOrderRequestSchema, CancelOrdersRequestSchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
-import { formatCanceledOrder } from "./format.ts";
+import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
 
 function terminalCancelCode(order: OrderRecord): number | null {
@@ -43,7 +43,7 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     if (!r.success) return err(ErrorCode.ORDER_NOT_FOUND);
     store.replace(r.data.state);
     await store.persist();
-    return ok(formatCanceledOrder(r.data.order));
+    return ok(formatOrder(r.data.order));
   });
 
   fastify.post("/v1/user/spot/cancel_orders", async (request, reply) => {
@@ -87,6 +87,6 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     if (canceled.length === 0) return err(ErrorCode.ORDER_NOT_FOUND);
     store.replace(next);
     await store.persist();
-    return ok({ orders: canceled.map(formatCanceledOrder) });
+    return ok({ orders: canceled.map(formatOrder) });
   });
 };

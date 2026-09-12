@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
+import {
+  OFFICIAL_ORDER_STATUSES,
+  UNIMPLEMENTED_ORDER_FIELDS,
+  orderShape,
+} from "./official-fields.ts";
 
 describe("POST /v1/user/spot/order", () => {
   const build = setupBuildTestServer();
@@ -176,5 +181,40 @@ describe("POST /v1/user/spot/order", () => {
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(60004);
+  });
+});
+
+describe("POST /v1/user/spot/order official field set", () => {
+  const build = setupBuildTestServer();
+
+  it("returns exactly the fields the official create-order response defines (limit)", async () => {
+    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { data: Record<string, unknown> };
+    const s = orderShape(body.data, { type: "limit", canceled: false });
+    expect(s.actual).toEqual(s.expected);
+    expect(OFFICIAL_ORDER_STATUSES).toContain(body.data.status);
+    for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
+  });
+
+  it("returns exactly the fields the official create-order response defines (market)", async () => {
+    const now = Date.now();
+    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000 } }), {
+      btc_jpy: [candle(now - 60_000, 4_990_000, 5_010_000, 4_980_000, 5_000_000)],
+    });
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", side: "buy", type: "market" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { data: Record<string, unknown> };
+    const s = orderShape(body.data, { type: "market", canceled: false });
+    expect(s.actual).toEqual(s.expected);
   });
 });

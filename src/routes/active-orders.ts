@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { activeOrders, parseNumericId, type OrderRecord } from "../engine/state.ts";
 import { ActiveOrdersQuerySchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
-import { formatOpenOrder } from "./format.ts";
+import { formatOrder } from "./format.ts";
 
 function filterActiveOrders(
   orders: OrderRecord[],
@@ -48,6 +48,6 @@ export const activeOrdersRoutes: FastifyPluginAsync = async (fastify) => {
     }
     await fastify.store.tick();
     const filtered = filterActiveOrders(activeOrders(fastify.store.state()), parsed.data);
-    return ok({ orders: filtered.map(formatOpenOrder) });
+    return ok({ orders: filtered.map(formatOrder) });
   });
 };
