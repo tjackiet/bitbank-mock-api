@@ -12,6 +12,10 @@ import { formatAmount, formatPrice } from "../engine/precision.ts";
 
 const KNOWN_ASSETS = ["jpy", "btc", "eth", "xrp", "ltc", "bcc", "mona", "xlm", "qtum", "bat"];
 
+/** 資産残高の桁。jpy は 4、他は 8。応答の amount_precision と同一の値を使う。 */
+const ASSET_AMOUNT_PRECISION: Record<string, number> = { jpy: 4 };
+const DEFAULT_ASSET_AMOUNT_PRECISION = 8;
+
 export type OrderShape = {
   order_id: number | string;
   pair: string;
@@ -124,21 +128,43 @@ export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_
   ]);
   const assets: AssetShape[] = [];
   for (const a of assetSet) {
-    const total = state.balances[a] ?? 0;
-    const l = locked[a] ?? 0;
-    const free = total - l;
+    const digits = assetPrecision(a);
+    const factor = 10 ** digits;
+    // 最小単位の整数に落としてから差を取る。3 つを個別に丸めると
+    // free == onhand - locked が文字列として崩れうる。
+    const onhandUnits = Math.round((state.balances[a] ?? 0) * factor);
+    const lockedUnits = Math.round((locked[a] ?? 0) * factor);
+    const freeUnits = onhandUnits - lockedUnits;
     assets.push({
       asset: a,
-      free_amount: String(free),
-      amount_precision: a === "jpy" ? 4 : 8,
-      onhand_amount: String(total),
-      locked_amount: String(l),
+      free_amount: formatUnits(freeUnits, digits),
+      amount_precision: digits,
+      onhand_amount: formatUnits(onhandUnits, digits),
+      locked_amount: formatUnits(lockedUnits, digits),
       withdrawal_fee: "0",
       stop_deposit: false,
       stop_withdrawal: false,
     });
   }
   return { assets };
+}
+
+/** 応答で宣言する amount_precision。丸めにも同じ値を使う。 */
+function assetPrecision(asset: string): number {
+  return ASSET_AMOUNT_PRECISION[asset] ?? DEFAULT_ASSET_AMOUNT_PRECISION;
+}
+
+/**
+ * 最小単位の整数を固定桁の 10 進文字列にする。倍精度の除算を挟まないので
+ * 塵が戻らない。負値はそのまま負のまま出す（不変量 6 の違反を表示で隠さない）。
+ */
+function formatUnits(units: number, digits: number): string {
+  const sign = units < 0 ? "-" : "";
+  const abs = Math.abs(units).toString();
+  if (digits === 0) return sign + abs;
+  const padded = abs.padStart(digits + 1, "0");
+  const cut = padded.length - digits;
+  return `${sign}${padded.slice(0, cut)}.${padded.slice(cut)}`;
 }
 
 function formatFixedQuote(n: number): string {
