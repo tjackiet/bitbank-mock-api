@@ -149,9 +149,14 @@ export function migrateToLatest(parsed: z.infer<typeof PaperStateAnySchema>): Pa
   return migrateToV3(parsed);
 }
 
-export function defaultStatePath(sessionId: string): string {
-  if (process.env.BITBANK_MOCK_STATE_PATH) return process.env.BITBANK_MOCK_STATE_PATH;
-  const root = process.env.BITBANK_MOCK_HOME ?? join(homedir(), ".bitbank-mock");
+// env を引数で受け取るのは src/server/config.ts の env 読み取りに合わせるため。
+// 既定は process.env なので呼び出し側は変えなくてよい。
+export function defaultStatePath(
+  sessionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (env.BITBANK_MOCK_STATE_PATH) return env.BITBANK_MOCK_STATE_PATH;
+  const root = env.BITBANK_MOCK_HOME ?? join(homedir(), ".bitbank-mock");
   return join(root, "sessions", sessionId, "state.json");
 }
 
@@ -175,17 +180,24 @@ export async function saveState(path: string, state: PaperState): Promise<Result
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
   try {
     await mkdir(dirname(path), { recursive: true });
-    const fh = await open(tmp, "w", 0o600);
+    // "wx" は既存ファイルを開かない。一時ファイル名は pid + 乱数なので通常は衝突せず、
+    // この排他は置かれていたファイル（シンボリックリンクを含む）の上書きだけを防ぐ。
+    const fh = await open(tmp, "wx", 0o600);
     try {
-      await fh.writeFile(data);
-      await fh.sync();
-    } finally {
-      await fh.close();
+      try {
+        await fh.writeFile(data);
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      await rename(tmp, path);
+    } catch (e) {
+      // 自分で作った一時ファイルだけ片付ける。open に失敗した時点では消さない。
+      await unlink(tmp).catch(() => {});
+      throw e;
     }
-    await rename(tmp, path);
     return { success: true, data: true };
   } catch (e) {
-    await unlink(tmp).catch(() => {});
     const msg = e instanceof Error ? e.message : String(e);
     return { success: false, error: `failed to write paper state: ${msg}` };
   }

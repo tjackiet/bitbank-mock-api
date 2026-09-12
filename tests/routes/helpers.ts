@@ -5,6 +5,7 @@ import { buildState } from "../engine/helpers.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
 import type { PaperState } from "../../src/engine/state.ts";
+import type { FillMode } from "../../src/server/config.ts";
 
 export function stubFetchCandles(byPair: Record<string, Candle[]>): FetchCandles {
   return async (pair, fromMs, toMs) => {
@@ -13,16 +14,28 @@ export function stubFetchCandles(byPair: Record<string, Candle[]>): FetchCandles
   };
 }
 
+// 既定は path: null（ファイルを書かない）。永続化を見るテストだけ実パスを渡す。
+export type TestServerOptions = {
+  path?: string | null;
+  fillMode?: FillMode;
+  controlEnabled?: boolean;
+};
+
 export async function buildTestServer(
   state: PaperState = buildState(),
   candlesByPair: Record<string, Candle[]> = {},
+  opts: TestServerOptions = {},
 ) {
   const store = new SessionStore(state, {
-    path: null,
-    fillMode: "market",
+    path: opts.path ?? null,
+    fillMode: opts.fillMode ?? "market",
     fetchCandles: stubFetchCandles(candlesByPair),
   });
-  const fastify = await buildServer({ store, logger: false });
+  const fastify = await buildServer({
+    store,
+    logger: false,
+    controlEnabled: opts.controlEnabled ?? false,
+  });
   const close = async () => {
     await fastify.close();
   };
@@ -38,8 +51,9 @@ export function setupBuildTestServer() {
   return async (
     state: PaperState = buildState(),
     candlesByPair: Record<string, Candle[]> = {},
+    opts: TestServerOptions = {},
   ) => {
-    const r = await buildTestServer(state, candlesByPair);
+    const r = await buildTestServer(state, candlesByPair, opts);
     cleanups.push(r.close);
     return r;
   };
