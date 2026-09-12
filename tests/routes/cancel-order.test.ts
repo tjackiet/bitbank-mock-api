@@ -3,7 +3,7 @@ import { activeOrders } from "../../src/engine/state.ts";
 import { buildOrder, buildState, buildTrade } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
-  OFFICIAL_ORDER_STATUSES,
+  OFFICIAL_CANCEL_ORDER_STATUSES,
   UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
 } from "./official-fields.ts";
@@ -185,7 +185,7 @@ describe("cancel official field set", () => {
     const body = res.json() as { data: Record<string, unknown> };
     const s = orderShape(body.data, { type: "limit", canceled: true });
     expect(s.actual).toEqual(s.expected);
-    expect(OFFICIAL_ORDER_STATUSES).toContain(body.data.status);
+    expect(OFFICIAL_CANCEL_ORDER_STATUSES).toContain(body.data.status);
     for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
   });
 
@@ -210,6 +210,8 @@ describe("cancel official field set", () => {
     for (const o of orders) {
       const s = orderShape(o, { type: "limit", canceled: true });
       expect(s.actual).toEqual(s.expected);
+      expect(OFFICIAL_CANCEL_ORDER_STATUSES).toContain(o.status);
+      for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(o).not.toHaveProperty(f);
     }
   });
 });

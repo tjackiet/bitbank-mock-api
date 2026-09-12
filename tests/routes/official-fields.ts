@@ -86,10 +86,18 @@ export const OFFICIAL_ORDER_CONDITIONAL_FIELDS: Record<string, FieldCheck> = {
 export const UNIMPLEMENTED_ORDER_FIELDS = ["position_side", "triggered_at", "trigger_price"];
 
 /**
- * `Fetch order information` の status enum（7 値）。`Create new order` の表は
- * `REJECTED` を含まない 6 値だが、集合として前者に含まれる。
+ * status enum は節ごとに集合が違うので、節ごとに別の定数として写す。
+ * 広い方（7 値）で全経路を検査すると、`REJECTED` を返してはいけない経路で
+ * `REJECTED` が素通りする。
+ *
+ * `Fetch order information`（`Fetch multiple orders` / `Fetch active orders` も
+ * この節を参照する）。`REJECTED` を含む 7 値。
+ *
+ * ```
+ * status | string | status enum: `INACTIVE`, `UNFILLED`, `PARTIALLY_FILLED`, `FULLY_FILLED`, `CANCELED_UNFILLED`, `CANCELED_PARTIALLY_FILLED`, `REJECTED`
+ * ```
  */
-export const OFFICIAL_ORDER_STATUSES = [
+export const OFFICIAL_FETCH_ORDER_STATUSES = [
   "INACTIVE",
   "UNFILLED",
   "PARTIALLY_FILLED",
@@ -97,6 +105,40 @@ export const OFFICIAL_ORDER_STATUSES = [
   "CANCELED_UNFILLED",
   "CANCELED_PARTIALLY_FILLED",
   "REJECTED",
+];
+
+/**
+ * `Create new order`。`REJECTED` を含まない 6 値。
+ *
+ * ```
+ * status | string | status enum: `INACTIVE`, `UNFILLED`, `PARTIALLY_FILLED`, `FULLY_FILLED`, `CANCELED_UNFILLED`, `CANCELED_PARTIALLY_FILLED`
+ * ```
+ */
+export const OFFICIAL_CREATE_ORDER_STATUSES = [
+  "INACTIVE",
+  "UNFILLED",
+  "PARTIALLY_FILLED",
+  "FULLY_FILLED",
+  "CANCELED_UNFILLED",
+  "CANCELED_PARTIALLY_FILLED",
+];
+
+/**
+ * `Cancel order`（`Cancel multiple orders` もこの節を参照する）。`REJECTED` を
+ * 含まない 6 値。`Create new order` と同じ並びだが、別の節の別の表なので
+ * 独立に写す（一方だけが変わりうる）。
+ *
+ * ```
+ * status | string | status enum: `INACTIVE`, `UNFILLED`, `PARTIALLY_FILLED`, `FULLY_FILLED`, `CANCELED_UNFILLED`, `CANCELED_PARTIALLY_FILLED`
+ * ```
+ */
+export const OFFICIAL_CANCEL_ORDER_STATUSES = [
+  "INACTIVE",
+  "UNFILLED",
+  "PARTIALLY_FILLED",
+  "FULLY_FILLED",
+  "CANCELED_UNFILLED",
+  "CANCELED_PARTIALLY_FILLED",
 ];
 
 /**
@@ -167,22 +209,31 @@ function shapeOf(actual: Record<string, unknown>, spec: Record<string, FieldChec
   return { keys: Object.keys(actual).sort(), badTypes: badTypes.sort() };
 }
 
+/** 注文の比較結果。キー集合と型に加えて `type` の値そのものを持つ。 */
+type OrderShapeResult = ShapeResult & { type: unknown };
+
 /**
  * 注文オブジェクトの期待形。`type` と「取消済みか」から、公式の条件どおりに
  * 出るはずのキー集合を組み立てる。
+ *
+ * `type` の値も比較対象に入れる。キー集合だけを見ると、応答が指値・成行の
+ * 取り違えを起こしていても、キーの数が合っていれば通ってしまうため。
  */
 export function orderShape(
   actual: Record<string, unknown>,
   expected: { type: "limit" | "market"; canceled: boolean },
-): { actual: ShapeResult; expected: ShapeResult } {
+): { actual: OrderShapeResult; expected: OrderShapeResult } {
   const keys = Object.keys(OFFICIAL_ORDER_FIELDS);
   // price: type = limit のみ（stop_limit は未実装）。post_only: type = limit のみ。
   if (expected.type === "limit") keys.push("price", "post_only");
   // canceled_at: 公式の応答表に持つのは Cancel order だけ。モックは取消時のみ出す。
   if (expected.canceled) keys.push("canceled_at");
   return {
-    actual: shapeOf(actual, { ...OFFICIAL_ORDER_FIELDS, ...OFFICIAL_ORDER_CONDITIONAL_FIELDS }),
-    expected: { keys: keys.sort(), badTypes: [] },
+    actual: {
+      type: actual.type,
+      ...shapeOf(actual, { ...OFFICIAL_ORDER_FIELDS, ...OFFICIAL_ORDER_CONDITIONAL_FIELDS }),
+    },
+    expected: { type: expected.type, keys: keys.sort(), badTypes: [] },
   };
 }
 

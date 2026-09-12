@@ -3,7 +3,7 @@ import { activeOrders } from "../../src/engine/state.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
-  OFFICIAL_ORDER_STATUSES,
+  OFFICIAL_CREATE_ORDER_STATUSES,
   UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
 } from "./official-fields.ts";
@@ -198,7 +198,7 @@ describe("POST /v1/user/spot/order official field set", () => {
     const body = res.json() as { data: Record<string, unknown> };
     const s = orderShape(body.data, { type: "limit", canceled: false });
     expect(s.actual).toEqual(s.expected);
-    expect(OFFICIAL_ORDER_STATUSES).toContain(body.data.status);
+    expect(OFFICIAL_CREATE_ORDER_STATUSES).toContain(body.data.status);
     for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
   });
 
@@ -216,5 +216,7 @@ describe("POST /v1/user/spot/order official field set", () => {
     const body = res.json() as { data: Record<string, unknown> };
     const s = orderShape(body.data, { type: "market", canceled: false });
     expect(s.actual).toEqual(s.expected);
+    expect(OFFICIAL_CREATE_ORDER_STATUSES).toContain(body.data.status);
+    for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
   });
 });

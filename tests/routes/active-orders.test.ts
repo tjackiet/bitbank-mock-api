@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildOrder, buildState } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
-  OFFICIAL_ORDER_STATUSES,
+  OFFICIAL_FETCH_ORDER_STATUSES,
   UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
 } from "./official-fields.ts";
@@ -72,7 +72,7 @@ describe("GET /v1/user/spot/active_orders official field set", () => {
     expect(orders).toHaveLength(1);
     const s = orderShape(orders[0]!, { type: "limit", canceled: false });
     expect(s.actual).toEqual(s.expected);
-    expect(OFFICIAL_ORDER_STATUSES).toContain(orders[0]!.status);
+    expect(OFFICIAL_FETCH_ORDER_STATUSES).toContain(orders[0]!.status);
     for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(orders[0]!).not.toHaveProperty(f);
     // アクティブな注文は取消済みではないので canceled_at は出ない。
     expect(orders[0]!).not.toHaveProperty("canceled_at");

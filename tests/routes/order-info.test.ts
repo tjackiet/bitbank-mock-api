@@ -6,7 +6,7 @@ import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
   IMPLEMENTED_ORDER_TYPES,
-  OFFICIAL_ORDER_STATUSES,
+  OFFICIAL_FETCH_ORDER_STATUSES,
   UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
 } from "./official-fields.ts";
@@ -297,7 +297,7 @@ describe("official field set", () => {
     const body = res.json() as Envelope<Record<string, unknown>>;
     const s = orderShape(body.data, { type: "limit", canceled: false });
     expect(s.actual).toEqual(s.expected);
-    expect(OFFICIAL_ORDER_STATUSES).toContain(body.data.status);
+    expect(OFFICIAL_FETCH_ORDER_STATUSES).toContain(body.data.status);
     expect(IMPLEMENTED_ORDER_TYPES).toContain(body.data.type);
     for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
   });
