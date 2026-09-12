@@ -1,12 +1,26 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadState } from "../../src/engine/persist.ts";
 import { activeOrders } from "../../src/engine/state.ts";
 import { loadOrInitDefault, SessionStore } from "../../src/store/session.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { buildTestServer, stubFetchCandles } from "../routes/helpers.ts";
+
+// 重なった persist() が実際に 1 本にまとめられたかを見るため、saveState の
+// 呼び出し回数を数える。中身は実物をそのまま呼ぶ。
+const saveStateCalls = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../../src/engine/persist.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/engine/persist.ts")>();
+  return {
+    ...actual,
+    saveState: (...args: Parameters<typeof actual.saveState>) => {
+      saveStateCalls.count += 1;
+      return actual.saveState(...args);
+    },
+  };
+});
 
 const T0 = Date.parse("2026-01-01T00:00:00.000Z");
 const MIN = 60_000;
@@ -125,6 +139,7 @@ describe("SessionStore.persist", () => {
       const path = join(dir, `coalesce-${trial}`, "state.json");
       const store = new SessionStore(buildState(), { path, fillMode: "manual" });
       const waits: Promise<void>[] = [];
+      saveStateCalls.count = 0;
       for (let i = 1; i <= 20; i += 1) {
         store.replace(
           buildState({
@@ -135,6 +150,8 @@ describe("SessionStore.persist", () => {
         waits.push(store.persist());
       }
       await Promise.all(waits);
+      // 20 本の persist() が 1 本の書き込みにまとまる（途中の 19 本は捨てる）。
+      expect(saveStateCalls.count).toBe(1);
       expect(await readFileState(path)).toEqual(store.state());
     }
   });
