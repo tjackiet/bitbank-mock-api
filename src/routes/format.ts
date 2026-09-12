@@ -16,6 +16,12 @@ const KNOWN_ASSETS = ["jpy", "btc", "eth", "xrp", "ltc", "bcc", "mona", "xlm", "
 const ASSET_AMOUNT_PRECISION: Record<string, number> = { jpy: 4 };
 const DEFAULT_ASSET_AMOUNT_PRECISION = 8;
 
+/** 公式の資産応答が jpy だけ形を変えるフィールドがあるため、判定に使う。 */
+const JPY = "jpy";
+
+/** 代用掛け目。Plan A は信用取引を実装しないので 0 固定。 */
+const COLLATERAL_RATIO = "0";
+
 export type OrderShape = {
   order_id: number | string;
   pair: string;
@@ -106,15 +112,35 @@ export function formatTrade(t: TradeRecord): TradeShape {
   };
 }
 
+/**
+ * 出金手数料。公式は資産で形を変え、jpy はしきい値つき、他資産は下限・上限の組を返す。
+ */
+export type WithdrawalFeeShape =
+  | { min: string; max: string }
+  | { under: string; over: string; threshold: string };
+
+/** `network_list` の要素。Plan A はネットワークを模さないので一覧は常に空。 */
+export type NetworkShape = {
+  asset: string;
+  network: string;
+  stop_deposit: boolean;
+  stop_withdrawal: boolean;
+  withdrawal_fee: string;
+};
+
 export type AssetShape = {
   asset: string;
   free_amount: string;
   amount_precision: number;
   onhand_amount: string;
   locked_amount: string;
-  withdrawal_fee: string;
+  withdrawing_amount: string;
+  withdrawal_fee: WithdrawalFeeShape;
   stop_deposit: boolean;
   stop_withdrawal: boolean;
+  /** 公式は jpy でだけ省略する。 */
+  network_list?: NetworkShape[];
+  collateral_ratio: string;
 };
 
 /**
@@ -140,9 +166,13 @@ export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_
       amount_precision: digits,
       onhand_amount: amounts.onhand,
       locked_amount: amounts.locked,
-      withdrawal_fee: "0",
+      withdrawing_amount: formatUnits(0n, digits),
+      withdrawal_fee: withdrawalFee(a, digits),
       stop_deposit: false,
       stop_withdrawal: false,
+      // 公式の network_list は jpy でだけ undefined になる。キー自体を出さない。
+      ...(a === JPY ? {} : { network_list: [] }),
+      collateral_ratio: COLLATERAL_RATIO,
     });
   }
   return { assets };
@@ -151,6 +181,16 @@ export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_
 /** 応答で宣言する amount_precision。丸めにも同じ値を使う。 */
 function assetPrecision(asset: string): number {
   return ASSET_AMOUNT_PRECISION[asset] ?? DEFAULT_ASSET_AMOUNT_PRECISION;
+}
+
+/**
+ * 出金手数料。Plan A は出金を実装しないので値は全て 0 で、形だけ公式に合わせる。
+ * 桁は同じ応答で宣言する amount_precision に揃え、他の金額と表記を統一する。
+ */
+function withdrawalFee(asset: string, digits: number): WithdrawalFeeShape {
+  const zero = formatUnits(0n, digits);
+  if (asset === JPY) return { under: zero, over: zero, threshold: zero };
+  return { min: zero, max: zero };
 }
 
 /**

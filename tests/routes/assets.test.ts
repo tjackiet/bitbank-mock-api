@@ -101,6 +101,47 @@ describe("GET /v1/user/assets", () => {
       expect(a.free_amount).not.toMatch(/[eE]/);
     }
   });
+
+  it("returns exactly the field set the official asset response defines", async () => {
+    const { fastify } = await build(buildState({ balances: { jpy: 1_000_000, btc: 0.5 } }));
+    const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { data: { assets: Record<string, unknown>[] } };
+
+    // rest-api.md「return user's asset list」の応答表。network_list は jpy でだけ省略される。
+    const OFFICIAL_FIELDS = [
+      "asset",
+      "free_amount",
+      "amount_precision",
+      "onhand_amount",
+      "locked_amount",
+      "withdrawing_amount",
+      "withdrawal_fee",
+      "stop_deposit",
+      "stop_withdrawal",
+      "collateral_ratio",
+    ];
+
+    expect(body.data.assets.length).toBeGreaterThan(0);
+    for (const a of body.data.assets) {
+      const isJpy = a.asset === "jpy";
+      const expected = isJpy ? OFFICIAL_FIELDS : [...OFFICIAL_FIELDS, "network_list"];
+      // 欠落と余剰の両方を落とす。toMatchObject ではドキュメントに無いキーが通ってしまう。
+      expect({ asset: a.asset, keys: Object.keys(a).sort() }).toEqual({
+        asset: a.asset,
+        keys: [...expected].sort(),
+      });
+
+      // 未実装の値は 0。桁は同じ応答が宣言する amount_precision に揃える。
+      const zero = `0.${"0".repeat(a.amount_precision as number)}`;
+      expect(a.withdrawing_amount).toBe(zero);
+      expect(a.collateral_ratio).toBe("0");
+      expect(a.withdrawal_fee).toEqual(
+        isJpy ? { under: zero, over: zero, threshold: zero } : { min: zero, max: zero },
+      );
+      if (!isJpy) expect(a.network_list).toEqual([]);
+    }
+  });
 });
 
 /** 固定桁の 10 進文字列を最小単位の BigInt にする。倍精度を経由しない。 */
