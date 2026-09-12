@@ -68,6 +68,38 @@ describe("SessionStore.tick", () => {
     expect(fetched).toBe(0);
     expect(activeOrders(store.state())).toHaveLength(1);
   });
+
+  // 状態ファイルのスキーマ（PaperStateSchema）は pair の文字種を見ないので、
+  // 発注の検証より前に書かれた不正なペアの注文がそのまま読み込まれる。
+  // そういう注文の分は外向きに問い合わせず、正常なペアの注文は今までどおり約定させる。
+  it("skips malformed pairs loaded from a state file and still ticks valid ones", async () => {
+    const fetched: string[] = [];
+    const warnings: string[] = [];
+    const store = new SessionStore(
+      buildState({
+        balances: { jpy: 10_000_000, btc: 1 },
+        orders: [
+          buildOrder({ id: "1", pair: "../../admin_jpy", side: "sell", price: 100, startAmount: 1 }),
+          buildOrder({ id: "2", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 }),
+        ],
+      }),
+      {
+        path: null,
+        fillMode: "market",
+        feeRate: 0,
+        logger: { info: () => {}, warn: (m: string) => warnings.push(m) },
+        fetchCandles: async (pair) => {
+          fetched.push(pair);
+          return { success: true, data: [candle(T0 + MIN, 110, 110, 50, 105)] };
+        },
+      },
+    );
+    await store.tick(T0 + 2 * MIN);
+    expect(fetched).toEqual(["btc_jpy"]);
+    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual(["../../admin_jpy"]);
+    // 生の pair はログへ出さない（改行・制御文字で行が割れないよう JSON で包む）
+    expect(warnings).toEqual(['tick: skipping malformed pair "../../admin_jpy"']);
+  });
 });
 
 describe("SessionStore.persist", () => {

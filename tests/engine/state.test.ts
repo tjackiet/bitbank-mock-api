@@ -81,6 +81,35 @@ describe("pure helpers", () => {
     expect(pairAssets("_jpy")).toBeNull();
     expect(pairAssets("jpy_jpy")).toBeNull();
   });
+
+  // 記号を含むペアは外向き URL のパスへ流れる（src/engine/candles.ts の fetchOneDay）。
+  // `..` は接頭辞を脱出し、`?` / `#` は以降をクエリ・フラグメントに変える。
+  it("pairAssets rejects segments that are not lowercase alphanumeric", () => {
+    expect(pairAssets("../../admin_jpy")).toBeNull();
+    expect(pairAssets("btc?a=1_jpy")).toBeNull();
+    expect(pairAssets("btc#frag_jpy")).toBeNull();
+    expect(pairAssets("btc/x_jpy")).toBeNull();
+    expect(pairAssets("btc%2f_jpy")).toBeNull();
+    expect(pairAssets("btc-x_jpy")).toBeNull();
+    expect(pairAssets("btc x_jpy")).toBeNull();
+    expect(pairAssets("BTC_JPY")).toBeNull();
+  });
+
+  // 制御文字・改行を含むペア。`$` は入力の末尾にだけ合致するので、末尾の改行も弾く。
+  it("pairAssets rejects control characters and newlines", () => {
+    expect(pairAssets("btc\n_jpy")).toBeNull();
+    expect(pairAssets("btc_jpy\n")).toBeNull();
+    expect(pairAssets("btc\r\nx_jpy")).toBeNull();
+    expect(pairAssets("btc\u0000_jpy")).toBeNull();
+  });
+
+  // ホワイトリストにはしない。公式一覧（pairs.md）に無くても形が正しければ通す。
+  // 数字を許すのは、bitbank が数字入りのペアを足したときに弾かないための保守的な上限。
+  it("pairAssets accepts well-formed pairs that are not in the official list", () => {
+    expect(pairAssets("foo_jpy")).toEqual(["foo", "jpy"]);
+    expect(pairAssets("1inch_jpy")).toEqual(["1inch", "jpy"]);
+    expect(pairAssets("abc123_xyz9")).toEqual(["abc123", "xyz9"]);
+  });
 });
 
 describe("persist", () => {

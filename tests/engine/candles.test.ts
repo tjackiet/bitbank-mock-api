@@ -61,6 +61,46 @@ describe("defaultFetchCandles", () => {
     expect(urls[1]).toContain("/btc_jpy/candlestick/1min/20260102");
   });
 
+  // pair はパスセグメント 1 つとしてエスケープする。入口（pairAssets）で弾いているが、
+  // engine を直接呼ぶ経路に備えた 2 層目。区切り文字がパスの構造に効かないことを見る。
+  it.each([
+    ["../../admin_jpy", "/..%2F..%2Fadmin_jpy/candlestick/1min/20260101"],
+    ["btc?a=1_jpy", "/btc%3Fa%3D1_jpy/candlestick/1min/20260101"],
+    ["btc#frag_jpy", "/btc%23frag_jpy/candlestick/1min/20260101"],
+  ])("escapes %s into a single path segment", async (pair, expectedPath) => {
+    const fetchImpl = mockFetch(FIXTURE);
+    const fc = defaultFetchCandles({ baseUrl: "https://example.test", fetchImpl });
+    const at = Date.parse("2026-01-01T01:00:00.000Z");
+    await fc(pair, at, at);
+    expect(fetchImpl.mock.calls).toHaveLength(1);
+    const url = new URL(fetchImpl.mock.calls[0][0]);
+    // `..` でベース URL の外へ出ず、`?` / `#` で以降がクエリ・フラグメントにならない
+    expect(url.origin).toBe("https://example.test");
+    expect(url.pathname).toBe(expectedPath);
+    expect(url.search).toBe("");
+    expect(url.hash).toBe("");
+  });
+
+  it("escapes control characters in the pair", async () => {
+    const fetchImpl = mockFetch(FIXTURE);
+    const fc = defaultFetchCandles({ baseUrl: "https://example.test", fetchImpl });
+    const at = Date.parse("2026-01-01T01:00:00.000Z");
+    await fc("btc\r\nx_jpy", at, at);
+    const raw = fetchImpl.mock.calls[0][0];
+    expect(raw).not.toMatch(/[\u0000-\u001f]/);
+    expect(new URL(raw).pathname).toBe("/btc%0D%0Ax_jpy/candlestick/1min/20260101");
+  });
+
+  it("leaves a well-formed pair unescaped", async () => {
+    const fetchImpl = mockFetch(FIXTURE);
+    const fc = defaultFetchCandles({ baseUrl: "https://example.test", fetchImpl });
+    const at = Date.parse("2026-01-01T01:00:00.000Z");
+    await fc("foo_jpy", at, at);
+    expect(fetchImpl.mock.calls[0][0]).toBe(
+      "https://example.test/foo_jpy/candlestick/1min/20260101",
+    );
+  });
+
   it("returns failure on HTTP error", async () => {
     const fc = defaultFetchCandles({
       baseUrl: "https://example.test",

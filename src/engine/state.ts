@@ -97,11 +97,29 @@ export function averagePriceOf(o: OrderRecord): number {
   return o.executedAmount === 0 ? 0 : o.executedNotional / o.executedAmount;
 }
 
+/**
+ * ペアの 1 セグメントに許す文字種。英小文字と数字だけで、記号は許さない。
+ *
+ * 出典: bitbank-api-docs の pairs.md（コミット 0badd680）に載る 62 個のペア記号は
+ * すべて「英小文字のみのセグメント」2 つを `_` で繋いだ形で、数字も記号も含まない。
+ *
+ * 数字まで許すのは公式より緩い保守的な上限。`[a-z]` に絞ると bitbank が数字を含む
+ * ペアを足したときに弾いてしまうので、記号を落とすという目的に必要な分だけ残した。
+ * 実在するペアかどうかは検査しない（未登録でも形が正しければ通す。docs/fidelity.md の
+ * 「未登録ペアも同じ桁を仮置きする」を保つため）。ここで直したのは文字種であって実在性ではない。
+ *
+ * 記号を落とすことで、pair がそのまま外向き URL のパスセグメントへ流れる経路
+ * （src/engine/candles.ts の fetchOneDay）で `..` / `?` / `#` や制御文字が効かなくなる。
+ * URL 側でも別途エスケープしており、これはその 2 層目のうちの入口側。
+ */
+const PAIR_SEGMENT_RE = /^[a-z0-9]+$/;
+
 export function pairAssets(pair: string): [string, string] | null {
   const parts = pair.split("_");
   if (parts.length !== 2) return null;
   const [base, quote] = parts;
   if (!base || !quote || base === quote) return null;
+  if (!PAIR_SEGMENT_RE.test(base) || !PAIR_SEGMENT_RE.test(quote)) return null;
   return [base, quote];
 }
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
+import { buildServer } from "../../src/server/http.ts";
+import { SessionStore } from "../../src/store/session.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
@@ -96,6 +98,76 @@ describe("POST /v1/user/spot/order", () => {
     expect(body.data.code).toBe(10000);
     expect(store.state()).toEqual(before);
     expect(activeOrders(store.state())).toHaveLength(1);
+  });
+
+  // 記号入りのペアは pairAssets が弾く。既存の分岐（create-order.ts の
+  // `if (!pairAssets(pair)) return err(ErrorCode.INVALID_PAIR)`）がそのまま 10000 を返す。
+  it.each([["../../admin_jpy"], ["btc?a=1_jpy"], ["btc#frag_jpy"]])(
+    "rejects a pair with URL metacharacters: %s",
+    async (pair) => {
+      const { fastify } = await build();
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/order",
+        payload: { pair, amount: "0.001", price: "5000000", side: "buy", type: "limit" },
+      });
+      const body = res.json() as { success: number; data: { code: number } };
+      expect(body.success).toBe(0);
+      expect(body.data.code).toBe(10000);
+    },
+  );
+
+  // 記号入りのペアで発注しても、外向きの足取得が 1 回も起きないこと。
+  // market は getLatestPrice を呼ぶ前に弾く必要がある。
+  it.each([["../../admin_jpy"], ["btc?a=1_jpy"], ["btc#frag_jpy"]])(
+    "never fetches candles for a pair with URL metacharacters: %s",
+    async (pair) => {
+      const pairs: string[] = [];
+      const state = buildState({ balances: { jpy: 10_000_000 } });
+      const store = new SessionStore(state, {
+        path: null,
+        fillMode: "market",
+        fetchCandles: async (p) => {
+          pairs.push(p);
+          return { success: true, data: [] };
+        },
+      });
+      const fastify = await buildServer({ store, logger: false, controlEnabled: false });
+      try {
+        for (const type of ["limit", "market"] as const) {
+          const res = await fastify.inject({
+            method: "POST",
+            url: "/v1/user/spot/order",
+            payload: {
+              pair,
+              amount: "0.001",
+              side: "buy",
+              type,
+              ...(type === "limit" ? { price: "5000000" } : {}),
+            },
+          });
+          const body = res.json() as { success: number; data: { code: number } };
+          expect(body.data.code).toBe(10000);
+        }
+        expect(pairs).toEqual([]);
+      } finally {
+        await fastify.close();
+      }
+    },
+  );
+
+  // ホワイトリストにしていないことの証明。公式一覧に無い形の正しいペアは通す。
+  it("accepts a well-formed pair that is not in the official pair list", async () => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "foo_jpy", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { pair: string; order_id: number } };
+    expect(body.success).toBe(1);
+    expect(body.data.pair).toBe("foo_jpy");
+    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual(["foo_jpy"]);
   });
 
   it("rejects a malformed pair on market before looking up a price", async () => {
