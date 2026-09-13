@@ -74,6 +74,7 @@ const V2_OVERSOLD = {
   ],
 };
 
+/** warn を配列へ溜めるロガー。移行時の警告を検査するために使う。 */
 function collectingLogger(): { logger: Logger; warnings: string[] } {
   const warnings: string[] = [];
   return { logger: { warn: (m) => warnings.push(m), info: () => {} }, warnings };

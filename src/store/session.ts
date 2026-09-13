@@ -137,6 +137,13 @@ export class SessionStore {
   }
 }
 
+/**
+ * 状態ファイルを読んで SessionStore を作る。ファイルが無いときだけ初期状態で始める。
+ *
+ * 読み込みが失敗したら throw して起動を止める（fail-closed）。壊れた JSON・スキーマ違反に
+ * 加えて、不変量を破る v3 の状態も失敗になる。判定は `loadState` が行い、不変量 6 の
+ * 拘束額は手数料込みなので、SessionStore と同じ手数料率とロガーを渡す。
+ */
 export async function loadOrInitDefault(
   initialJpy: number,
   opts: SessionStoreOptions = {},
