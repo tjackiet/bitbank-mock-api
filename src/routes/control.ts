@@ -231,7 +231,11 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
    * `updatedAt` は実時刻で更新する。時計を戻しても「状態を最後に変えた時刻」は戻らない。
    */
   fastify.post("/clock", async (request, reply) => {
-    const body = asRecord(request.body) ?? {};
+    // 本文を省略したときだけ `{}`（＝現在時刻へ戻す）と見なす。`asRecord()` は配列・
+    // null・数値・文字列でも null を返すので、`?? {}` にすると `[]` のような壊れた本文が
+    // 「本文なし」と同じ扱いになり、黙って時計が動いてしまう。
+    const body = request.body === undefined ? {} : asRecord(request.body);
+    if (!body) return reply.code(400).send({ error: "INVALID_CLOCK" });
     const realNowMs = Date.now();
     let ms = realNowMs;
     if (body.lastTickAt !== undefined) {

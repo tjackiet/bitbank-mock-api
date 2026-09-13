@@ -146,6 +146,34 @@ describe("SessionStore.tick", () => {
     expect(warnings.every((w) => !/[\u0000-\u001f]/.test(w))).toBe(true);
   });
 
+  // 戻した時計は状態ファイルにも残す。約定が 0 でも書かないと、再起動で未来の時計を
+  // 読み直して同じ空振りを繰り返す。
+  it("persists the recovered clock even though nothing filled", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bitbank-mock-clock-"));
+    try {
+      const path = join(dir, "state.json");
+      const store = new SessionStore(
+        buildState({
+          lastTickAt: new Date(T0 + 5 * 60 * MIN).toISOString(),
+          balances: { jpy: 10_000_000 },
+          orders: [buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 })],
+        }),
+        {
+          path,
+          fillMode: "market",
+          feeRate: 0,
+          fetchCandles: async () => ({ success: true, data: [] }),
+        },
+      );
+      await store.tick(T0 + 2 * MIN);
+      const reloaded = await loadState(path, {});
+      expect(reloaded.success).toBe(true);
+      expect(reloaded.success && reloaded.data?.lastTickAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // 時計が先にあっても、tick の最後で lastTickAt は実時刻に戻る（既存の挙動）。
   // だから警告が出るのはその 1 回だけで、次の tick は今までどおり取得して約定する。
   it("recovers on the next tick once lastTickAt is back to now", async () => {

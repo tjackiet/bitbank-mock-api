@@ -4,7 +4,7 @@ import { activeOrders } from "../../src/engine/state.ts";
 import { controlRoutes, controlTokenHeader } from "../../src/routes/control.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
-import { buildOrder, buildState } from "../engine/helpers.ts";
+import { buildOrder, buildState, buildTrade } from "../engine/helpers.ts";
 
 /** src/routes/control.ts の `MAX_CLOCK_AHEAD_MS` と同じ値（実装は export していない）。 */
 const MAX_CLOCK_AHEAD_MS = 24 * 60 * 60 * 1000;
@@ -472,11 +472,27 @@ describe("/_control routes", () => {
 
   // 上限に当たった後の復旧。reset と違って注文・約定・残高は残る。
   it("rewinds the clock without dropping orders, trades or balances", async () => {
+    // 約定済みの注文 2 とその trade を仕込む（buildState の trades は既定で空なので、
+    // 仕込まないと「約定記録が残る」ことを検査できない）。
+    const trade = buildTrade({ tradeId: "1", orderId: "2" });
     const { fastify, store } = await setup(
       buildState({
         lastTickAt: new Date(Date.now() + MAX_CLOCK_AHEAD_MS).toISOString(),
         balances: { jpy: 9_000_000, btc: 0.5 },
-        orders: [buildOrder({ id: "1", price: 5_000_000, startAmount: 0.001 })],
+        orders: [
+          buildOrder({ id: "1", price: 5_000_000, startAmount: 0.001 }),
+          buildOrder({
+            id: "2",
+            price: 5_000_000,
+            startAmount: 0.001,
+            status: "FULLY_FILLED",
+            executedAmount: 0.001,
+            executedNotional: 5_000,
+          }),
+        ],
+        trades: [trade],
+        nextOrderSeq: 3,
+        nextTradeSeq: 2,
       }),
     );
     const res = await fastify.inject({ method: "POST", url: "/_control/clock" });
@@ -485,6 +501,7 @@ describe("/_control routes", () => {
     expect(Math.abs(Date.parse(body.lastTickAt) - Date.now())).toBeLessThan(60_000);
     expect(body.previousLastTickAt).not.toBe(body.lastTickAt);
     expect(store.state().balances).toEqual({ jpy: 9_000_000, btc: 0.5 });
+    expect(store.state().trades).toEqual([trade]);
     expect(activeOrders(store.state())).toHaveLength(1);
     // 戻した後は tick が通る。
     const after = await fastify.inject({
@@ -532,6 +549,27 @@ describe("/_control routes", () => {
         method: "POST",
         url: "/_control/clock",
         payload: { lastTickAt },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: "INVALID_CLOCK" });
+      expect(JSON.stringify(store.state())).toBe(before);
+    },
+  );
+
+  // 本文そのものが壊れている場合（配列・null・数値・文字列）は「本文なし」と区別して
+  // 断る。`asRecord() ?? {}` だと現在時刻への巻き戻しが黙って走ってしまう。
+  it.each([["[]"], ["null"], ['"s"'], ["123"]])(
+    "rejects a malformed request body without touching state: %s",
+    async (payload) => {
+      const { fastify, store } = await setup(
+        buildState({ lastTickAt: "2026-01-01T00:00:00.000Z" }),
+      );
+      const before = JSON.stringify(store.state());
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/_control/clock",
+        headers: { "content-type": "application/json" },
+        payload,
       });
       expect(res.statusCode).toBe(400);
       expect(res.json()).toEqual({ error: "INVALID_CLOCK" });

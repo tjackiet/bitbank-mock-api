@@ -109,7 +109,12 @@ export class SessionStore {
     }
     const ts = new Date(nowMs).toISOString();
     this._state = { ...this._state, lastTickAt: ts, updatedAt: ts };
-    if (totalFilled > 0) await this.persist();
+    // 約定が無いときは書かない（互換ルートは読み取りでも tick を回すので、毎回書くと
+    // 状態ファイルへの書き込みが要求ごとに起きる）。ただし時計が先にあった回だけは、
+    // ここで実時刻へ戻した lastTickAt を残す。残さないと、再起動後にファイルから
+    // 未来の時計を読み直して同じ空振りを繰り返す。戻した後は clockAhead が偽になるので、
+    // この書き込みが続くことはない。
+    if (totalFilled > 0 || clockAhead) await this.persist();
     return result;
   }
 
