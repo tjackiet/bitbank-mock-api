@@ -25,17 +25,29 @@ function mockFetch(body: unknown, init: { status?: number } = {}) {
 describe("isValidCandle", () => {
   const base = { open: 1, high: 1, low: 1, close: 1, vol: 0 };
 
+  const MAX_EPOCH = 8_640_000_000_000_000;
+  const JST = 9 * 60 * 60 * 1000;
+
   it("accepts a candle whose timestamp is inside the Date range", () => {
     expect(isValidCandle({ ...base, timestamp: T0 })).toBe(true);
-    // 上側は足 1 本分の余裕が要る（applyFill が timestamp + 1 分を Date にする）。
-    expect(isValidCandle({ ...base, timestamp: 8_640_000_000_000_000 - MIN })).toBe(true);
-    // 下限そのものは Date として有効で、1 分後も範囲内なので通す（範囲は非対称）。
-    expect(isValidCandle({ ...base, timestamp: -8_640_000_000_000_000 })).toBe(true);
-    expect(() => new Date(-8_640_000_000_000_000 + MIN).toISOString()).not.toThrow();
+    // 上側は下流の加算分（JST の 9 時間）の余裕が要る。
+    expect(isValidCandle({ ...base, timestamp: MAX_EPOCH - JST })).toBe(true);
+    // 下限そのものは Date として有効で、加算しても範囲を出ないので通す（範囲は非対称）。
+    expect(isValidCandle({ ...base, timestamp: -MAX_EPOCH })).toBe(true);
+    expect(() => new Date(-MAX_EPOCH + MIN).toISOString()).not.toThrow();
   });
 
   it("rejects a timestamp below the Date range", () => {
-    expect(isValidCandle({ ...base, timestamp: -8_640_000_000_000_001 })).toBe(false);
+    expect(isValidCandle({ ...base, timestamp: -MAX_EPOCH - 1 })).toBe(false);
+  });
+
+  // 受理した timestamp は lastTickAt として残り、market モードの足取得で JST を足される。
+  // 足して Date の範囲を出ると日付が NaNNaNNaN になり（例外にはならない）、以後の取得が
+  // 毎回失敗する。上限はその加算分を引いた値にする。
+  it("rejects a timestamp that leaves the Date range after the JST shift", () => {
+    const justOver = MAX_EPOCH - JST + 1;
+    expect(isValidCandle({ ...base, timestamp: justOver })).toBe(false);
+    expect(Number.isNaN(new Date(justOver + JST).getUTCFullYear())).toBe(true);
   });
 
   // 有限でも Date の範囲外の値は、lastTickAt や約定時刻の toISOString() で RangeError になる。
