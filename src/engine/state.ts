@@ -148,6 +148,14 @@ export function amountOf(map: Record<string, number>, asset: string): number {
   return Object.hasOwn(map, asset) ? map[asset] : 0;
 }
 
+/**
+ * active な注文が拘束している量を資産ごとに集計する。買いは quote を手数料込みの
+ * 残量 × 価格で、売りは base を残量で拘束する。成行の買い（`price == null`）と
+ * 文字種が不正なペアの注文は拘束に数えない。
+ *
+ * 不変量 6（`locked <= 残高`）の左辺であり、`availableOf()` を通して発注時の
+ * 残高ガードにも使う。手数料率は SessionStore が使う値と揃える必要がある。
+ */
 export function computeLocked(
   state: PaperState,
   feeRate: number = DEFAULT_TAKER_FEE_RATE,
@@ -171,6 +179,7 @@ export function computeLocked(
   return locked;
 }
 
+/** その資産で新たに発注に使える量（残高 − 拘束）。負になり得る。 */
 export function availableOf(
   state: PaperState,
   asset: string,
