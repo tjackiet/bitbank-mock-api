@@ -2,7 +2,13 @@ import type { Candle } from "../engine/candles.ts";
 import { defaultFetchCandles } from "../engine/candles.ts";
 import { runTick } from "../engine/match.ts";
 import { defaultStatePath, loadState, saveState } from "../engine/persist.ts";
-import { activeOrders, DEFAULT_TAKER_FEE_RATE, nowIso, type PaperState } from "../engine/state.ts";
+import {
+  activeOrders,
+  DEFAULT_TAKER_FEE_RATE,
+  nowIso,
+  pairAssets,
+  type PaperState,
+} from "../engine/state.ts";
 import type { FetchCandles, Logger } from "../engine/types.ts";
 import { noopLogger } from "../engine/types.ts";
 import { fillMode, type FillMode } from "../server/config.ts";
@@ -54,6 +60,15 @@ export class SessionStore {
     const tickFrom = this._state.lastTickAt;
     let totalFilled = 0;
     for (const pair of pairs) {
+      // 状態ファイルから読んだ注文のペアは検証を通っていない（PaperStateSchema は文字種を
+      // 見ない）。文字種が不正なペアは外向きに問い合わせても意味が無く、足が返ってくると
+      // fillOrder が INVALID_PAIR を返して applyFill が throw する。ここで落とす。
+      // ログには生の pair を出さない（改行・制御文字で行を割られないよう JSON で包む）。
+      if (!pairAssets(pair)) {
+        this.logger.warn(`tick: skipping malformed pair ${JSON.stringify(pair)}`);
+        result.set(pair, []);
+        continue;
+      }
       const r = await this.fetchCandles(pair, lastMs, nowMs);
       if (!r.success) {
         this.logger.warn(`tick: fetchCandles failed for ${pair}: ${r.error}`);

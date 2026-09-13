@@ -211,6 +211,43 @@ describe("/_control routes", () => {
     expect(activeOrders(store.state())).toHaveLength(0);
   });
 
+  // 互換ルートと同じ pairAssets で弾く。状態ファイル由来の文字種が不正なペアを
+  // runTick へ渡すと applyFill が throw して 500 になるので、ここで 400 にする。
+  it.each([["../../admin_jpy"], ["btc?a=1_jpy"], ["btc#frag_jpy"], ["btc_jpy_x"], [""]])(
+    "rejects a malformed pair without filling: %s",
+    async (pair) => {
+      const { fastify, store } = await setup();
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/_control/tick",
+        payload: { pair, price: 4_900_000 },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: "INVALID_PAIR" });
+      expect(activeOrders(store.state())).toHaveLength(1);
+    },
+  );
+
+  // 状態ファイルから読んだ不正なペアの注文へ tick しても 500 にはならない。
+  it("returns 400 instead of 500 for an order carrying a malformed pair", async () => {
+    const { fastify, store } = await setup(
+      buildState({
+        balances: { jpy: 10_000_000, btc: 1 },
+        orders: [
+          buildOrder({ id: "1", pair: "../../admin_jpy", side: "sell", price: 5_000_000 }),
+        ],
+      }),
+    );
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/tick",
+      payload: { pair: "../../admin_jpy", price: 6_000_000 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "INVALID_PAIR" });
+    expect(activeOrders(store.state())).toHaveLength(1);
+  });
+
   it("rejects an invalid candle without filling", async () => {
     const { fastify, store } = await setup();
     const res = await fastify.inject({

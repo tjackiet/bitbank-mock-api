@@ -64,6 +64,7 @@ BITBANK_MOCK_CONTROL=1 npm run dev
 | `BITBANK_MOCK_CONTROL_TOKEN` | 未設定 | 非ループバックからの `/_control/` に必要な `X-Control-Token` |
 | `BITBANK_MOCK_STATE_PATH` | `~/.bitbank-mock/sessions/default/state.json` | 状態ファイルのパス |
 | `BITBANK_MOCK_HOME` | `~/.bitbank-mock` | `STATE_PATH` 未指定時のルート |
+| `BITBANK_PUBLIC_BASE_URL` | `https://public.bitbank.cc` | 足を取りに行く公開 API のベース URL（`BITBANK_MOCK_FILL_MODE=market` のときだけ使う） |
 
 状態ファイルはファイルロックを持ちません。**同じ `BITBANK_MOCK_STATE_PATH` を 2 プロセスから同時に使わないでください。** 後から書いた側が相手の注文を丸ごと消し、order id も重複します。並列にシナリオを流すときはパスを分けてください。詳しくは [`docs/fidelity.md`](docs/fidelity.md) の「状態の永続化」以下の行を見てください。
 

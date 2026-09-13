@@ -74,7 +74,12 @@ async function fetchOneDay(
   pair: string,
   dateStr: string,
 ): Promise<Result<Candle[]>> {
-  const url = `${baseUrl}/${pair}/candlestick/1min/${dateStr}`;
+  // pair は利用者の入力に由来する。素の文字列を埋めると `..` がベース URL のパス接頭辞を
+  // 脱出し、`?` / `#` が以降をクエリ・フラグメントに変えてしまう。1 セグメントとして
+  // エンコードして、区切り文字も制御文字も文字そのものとして送る。
+  // 入口（src/engine/state.ts の pairAssets）でも文字種を弾いているが、engine を直接
+  // 呼ぶ経路に備えてここでも守る。dateStr は ymdJst が作る数字だけなのでそのまま。
+  const url = `${baseUrl}/${encodeURIComponent(pair)}/candlestick/1min/${dateStr}`;
   try {
     const res = await fetchImpl(url);
     if (!res.ok) return { success: false, error: `candles HTTP ${res.status} for ${url}` };

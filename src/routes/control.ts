@@ -2,7 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { isValidCandle, type Candle } from "../engine/candles.ts";
 import { runTick } from "../engine/match.ts";
 import { fitsDigits, precisionOf } from "../engine/precision.ts";
-import { isActive, remainingOf } from "../engine/state.ts";
+import { isActive, pairAssets, remainingOf } from "../engine/state.ts";
 import { fillOrder } from "../engine/transitions.ts";
 import { formatOrder, formatTrade } from "./format.ts";
 import { asRecord } from "./params.ts";
@@ -69,7 +69,10 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
 
   fastify.post("/tick", async (request, reply) => {
     const body = asRecord(request.body);
-    if (!body || typeof body.pair !== "string" || body.pair.length === 0) {
+    // 互換ルート（POST /v1/user/spot/order）と同じ pairAssets で弾く。ここは外向きに
+    // 出ない口だが、状態ファイル由来の文字種が不正なペアを runTick へ渡すと、
+    // fillOrder が INVALID_PAIR を返して applyFill が throw し 500 になる。
+    if (!body || typeof body.pair !== "string" || !pairAssets(body.pair)) {
       return reply.code(400).send({ error: "INVALID_PAIR" });
     }
     const store = fastify.store;
