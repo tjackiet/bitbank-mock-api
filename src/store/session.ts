@@ -137,6 +137,13 @@ export class SessionStore {
   }
 }
 
+/**
+ * 状態ファイルを読んで SessionStore を作る。ファイルが無いときだけ初期状態で始める。
+ *
+ * 読み込みが失敗したら throw して起動を止める（fail-closed）。壊れた JSON・スキーマ違反に
+ * 加えて、不変量を破る v3 の状態も失敗になる。判定は `loadState` が行い、不変量 6 の
+ * 拘束額は手数料込みなので、SessionStore と同じ手数料率とロガーを渡す。
+ */
 export async function loadOrInitDefault(
   initialJpy: number,
   opts: SessionStoreOptions = {},
@@ -144,7 +151,8 @@ export async function loadOrInitDefault(
   const path = opts.path === undefined ? defaultStatePath("default") : opts.path;
   let state: PaperState;
   if (path) {
-    const r = await loadState(path);
+    // 不変量 6 は手数料込みの拘束額を見るので、SessionStore と同じ手数料率で検査する。
+    const r = await loadState(path, { feeRate: opts.feeRate, logger: opts.logger });
     if (!r.success) throw new Error(r.error);
     state = r.data ?? freshState(initialJpy);
   } else {
