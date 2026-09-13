@@ -24,9 +24,9 @@ const MAX_EPOCH_MS = 8_640_000_000_000_000;
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
- * 足として使える値か。有限かつ `0 < low <= open <= high` かつ `low <= close <= high` で、
- * `timestamp` が `Date` の表現範囲から下流の加算分を引いた範囲に収まること
- * （`-MAX_EPOCH_MS <= timestamp <= MAX_EPOCH_MS − JST_OFFSET_MS`）。
+ * 足の `timestamp`（および `lastTickAt` に残る時刻）として使える値か。`Date` の表現範囲
+ * から下流の加算分を引いた範囲（`-MAX_EPOCH_MS <= timestamp <= MAX_EPOCH_MS −
+ * JST_OFFSET_MS`）に収まること。
  *
  * 上側に余裕を取るのは、受け取った timestamp がそのまま下流で足し算されるため。
  * 足し先は 2 つあり、大きいほうの JST オフセット（9 時間）を引く。
@@ -41,11 +41,24 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
  *   （例外にはならず、足の取得が毎回失敗し続ける）
  *
  * 下限そのものは `Date` として有効で、下流の加算でも範囲を出ないので、範囲は非対称。
+ *
+ * これは `Date` の表現範囲だけから決まる制約で、「実時間からどれだけ先を許すか」とは
+ * 別物。後者は `/_control/` の中だけの制約として `src/routes/control.ts` の
+ * `MAX_CLOCK_AHEAD_MS` が持ち、この範囲の内側にある。
+ */
+export function isValidCandleTimestamp(timestamp: number): boolean {
+  if (!Number.isFinite(timestamp)) return false;
+  return timestamp >= -MAX_EPOCH_MS && timestamp <= MAX_EPOCH_MS - JST_OFFSET_MS;
+}
+
+/**
+ * 足として使える値か。有限かつ `0 < low <= open <= high` かつ `low <= close <= high` で、
+ * `timestamp` が `isValidCandleTimestamp` の範囲に収まること。
  */
 export function isValidCandle(c: Candle): boolean {
   const { open, high, low, close, vol, timestamp } = c;
-  if (![open, high, low, close, vol, timestamp].every((n) => Number.isFinite(n))) return false;
-  if (timestamp < -MAX_EPOCH_MS || timestamp > MAX_EPOCH_MS - JST_OFFSET_MS) return false;
+  if (![open, high, low, close, vol].every((n) => Number.isFinite(n))) return false;
+  if (!isValidCandleTimestamp(timestamp)) return false;
   if (!(open > 0 && high > 0 && low > 0 && close > 0)) return false;
   return low <= open && open <= high && low <= close && close <= high;
 }
