@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
-import { controlRoutes } from "../../src/routes/control.ts";
+import { controlRoutes, controlTokenHeader } from "../../src/routes/control.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
 import { buildOrder, buildState } from "../engine/helpers.ts";
@@ -107,6 +107,19 @@ describe("/_control routes", () => {
       expect(res.json()).toEqual({ error: "FORBIDDEN" });
     },
   );
+
+  // 同名ヘッダが 2 行来ると Node は request.headers 側で ", " 繋ぎの 1 本にするので、
+  // 繋いだ結果が設定値と一致し得る。行数は生ヘッダで数えて 1 本のときだけ受ける。
+  it("takes the token only when exactly one header line carries it", () => {
+    const withRaw = (rawHeaders: string[]) =>
+      ({ raw: { rawHeaders } }) as unknown as Parameters<typeof controlTokenHeader>[0];
+    expect(controlTokenHeader(withRaw(["Host", "x", "X-Control-Token", "secret"]))).toBe("secret");
+    expect(controlTokenHeader(withRaw(["host", "x", "x-control-token", "secret"]))).toBe("secret");
+    expect(controlTokenHeader(withRaw(["Host", "x"]))).toBeNull();
+    expect(
+      controlTokenHeader(withRaw(["X-Control-Token", "part1", "X-Control-Token", "part2"])),
+    ).toBeNull();
+  });
 
   // 許可判定はソケットの対向アドレスだけを見る。trustProxy を有効にしたサーバでも
   // X-Forwarded-For でループバックを騙れない（buildServer は trustProxy を設定しないが、

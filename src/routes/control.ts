@@ -22,24 +22,41 @@ function isLoopback(ip: string | undefined): boolean {
 /**
  * 接続元のアドレス。TCP の対向アドレスだけを見る。
  *
- * Fastify の `request.ip` は `trustProxy` を有効にすると `X-Forwarded-For` の値を返すように
- * なる。それを許可判定に使うと、ヘッダに `127.0.0.1` を書いた非ループバックの要求が
- * トークン無しでこの境界を通る。control の許可判定はサーバのプロキシ設定に左右されて
- * ならないので、ソケットから直接読む。
- *
- * `buildServer()`（src/server/http.ts）は `trustProxy` を設定しない。**有効にしてはいけない。**
+ * **この判定を `request.ip` に戻してはいけない。** `request.ip` は Fastify の `trustProxy` を
+ * 有効にすると `X-Forwarded-For` の値を返すので、そちらを使うと、ヘッダに `127.0.0.1` を
+ * 書いた非ループバックの要求がトークン無しでこの境界を通る（`trustProxy` を設定するか
+ * どうかはログの都合で決まる話で、control の許可判定がそれに左右されてはならない）。
+ * ソケットから直接読む限り、`buildServer()` の `trustProxy` の有無で境界は変わらない。
  */
 function clientIp(request: FastifyRequest): string | undefined {
   return request.socket.remoteAddress;
 }
 
 /**
+ * `X-Control-Token` の値。ヘッダ行が無いときと 2 行以上あるときは `null`。
+ *
+ * Node は `set-cookie` 以外の同名ヘッダが複数行来ると `request.headers` 側では `", "` で
+ * 繋いだ 1 本の文字列にする。繋いだ結果がたまたま設定値と一致する形（`part1, part2`）に
+ * なり得るので、行数は生ヘッダで数えて、ちょうど 1 本のときだけ値を返す。
+ */
+export function controlTokenHeader(request: FastifyRequest): string | null {
+  const raw = request.raw.rawHeaders;
+  let found: string | null = null;
+  let count = 0;
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    if (raw[i]!.toLowerCase() !== "x-control-token") continue;
+    count += 1;
+    found = raw[i + 1]!;
+  }
+  return count === 1 ? found : null;
+}
+
+/**
  * `X-Control-Token` が設定値と一致するか。一致しない位置が先頭か末尾かで比較時間が
  * 変わらないよう `timingSafeEqual` で見る（長さの違いは隠せないので、トークンは
- * 固定長で運用する）。ヘッダが複数回来た場合は文字列にならないので不一致とする。
+ * 固定長で運用する）。
  */
-function tokenMatches(given: string | string[] | undefined, expected: string): boolean {
-  if (typeof given !== "string") return false;
+function tokenMatches(given: string, expected: string): boolean {
   const a = Buffer.from(given, "utf8");
   const b = Buffer.from(expected, "utf8");
   if (a.length !== b.length) return false;
@@ -62,8 +79,8 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
   fastify.addHook("onRequest", async (request, reply) => {
     if (isLoopback(clientIp(request))) return;
     const expected = opts.token;
-    const given = request.headers["x-control-token"];
-    if (!expected || !tokenMatches(given, expected)) {
+    const given = controlTokenHeader(request);
+    if (!expected || given === null || !tokenMatches(given, expected)) {
       return reply.code(403).send({ error: "FORBIDDEN" });
     }
   });

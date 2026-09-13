@@ -27,8 +27,15 @@ describe("isValidCandle", () => {
 
   it("accepts a candle whose timestamp is inside the Date range", () => {
     expect(isValidCandle({ ...base, timestamp: T0 })).toBe(true);
-    // Date の上限ちょうどから足 1 本分を引いた値までは通す。
+    // 上側は足 1 本分の余裕が要る（applyFill が timestamp + 1 分を Date にする）。
     expect(isValidCandle({ ...base, timestamp: 8_640_000_000_000_000 - MIN })).toBe(true);
+    // 下限そのものは Date として有効で、1 分後も範囲内なので通す（範囲は非対称）。
+    expect(isValidCandle({ ...base, timestamp: -8_640_000_000_000_000 })).toBe(true);
+    expect(() => new Date(-8_640_000_000_000_000 + MIN).toISOString()).not.toThrow();
+  });
+
+  it("rejects a timestamp below the Date range", () => {
+    expect(isValidCandle({ ...base, timestamp: -8_640_000_000_000_001 })).toBe(false);
   });
 
   // 有限でも Date の範囲外の値は、lastTickAt や約定時刻の toISOString() で RangeError になる。

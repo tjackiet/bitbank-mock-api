@@ -25,17 +25,19 @@ const CANDLE_SPAN_MS = 60_000;
 
 /**
  * 足として使える値か。有限かつ `0 < low <= open <= high` かつ `low <= close <= high` で、
- * `timestamp` が `Date` の表現範囲に収まること。
+ * `timestamp` とその 1 分後がともに `Date` の表現範囲に収まること。
  *
- * timestamp の上限を見るのは、有限でも `Date` の範囲外（`1e20` など）の値が
+ * timestamp の範囲を見るのは、有限でも `Date` の範囲外（`1e20` など）の値が
  * `runTick` の `new Date(nowMs).toISOString()` と `applyFill` の
  * `new Date(candle.timestamp + 1 分).toISOString()` で `RangeError` になり、
- * `POST /_control/tick` が 500 を返すため。1 分後も範囲に収まる値だけを通す。
+ * `POST /_control/tick` が 500 を返すため。範囲は上下で非対称になる
+ * （`-MAX_EPOCH_MS <= timestamp <= MAX_EPOCH_MS − 1 分`）。1 分の余裕が要るのは
+ * 足の終わりを見る上側だけで、下限そのものは `Date` として有効だから。
  */
 export function isValidCandle(c: Candle): boolean {
   const { open, high, low, close, vol, timestamp } = c;
   if (![open, high, low, close, vol, timestamp].every((n) => Number.isFinite(n))) return false;
-  if (Math.abs(timestamp) > MAX_EPOCH_MS - CANDLE_SPAN_MS) return false;
+  if (timestamp < -MAX_EPOCH_MS || timestamp > MAX_EPOCH_MS - CANDLE_SPAN_MS) return false;
   if (!(open > 0 && high > 0 && low > 0 && close > 0)) return false;
   return low <= open && open <= high && low <= close && close <= high;
 }
