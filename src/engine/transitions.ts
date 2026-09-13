@@ -1,4 +1,5 @@
 import {
+  amountOf,
   availableOf,
   DEFAULT_TAKER_FEE_RATE,
   isActive,
@@ -139,6 +140,16 @@ export function placeOrder(
   return fillOrder(placed, seed.id, marketPrice, input.amount, now, feeRate);
 }
 
+/**
+ * active な注文へ約定を 1 件適用し、注文・trade・残高を同じ返り値で更新する。
+ *
+ * 部分適用が起きないので不変量 5（trade の合計 == `executedAmount`）を保てる。
+ * 残量との差が `AMOUNT_EPS` 以下なら全約定として残量ちょうどに丸め、
+ * `FULLY_FILLED` にする（不変量 1・3）。指値では order price より不利な価格を
+ * `INVALID_PRICE` で断るので、発注時に拘束した分を超えて使わない（不変量 6）。
+ *
+ * 終端・不在の注文、非正や残量超過の量、不正なペアは状態を変えずに失敗を返す。
+ */
 export function fillOrder(
   state: PaperState,
   orderId: string,
@@ -170,11 +181,11 @@ export function fillOrder(
   const feeQuote = notional * feeRate;
   const balances = { ...state.balances };
   if (current.side === "buy") {
-    balances[quote] = (balances[quote] ?? 0) - (notional + feeQuote);
-    balances[base] = (balances[base] ?? 0) + fillAmount;
+    balances[quote] = amountOf(balances, quote) - (notional + feeQuote);
+    balances[base] = amountOf(balances, base) + fillAmount;
   } else {
-    balances[base] = (balances[base] ?? 0) - fillAmount;
-    balances[quote] = (balances[quote] ?? 0) + (notional - feeQuote);
+    balances[base] = amountOf(balances, base) - fillAmount;
+    balances[quote] = amountOf(balances, quote) + (notional - feeQuote);
   }
 
   const executedAmount = fully ? current.startAmount : current.executedAmount + fillAmount;

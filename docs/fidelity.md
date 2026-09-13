@@ -96,6 +96,15 @@
 fail-closed にかかる。なお、v2 のエンジン自身は発注時に `availableOf` を見ていたので、
 v2 が書いた state が不変量 6 を破ることはない（境界の実測は PR の報告を参照）。
 
+**資産キー・ペア名で引く地図は継承値を返さない。** 資産名とペア名は state ファイルや
+リクエスト由来なので、`constructor` のように `Object.prototype` が持つ名前で引かれ得る。
+素の `{}` に `map[key] ?? 既定` で引くと、キーが無いときに継承値（関数）が返って
+`?? 既定` が素通りする。該当する経路（`computeLocked()` / `availableOf()` /
+`invariantViolations()` の不変量 6 / `fillOrder()` の残高更新 / `GET /v1/user/assets` の
+`amount_precision` / `precisionOf()`）は自分のキーだけを読む（`Object.hasOwn`、
+`src/engine/state.ts` の `amountOf()`）。ペアのセグメントは `[a-z0-9]+` に限るので、
+この経路で当たる資産名は `constructor` だけである。
+
 書き込み後（発注・取消・`/_control/` の fill / tick / reset の直後）の検査は入れていない。
 `invariantViolations()` は注文ごとに `state.trades` を `filter` するので費用が注文数 × 約定数に比例し、
 注文 1,000 件・約定 1,000 件で 1 回 11〜13 ms（`POST /_control/orders/:id/fill` の応答が 7.3 ms → 22.1 ms、約 3 倍）、

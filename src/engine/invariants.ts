@@ -1,5 +1,26 @@
-import { computeLocked, DEFAULT_TAKER_FEE_RATE, isTerminal, type PaperState } from "./state.ts";
+import {
+  amountOf,
+  computeLocked,
+  DEFAULT_TAKER_FEE_RATE,
+  isTerminal,
+  type PaperState,
+} from "./state.ts";
 
+/**
+ * 単一の状態から判定できる不変量の違反を並べる。違反が無ければ空配列。
+ *
+ * docs/fidelity.md の「状態の不変量（PaperState v3）」6 本のうち、ここで見るのは
+ * 1〜3・5・6 である。不変量 4（終端のレコードは以後変化しない）は 2 つの状態を
+ * 比べる性質なので対象外で、遷移関数のガードとプロパティテストが担保する。
+ *
+ * 返す文字列は `<不変量の番号>: <対象を特定する識別子と値>` の形で、そのまま
+ * 起動失敗のメッセージに載る（`src/engine/persist.ts` の `loadState()`）。
+ * 不変量 5 の合計の一致は倍精度の丸め誤差を吸収する許容差つきで判定する
+ * （`amount` は `1e-12`、`amount × price` は `1e-6`）。
+ *
+ * 費用は注文ごとに `state.trades` を走査するので注文数 × 約定数に比例する。
+ * 読み込み時に 1 回だけ呼ぶ想定で、書き込みのたびには呼んでいない。
+ */
 export function invariantViolations(
   state: PaperState,
   feeRate: number = DEFAULT_TAKER_FEE_RATE,
@@ -61,8 +82,8 @@ export function invariantViolations(
   const locked = computeLocked(state, feeRate);
   const keys = new Set([...Object.keys(state.balances), ...Object.keys(locked)]);
   for (const k of keys) {
-    const total = state.balances[k] ?? 0;
-    const lockedAmount = locked[k] ?? 0;
+    const total = amountOf(state.balances, k);
+    const lockedAmount = amountOf(locked, k);
     if (total < -1e-9) {
       violations.push(`6: balance[${k}]=${total} is negative`);
     }

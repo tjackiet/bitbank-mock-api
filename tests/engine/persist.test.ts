@@ -164,6 +164,24 @@ describe("読み込み時の不変量検査", () => {
     expect(await readFile(path, "utf-8")).toBe(content);
   });
 
+  // 不変量 6 の検査は資産キーで残高と拘束を引く。`constructor` という資産名では
+  // Object.prototype の継承値を掴んで比較が NaN になり、この state が素通りしていた。
+  it("資産名が Object.prototype のキーでも fail-closed になる", async () => {
+    const state = buildState({
+      balances: { jpy: 1_000_000 },
+      orders: [
+        buildOrder({ id: "1", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 }),
+      ],
+    });
+    await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+
+    const r = await loadState(path);
+    expect(r.success).toBe(false);
+    if (r.success) throw new Error("unreachable");
+    expect(r.error).toContain("6: locked[constructor]=999 exceeds balance=0");
+    await expect(loadOrInitDefault(1_000_000, { path })).rejects.toThrow(/locked\[constructor\]/);
+  });
+
   it("不変量を満たす v3 の state では起動する", async () => {
     const state = buildState({
       balances: { jpy: 9_995_000, btc: 0.001 },
