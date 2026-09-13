@@ -1,4 +1,5 @@
 import {
+  amountOf,
   computeLocked,
   DEFAULT_TAKER_FEE_RATE,
   isActive,
@@ -166,7 +167,7 @@ export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_
   const assets: AssetShape[] = [];
   for (const a of assetSet) {
     const digits = assetPrecision(a);
-    const amounts = assetAmounts(state.balances[a] ?? 0, locked[a] ?? 0, digits);
+    const amounts = assetAmounts(amountOf(state.balances, a), amountOf(locked, a), digits);
     assets.push({
       asset: a,
       free_amount: amounts.free,
@@ -185,9 +186,17 @@ export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_
   return { assets };
 }
 
-/** 応答で宣言する amount_precision。丸めにも同じ値を使う。 */
+/**
+ * 応答で宣言する amount_precision。丸めにも同じ値を使う。
+ *
+ * 資産名は state ファイル由来のペアから来るので、`constructor` のように
+ * `Object.prototype` が持つ名前で引かれ得る。素の `[asset] ?? 既定` だと継承値（関数）を
+ * 掴んで桁が関数になり、`formatUnits` が壊れる。自分のキーだけを見る。
+ */
 function assetPrecision(asset: string): number {
-  return ASSET_AMOUNT_PRECISION[asset] ?? DEFAULT_ASSET_AMOUNT_PRECISION;
+  return Object.hasOwn(ASSET_AMOUNT_PRECISION, asset)
+    ? ASSET_AMOUNT_PRECISION[asset]
+    : DEFAULT_ASSET_AMOUNT_PRECISION;
 }
 
 /**

@@ -41,6 +41,21 @@ describe("POST /v1/user/spot/order", () => {
     expect(body.data.code).toBe(60001);
   });
 
+  // `constructor` を base に持つペアでは availableOf が NaN を返し、`NaN < amount` が
+  // false になるため残高ゼロの売りが受理されていた。通常ペアと同じく 60001 で断る。
+  it("rejects a sell with no balance even when the base asset shadows Object.prototype", async () => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 1_000_000 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "constructor_jpy", amount: "999", price: "100", side: "sell", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(60001);
+    expect(activeOrders(store.state())).toHaveLength(0);
+  });
+
   it("fills market buy at latest candle close", async () => {
     const now = Date.now();
     const { fastify, store } = await build(

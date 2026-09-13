@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultStatePath, loadState, saveState } from "../../src/engine/persist.ts";
 import {
+  amountOf,
   availableOf,
   computeLocked,
   DEFAULT_TAKER_FEE_RATE,
@@ -59,6 +60,30 @@ describe("pure helpers", () => {
     const locked = computeLocked(state, 0.001);
     expect(locked.jpy).toBeCloseTo(1000 * 2 * 1.001, 6);
     expect(locked.btc).toBeCloseTo(0.5, 6);
+  });
+
+  // 素の {} は Object.prototype を継承するので、`constructor` を base に持つペアでは
+  // `locked["constructor"] ?? 0` が関数を掴み、拘束額が文字列連結になっていた。
+  // ペアのセグメントは [a-z0-9]+ なので、この名前で当たるのは `constructor` だけ。
+  it("computeLocked: Object.prototype のキーと同名の資産でも数値で積む", () => {
+    const state = buildState({
+      balances: { jpy: 1_000_000 },
+      orders: [buildOrder({ id: "s", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 })],
+    });
+    const locked = computeLocked(state, 0);
+    expect(locked.constructor).toBe(999);
+    expect(Object.keys(locked)).toEqual(["constructor"]);
+  });
+
+  it("availableOf: Object.prototype のキーと同名の資産でも NaN にならない", () => {
+    const state = buildState({
+      balances: { jpy: 1_000_000 },
+      orders: [buildOrder({ id: "s", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 })],
+    });
+    // 残高に constructor が無いので 0。拘束 999 を引いて -999。NaN だと発注ガードが素通りする。
+    expect(availableOf(state, "constructor", 0)).toBe(-999);
+    expect(amountOf(state.balances, "constructor")).toBe(0);
+    expect(amountOf({ constructor: 3 }, "constructor")).toBe(3);
   });
 
   it("availableOf subtracts locked from total", () => {

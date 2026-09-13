@@ -89,6 +89,19 @@ describe("invariants", () => {
     expect(invariantViolations(state).some((v) => v.includes("has no order"))).toBe(true);
   });
 
+  // 不変量 6 は資産キーで残高と拘束を引く。素の {} だと `constructor` という資産名で
+  // Object.prototype の継承値を掴み、比較が NaN になって違反を取りこぼしていた。
+  // 読み込み時の fail-closed がこの 1 資産だけ素通りするので、明示ケースで固定する。
+  it("flags locked over balance for an asset named like an Object.prototype key", () => {
+    const state = buildState({
+      balances: { jpy: 1_000_000 },
+      orders: [
+        buildOrder({ id: "1", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 }),
+      ],
+    });
+    expect(invariantViolations(state, 0)).toContain("6: locked[constructor]=999 exceeds balance=0");
+  });
+
   it("hold after random place/fill/cancel/reject sequences", () => {
     fc.assert(
       fc.property(

@@ -27,6 +27,28 @@ describe("GET /v1/user/assets", () => {
     expect(Number(btc?.onhand_amount)).toBe(0.5);
   });
 
+  // `constructor` は Object.prototype が持つ名前なので、素の {} から引くと関数が返り、
+  // free_amount が "NaN"、onhand_amount が関数のソース文字列になって応答に漏れていた。
+  it("formats an asset named like an Object.prototype key as a decimal string", async () => {
+    const state = buildState({
+      balances: { jpy: 1_000_000, constructor: 5 },
+      orders: [
+        buildOrder({ id: "1", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 2 }),
+      ],
+    });
+    const { fastify } = await build(state);
+    const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      data: { assets: { asset: string; free_amount: string; locked_amount: string; onhand_amount: string }[] };
+    };
+    const asset = body.data.assets.find((a) => a.asset === "constructor");
+    expect(asset).toBeDefined();
+    expect(asset?.onhand_amount).toBe("5.00000000");
+    expect(asset?.locked_amount).toBe("2.00000000");
+    expect(asset?.free_amount).toBe("3.00000000");
+  });
+
   it("returns fixed-precision decimal strings without floating point dust", async () => {
     // 0.001 BTC @ 15,000,000 の買い指値 6 本。手数料込みの拘束額が
     // 倍精度で 90108.00000000001 になり、残余に塵が出ていた条件。

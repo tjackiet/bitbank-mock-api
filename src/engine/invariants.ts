@@ -1,4 +1,10 @@
-import { computeLocked, DEFAULT_TAKER_FEE_RATE, isTerminal, type PaperState } from "./state.ts";
+import {
+  amountOf,
+  computeLocked,
+  DEFAULT_TAKER_FEE_RATE,
+  isTerminal,
+  type PaperState,
+} from "./state.ts";
 
 export function invariantViolations(
   state: PaperState,
@@ -61,8 +67,8 @@ export function invariantViolations(
   const locked = computeLocked(state, feeRate);
   const keys = new Set([...Object.keys(state.balances), ...Object.keys(locked)]);
   for (const k of keys) {
-    const total = state.balances[k] ?? 0;
-    const lockedAmount = locked[k] ?? 0;
+    const total = amountOf(state.balances, k);
+    const lockedAmount = amountOf(locked, k);
     if (total < -1e-9) {
       violations.push(`6: balance[${k}]=${total} is negative`);
     }

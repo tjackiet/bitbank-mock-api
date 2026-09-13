@@ -136,11 +136,25 @@ export function parseNumericId(id: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * 資産キーで引く地図から金額を読む。素の `{}` は `Object.prototype` を継承するので、
+ * `constructor` のようにそこへ生えている名前の資産では、キーが無くても継承値（関数）が
+ * 返り `?? 0` が素通りする。そのまま数値演算へ流すと `NaN` や文字列連結になり、
+ * 不変量 6 の判定も残高の応答も壊れる。自分のキーだけを見て、無ければ 0 を返す。
+ *
+ * ペアのセグメントは `[a-z0-9]+` なので、この経路で当たる名前は `constructor` だけ。
+ */
+export function amountOf(map: Record<string, number>, asset: string): number {
+  return Object.hasOwn(map, asset) ? map[asset] : 0;
+}
+
 export function computeLocked(
   state: PaperState,
   feeRate: number = DEFAULT_TAKER_FEE_RATE,
 ): Record<string, number> {
-  const locked: Record<string, number> = {};
+  // 資産名は state ファイル由来のペアから来る。継承を持たない地図で受けて、
+  // 読み手が `locked[asset]` と素で引いても継承値を掴まないようにする。
+  const locked: Record<string, number> = Object.create(null);
   for (const o of activeOrders(state)) {
     const assets = pairAssets(o.pair);
     if (!assets) continue;
@@ -149,9 +163,9 @@ export function computeLocked(
     if (o.side === "buy") {
       if (o.price == null) continue;
       const cost = o.price * remaining * (1 + feeRate);
-      locked[quote] = (locked[quote] ?? 0) + cost;
+      locked[quote] = amountOf(locked, quote) + cost;
     } else {
-      locked[base] = (locked[base] ?? 0) + remaining;
+      locked[base] = amountOf(locked, base) + remaining;
     }
   }
   return locked;
@@ -162,7 +176,7 @@ export function availableOf(
   asset: string,
   feeRate: number = DEFAULT_TAKER_FEE_RATE,
 ): number {
-  const total = state.balances[asset] ?? 0;
-  const locked = computeLocked(state, feeRate)[asset] ?? 0;
+  const total = amountOf(state.balances, asset);
+  const locked = amountOf(computeLocked(state, feeRate), asset);
   return total - locked;
 }

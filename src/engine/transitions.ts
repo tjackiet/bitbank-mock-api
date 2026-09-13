@@ -1,4 +1,5 @@
 import {
+  amountOf,
   availableOf,
   DEFAULT_TAKER_FEE_RATE,
   isActive,
@@ -170,11 +171,11 @@ export function fillOrder(
   const feeQuote = notional * feeRate;
   const balances = { ...state.balances };
   if (current.side === "buy") {
-    balances[quote] = (balances[quote] ?? 0) - (notional + feeQuote);
-    balances[base] = (balances[base] ?? 0) + fillAmount;
+    balances[quote] = amountOf(balances, quote) - (notional + feeQuote);
+    balances[base] = amountOf(balances, base) + fillAmount;
   } else {
-    balances[base] = (balances[base] ?? 0) - fillAmount;
-    balances[quote] = (balances[quote] ?? 0) + (notional - feeQuote);
+    balances[base] = amountOf(balances, base) - fillAmount;
+    balances[quote] = amountOf(balances, quote) + (notional - feeQuote);
   }
 
   const executedAmount = fully ? current.startAmount : current.executedAmount + fillAmount;

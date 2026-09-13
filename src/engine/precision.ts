@@ -13,9 +13,14 @@ const PAIR_PRECISION: Record<string, PairPrecision> = {
   btc_jpy: BTC_JPY_PRECISION,
 };
 
-/** 未登録ペアは btc_jpy と同じ JPY スポット桁（数量 4・価格 0）を仮置きする。 */
+/**
+ * 未登録ペアは btc_jpy と同じ JPY スポット桁（数量 4・価格 0）を仮置きする。
+ *
+ * ペア名は state ファイルやリクエスト由来なので、`Object.prototype` が持つ名前で
+ * 引かれると素の `[pair] ?? 既定` は継承値を返す。自分のキーだけを見る。
+ */
 export function precisionOf(pair: string): PairPrecision {
-  return PAIR_PRECISION[pair] ?? BTC_JPY_PRECISION;
+  return Object.hasOwn(PAIR_PRECISION, pair) ? PAIR_PRECISION[pair] : BTC_JPY_PRECISION;
 }
 
 export function fitsDigits(n: number, digits: number): boolean {
