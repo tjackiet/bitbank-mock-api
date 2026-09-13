@@ -81,6 +81,7 @@ describe("SessionStore.tick", () => {
         orders: [
           buildOrder({ id: "1", pair: "../../admin_jpy", side: "sell", price: 100, startAmount: 1 }),
           buildOrder({ id: "2", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 }),
+          buildOrder({ id: "3", pair: "btc\nevil_jpy", side: "sell", price: 100, startAmount: 1 }),
         ],
       }),
       {
@@ -96,9 +97,17 @@ describe("SessionStore.tick", () => {
     );
     await store.tick(T0 + 2 * MIN);
     expect(fetched).toEqual(["btc_jpy"]);
-    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual(["../../admin_jpy"]);
-    // 生の pair はログへ出さない（改行・制御文字で行が割れないよう JSON で包む）
-    expect(warnings).toEqual(['tick: skipping malformed pair "../../admin_jpy"']);
+    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual([
+      "../../admin_jpy",
+      "btc\nevil_jpy",
+    ]);
+    // 生の pair はログへ出さない。改行を含むペアは JSON が \n へ逃がすので、
+    // 警告 1 件がログの 2 行に割れることはない。
+    expect(warnings).toEqual([
+      'tick: skipping malformed pair "../../admin_jpy"',
+      'tick: skipping malformed pair "btc\\nevil_jpy"',
+    ]);
+    expect(warnings.every((w) => !/[\u0000-\u001f]/.test(w))).toBe(true);
   });
 });
 
