@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { defaultFetchCandles, type FetchImpl } from "../../src/engine/candles.ts";
+import { defaultFetchCandles, isValidCandle, type FetchImpl } from "../../src/engine/candles.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,6 +21,31 @@ function mockFetch(body: unknown, init: { status?: number } = {}) {
     json: async () => body,
   }));
 }
+
+describe("isValidCandle", () => {
+  const base = { open: 1, high: 1, low: 1, close: 1, vol: 0 };
+
+  it("accepts a candle whose timestamp is inside the Date range", () => {
+    expect(isValidCandle({ ...base, timestamp: T0 })).toBe(true);
+    // Date の上限ちょうどから足 1 本分を引いた値までは通す。
+    expect(isValidCandle({ ...base, timestamp: 8_640_000_000_000_000 - MIN })).toBe(true);
+  });
+
+  // 有限でも Date の範囲外の値は、lastTickAt や約定時刻の toISOString() で RangeError になる。
+  it.each([[1e20], [8_640_000_000_000_000], [8_640_000_000_000_000 - MIN + 1], [-1e20]])(
+    "rejects a timestamp outside the Date range: %s",
+    (timestamp) => {
+      expect(isValidCandle({ ...base, timestamp })).toBe(false);
+      expect(() => new Date(timestamp + MIN).toISOString()).toThrow(RangeError);
+    },
+  );
+
+  it("still rejects non-finite and inconsistent candles", () => {
+    expect(isValidCandle({ ...base, timestamp: Number.NaN })).toBe(false);
+    expect(isValidCandle({ ...base, low: 0, timestamp: T0 })).toBe(false);
+    expect(isValidCandle({ ...base, high: 0.5, timestamp: T0 })).toBe(false);
+  });
+});
 
 describe("defaultFetchCandles", () => {
   it("parses bitbank candlestick response and returns Candle[]", async () => {
