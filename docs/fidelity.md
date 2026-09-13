@@ -100,7 +100,7 @@ v2 が書いた state が不変量 6 を破ることはない（境界の実測�
 リクエスト由来なので、`constructor` のように `Object.prototype` が持つ名前で引かれ得る。
 素の `{}` に `map[key] ?? 既定` で引くと、キーが無いときに継承値（関数）が返って
 `?? 既定` が素通りする。該当する経路（`computeLocked()` / `availableOf()` /
-`invariantViolations()` の不変量 6 / `applyFill` の残高更新 / `GET /v1/user/assets` の
+`invariantViolations()` の不変量 6 / `fillOrder()` の残高更新 / `GET /v1/user/assets` の
 `amount_precision` / `precisionOf()`）は自分のキーだけを読む（`Object.hasOwn`、
 `src/engine/state.ts` の `amountOf()`）。ペアのセグメントは `[a-z0-9]+` に限るので、
 この経路で当たる資産名は `constructor` だけである。
