@@ -144,7 +144,8 @@ export async function loadOrInitDefault(
   const path = opts.path === undefined ? defaultStatePath("default") : opts.path;
   let state: PaperState;
   if (path) {
-    const r = await loadState(path);
+    // 不変量 6 は手数料込みの拘束額を見るので、SessionStore と同じ手数料率で検査する。
+    const r = await loadState(path, { feeRate: opts.feeRate, logger: opts.logger });
     if (!r.success) throw new Error(r.error);
     state = r.data ?? freshState(initialJpy);
   } else {

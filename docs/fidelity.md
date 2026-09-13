@@ -53,13 +53,55 @@
 | 状態の永続化 | 発注・取消・約定のたびに `PaperState` 全体を状態ファイルへ書き出す。書き出しは一時ファイル + `rename` で原子的なので、読み手が途中の内容を見ることはない。同一プロセス内の書き込みは `SessionStore.persist()` で直列化する。`await store.persist()` が返った時点で、ファイルは**呼び出し時点の状態と同じか、それより新しい状態**を反映する。重なった書き込みは 1 本にまとめ、途中のスナップショットは捨てるが、最後の 1 本は必ず着地する | 本モック固有（`src/store/session.ts` / `src/engine/persist.ts`） | 本物の取引所はクライアント側に口座状態の永続化を持たせない | はい | 書き込みが成功していれば、2xx を受け取った注文は再起動後も状態ファイルに残る。**ただし 2xx だけでは書き込みの成否を判定できない。** 書き込みに失敗したとき（ディスク不足・権限など）、`persist()` は `persist failed: ...` を warn ログへ出すだけで throw せず、ルートは 2xx を返す。応答を返した注文が再起動後に消える経路がここに残るので、実験中は警告ログを監視する。またディレクトリの fsync はしないので、OS ごと落ちた場合の `rename` の耐久性も保証しない（プロセスの再起動は保証範囲） |
 | 同一状態ファイルの多重起動 | **保証しない。** ファイルロックを持たない。同じ `BITBANK_MOCK_STATE_PATH` を指す 2 プロセスを同時に動かすと、各プロセスが独立したメモリ上の状態と `nextOrderSeq` を持ち、後から `rename` した側が相手の注文を丸ごと消す。両プロセスが同じ order id を採番して払い出すことも起きる。状態ファイル 1 つにつきプロセス 1 つで運用する | 本モック固有 | 本物は口座状態を取引所側が単一に持つ | はい（ロックを足さない判断。書き込みロックを入れてもプロセスごとにメモリ上の状態と採番が分かれる以上、注文の消失と id 重複は防げないため、運用の制約として書くことを選んだ） | 実験は 1 プロセスで走らせる。並列度が要るときは `BITBANK_MOCK_STATE_PATH` をシナリオごとに分ける |
 | 壊れた状態ファイル | fail-closed。不正な JSON・スキーマ違反・途中で切れたファイル・空ファイルはいずれも `loadState` が失敗を返し、`loadOrInitDefault` が throw して起動しない。黙って初期状態へ戻さず、壊れたファイルも消さない。ファイルが存在しないときだけ初期状態で始める | 本モック固有 | 本物には対応する概念がない | はい | 「残高が初期値に戻っている」状態でシナリオが進むことはない。起動しなかったこと自体を state 破損の合図として扱える |
+| 不変量を破る状態ファイル | fail-closed。zod スキーマは通るが「状態の不変量」を破る v3 の状態ファイル（`executedAmount > startAmount`、負の残高など）は、`loadState` が移行の直後に `invariantViolations()` を走らせて失敗を返し、`loadOrInitDefault` が throw して起動しない。失敗のメッセージには違反した不変量の番号・注文 ID・値をそのまま載せる（例: `paper state violates invariants: 6 violation(s): 1: order 1 executedAmount=0.005 startAmount=0.001; ...`）。状態は自動修復せず、ファイルも消さない。**v1 / v2 から移行した結果が破っている場合は warn を出して起動する**（下の「不変量をどこで担保するか」を参照） | 本モック固有 | 本物には対応する概念がない | はい | 負の `remaining_amount` や負の `free_amount` が Reconcile 経路へ出ない。Nyx 仕様書 D1 が前提にする 6 本は、起動した時点の状態については成り立っている |
 | 状態の移行の冪等性 | v1 / v2 の状態ファイルを v3 へ移行する変換は決定的で、移行後の v3 を書き戻してもう一度読んでも結果は変わらない | 本モック固有 | 本物には対応する概念がない | いいえ | 旧 state から始めたシナリオでも、再起動のたびに注文・trade が動くことはない |
 | private stream | Phase 5 で PubNub ではなく素の WebSocket を提供する予定 | private stream docs のメッセージ形 | 接続・配信トランスポートが異なる | はい | Nyx 側は PubNub SDK ではなく WebSocket 接続層を使う |
 | private stream の順序 | 配信順序・重複なしを保証しない | private stream docs に順序保証の記載なし | Plan A では障害注入は提供しない | はい | DCL は順不同・重複を許容して状態を解釈する |
 
 ## 状態の不変量（PaperState v3）
 
-`src/engine/invariants.ts` と `tests/engine/invariants.test.ts` で検証する。Nyx 仕様書 D1 の前提になる。
+6 本の述語は `src/engine/invariants.ts` の `invariantViolations()` が定義する。Nyx 仕様書 D1 の前提になる。
+
+### 不変量をどこで担保するか
+
+担保は 3 層ある。**成り立たせているのは遷移関数**（`src/engine/transitions.ts`）で、`invariantViolations()` は
+それを**検査する**側である。検査が走る場所は次の 2 つだけで、通常の発注・約定・取消のあとには走らない。
+
+| 層 | 場所 | いつ走るか |
+| --- | --- | --- |
+| 生成 | `src/engine/transitions.ts`（`placeOrder` / `fillOrder` / `cancelOrder` / `rejectOrder`）と `src/engine/match.ts` | 常時。状態を変える唯一の経路 |
+| 読み込み時の検査 | `src/engine/persist.ts` の `loadState()` | 起動時に状態ファイルを読み、v3 へ移行した直後に 1 回。違反があれば起動しない（v1 / v2 からの移行だけは warn で通す） |
+| テスト | `tests/engine/invariants.test.ts` | `npm test`。fast-check のランダム操作列 40 本 × 各操作の後 |
+
+6 本それぞれの担保箇所は次のとおり。「実行時」は本番経路（`src/`）で検査していることを指す。
+
+| # | 不変量 | 生成（常に保つ側） | 実行時の検査 | テスト |
+| --- | --- | --- | --- | --- |
+| 1 | `0 <= executedAmount <= startAmount` | `fillOrder` が残量超過を `INVALID_AMOUNT` で断り、残量との差が `1e-12` 以下なら `startAmount` にクランプする。`POST /_control/orders/:id/fill` も残量超過を 400 で断る | 読み込み時のみ | あり（ランダム操作列 + 明示ケース） |
+| 2 | `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端。`CANCELED_UNFILLED` / `REJECTED` も 0、`CANCELED_PARTIALLY_FILLED` は `> 0` | `cancelOrder` が現在の status（`PARTIALLY_FILLED` かどうか）で `CANCELED_PARTIALLY_FILLED` / `CANCELED_UNFILLED` を選び、`rejectOrder` は `UNFILLED` / `INACTIVE` にしか許さない | 読み込み時のみ | あり |
+| 3 | `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`） | `fillOrder` が残量 0 になった注文だけを `FULLY_FILLED` にする | 読み込み時のみ | あり |
+| 4 | 終端状態のレコードは以後の遷移で変化しない | `fillOrder` / `cancelOrder` / `rejectOrder` が非 active な注文を `ORDER_NOT_ACTIVE` で断る。`POST /_control/orders/:id/fill` も終端は 409。終端になったレコードを書き換える経路は無い | **無し**（単一状態の述語ではないので `invariantViolations()` は検査できない。読み込み時にも検査されない） | あり。`tests/engine/invariants.test.ts` の「hold after random place/fill/cancel/reject sequences」が終端レコードを `JSON.stringify` で控え、各操作の後と操作列の最後に一致を見る（2 状態の比較なのでここでしか検査できない） |
+| 5 | 各注文で `trades` の `amount` 合計 == `executedAmount`、`amount × price` 合計 == `executedNotional`。孤児 trade は禁止 | `fillOrder` が注文の更新と trade の追加を同じ返り値で行う（部分適用が起きない） | 読み込み時のみ | あり |
+| 6 | 各資産で残高は負にならず、`locked` は残高を超えない | `placeOrder` が `availableOf`（残高 − 拘束）を見て足りなければ `60001` で断る。約定は発注時に拘束した分を超えて使わない（指値の約定価格は order price より不利にならない）ので、`fillOrder` の残高更新で負にはならない。`POST /_control/reset` は負の残高・非有限の残高を 400 `INVALID_BALANCES` で断る | 読み込み時のみ | あり |
+
+不変量 4 以外は単一の状態から判定できるので、`loadState()` が読み込み時に 1 回検査する。
+不変量 4 は「前の状態と比べて変わっていない」という 2 状態の性質なので、`invariantViolations()` の
+対象外であり、遷移関数のガードと上記のプロパティテストだけが担保である。
+
+**移行してきた状態は fail-closed にしない。** 読み込み時の検査で起動を止めるのは、ファイルが
+もともと v3 だったときだけである。v1 / v2 から移行した結果が不変量を破っている場合は
+`migrated paper state violates invariants: ...` を warn に出して起動する。移行の入力は本モックが
+書いたとは限らず（手で書かれた state・別実装が書いた state）、ここで落とすと旧 state の利用者が
+起動できなくなるため。ただし移行後の状態が v3 として書き戻された後は、次の起動で通常の
+fail-closed にかかる。なお、v2 のエンジン自身は発注時に `availableOf` を見ていたので、
+v2 が書いた state が不変量 6 を破ることはない（境界の実測は PR の報告を参照）。
+
+書き込み後（発注・取消・`/_control/` の fill / tick / reset の直後）の検査は入れていない。
+`invariantViolations()` は注文ごとに `state.trades` を `filter` するので費用が注文数 × 約定数に比例し、
+注文 1,000 件・約定 1,000 件で 1 回 11〜13 ms（`POST /_control/orders/:id/fill` の応答が 7.3 ms → 22.1 ms、約 3 倍）、
+5,000 件 × 5,000 件で約 250 ms かかる。読み込み時は起動 1 回だけなので、この費用を払っている。
+
+### 6 本の不変量
 
 1. `0 <= executedAmount <= startAmount`
 2. `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端（`INACTIVE` は Plan A では到達しない）。`CANCELED_UNFILLED` / `REJECTED` も `executedAmount == 0`。`CANCELED_PARTIALLY_FILLED` は `executedAmount > 0`
