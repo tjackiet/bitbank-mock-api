@@ -75,7 +75,16 @@ function syntheticCandle(price: number, timestamp: number): Candle {
   return { open: price, high: price, low: price, close: price, vol: 0, timestamp };
 }
 
+/**
+ * `/_control/` の実験用ルート群。bitbank API には存在しないので、応答は bitbank 封筒に
+ * 包まず素の JSON で返し、失敗は HTTP ステータス（400 / 403 / 404 / 409）で表す。
+ * 登録は `BITBANK_MOCK_CONTROL=1` のときだけ（src/server/http.ts の `buildServer()`）。
+ */
 export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fastify, opts) => {
+  /**
+   * 許可判定。ループバックからは無条件に通し、それ以外は `X-Control-Token` が
+   * `opts.token` と一致するときだけ通す。トークン未設定なら非ループバックは常に 403。
+   */
   fastify.addHook("onRequest", async (request, reply) => {
     if (isLoopback(clientIp(request))) return;
     const expected = opts.token;
@@ -85,8 +94,14 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
     }
   });
 
+  /** `PaperState` をそのまま返す（デバッグ用）。 */
   fastify.get("/state", async () => fastify.store.state());
 
+  /**
+   * 状態を初期化する。`initialJpy` は非負の有限数、`balances` は資産キーが
+   * `[a-z0-9]+` で値が非負の有限数のときだけ受け、外れたら 400 `INVALID_BALANCES` を
+   * 返して状態は変えない。検査を通ったときだけ差し替えて状態ファイルへ書く。
+   */
   fastify.post("/reset", async (request, reply) => {
     const body = asRecord(request.body) ?? {};
     const current = fastify.store.state();

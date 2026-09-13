@@ -111,6 +111,7 @@ describe("/_control routes", () => {
   // 同名ヘッダが 2 行来ると Node は request.headers 側で ", " 繋ぎの 1 本にするので、
   // 繋いだ結果が設定値と一致し得る。行数は生ヘッダで数えて 1 本のときだけ受ける。
   it("takes the token only when exactly one header line carries it", () => {
+    /** 生ヘッダだけを持つ最小の request を作る（`controlTokenHeader` はそこしか見ない）。 */
     const withRaw = (rawHeaders: string[]) =>
       ({ raw: { rawHeaders } }) as unknown as Parameters<typeof controlTokenHeader>[0];
     expect(controlTokenHeader(withRaw(["Host", "x", "X-Control-Token", "secret"]))).toBe("secret");
