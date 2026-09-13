@@ -81,7 +81,7 @@
 | 2 | `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端。`CANCELED_UNFILLED` / `REJECTED` も 0、`CANCELED_PARTIALLY_FILLED` は `> 0` | `cancelOrder` が現在の status（`PARTIALLY_FILLED` かどうか）で `CANCELED_PARTIALLY_FILLED` / `CANCELED_UNFILLED` を選び、`rejectOrder` は `UNFILLED` / `INACTIVE` にしか許さない | 読み込み時のみ | あり |
 | 3 | `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`） | `fillOrder` が残量 0 になった注文だけを `FULLY_FILLED` にする | 読み込み時のみ | あり |
 | 4 | 終端状態のレコードは以後の遷移で変化しない | `fillOrder` / `cancelOrder` / `rejectOrder` が非 active な注文を `ORDER_NOT_ACTIVE` で断る。`POST /_control/orders/:id/fill` も終端は 409。終端になったレコードを書き換える経路は無い | **無し**（単一状態の述語ではないので `invariantViolations()` は検査できない。読み込み時にも検査されない） | あり。`tests/engine/invariants.test.ts` の「hold after random place/fill/cancel/reject sequences」が終端レコードを `JSON.stringify` で控え、各操作の後と操作列の最後に一致を見る（2 状態の比較なのでここでしか検査できない） |
-| 5 | 各注文で `trades` の `amount` 合計 == `executedAmount`、`amount × price` 合計 == `executedNotional`。孤児 trade は禁止 | `fillOrder` が注文の更新と trade の追加を同じ返り値で行う（部分適用が起きない） | 読み込み時のみ | あり |
+| 5 | 各注文で `trades` の `amount` 合計 == `executedAmount`、`amount × price` 合計 == `executedNotional`。孤児 trade は禁止 | `fillOrder` が注文の更新と trade の追加を同じ返り値で行う（部分適用が起きない） | 読み込み時のみ（合計の一致は許容差つきで判定。下記） | あり |
 | 6 | 各資産で残高は負にならず、`locked` は残高を超えない | `placeOrder` が `availableOf`（残高 − 拘束）を見て足りなければ `60001` で断る。約定は発注時に拘束した分を超えて使わない（指値の約定価格は order price より不利にならない）ので、`fillOrder` の残高更新で負にはならない。`POST /_control/reset` は負の残高・非有限の残高を 400 `INVALID_BALANCES` で断る | 読み込み時のみ | あり |
 
 不変量 4 以外は単一の状態から判定できるので、`loadState()` が読み込み時に 1 回検査する。
@@ -107,7 +107,7 @@ v2 が書いた state が不変量 6 を破ることはない（境界の実測�
 2. `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端（`INACTIVE` は Plan A では到達しない）。`CANCELED_UNFILLED` / `REJECTED` も `executedAmount == 0`。`CANCELED_PARTIALLY_FILLED` は `executedAmount > 0`
 3. `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`）
 4. 終端状態（`FULLY_FILLED` / `CANCELED_*` / `REJECTED`）のレコードは以後の遷移で変化しない
-5. 各注文について、`trades` の `amount` 合計 == `executedAmount`、かつ `amount × price` 合計 == `executedNotional`。`orderId` が注文に存在しない trade は禁止
+5. 各注文について、`trades` の `amount` 合計 == `executedAmount`、かつ `amount × price` 合計 == `executedNotional`。`orderId` が注文に存在しない trade は禁止（`invariantViolations()` の判定は倍精度の丸め誤差を吸収する許容差つきで、`amount` の合計は `1e-12`、`amount × price` の合計は `1e-6` を超える差だけを違反とする。等式そのものは緩めていない）
 6. 各資産で残高は負にならず、`locked` は残高を超えない（`availableOf >= 0`。買いの拘束額は手数料込み）
 
 そのほか Phase 1 で決めた内部規則:
