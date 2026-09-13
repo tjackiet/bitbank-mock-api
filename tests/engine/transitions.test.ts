@@ -97,6 +97,24 @@ describe("fillOrder", () => {
     expect(invariantViolations(r.data.state, 0)).toEqual([]);
   });
 
+  // 買いの約定は base 残高を増やす。base が `constructor` だと、state.balances に
+  // そのキーが無いとき素の `balances[base] ?? 0` は Object.prototype の継承値を返し、
+  // 残高が "function Object() { [native code] }1" という文字列になっていた。
+  // 拒否の経路（60001）だけでなく、約定が通る経路も固定しておく。
+  it("credits a numeric balance when the base asset shadows Object.prototype", () => {
+    const order = buildOrder({ pair: "constructor_jpy", side: "buy", price: 100, startAmount: 1 });
+    const state = buildState({ balances: { jpy: 10_000 }, orders: [order] });
+    const r = fillOrder(state, order.id, 100, 1, LATER, 0);
+    expect(r.success).toBe(true);
+    if (!r.success) throw new Error("unreachable");
+    expect(r.data.order.status).toBe("FULLY_FILLED");
+    // 継承値を掴むと文字列連結になるので、型と値の両方を見る。
+    expect(typeof r.data.state.balances.constructor).toBe("number");
+    expect(r.data.state.balances.constructor).toBeCloseTo(1, 10);
+    expect(r.data.state.balances.jpy).toBeCloseTo(10_000 - 100, 10);
+    expect(invariantViolations(r.data.state, 0)).toEqual([]);
+  });
+
   it("completing remaining amount yields FULLY_FILLED", () => {
     const order = buildOrder({
       startAmount: 1,
