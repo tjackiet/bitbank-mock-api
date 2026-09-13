@@ -1,5 +1,7 @@
+import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
+import { controlRoutes } from "../../src/routes/control.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
 import { buildOrder, buildState } from "../engine/helpers.ts";
@@ -88,6 +90,44 @@ describe("/_control routes", () => {
       headers: { "x-control-token": "secret" },
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  // 誤ったトークンは、違う位置・違う長さのどちらでも同じ 403 になる。
+  it.each([["secreT"], ["Secret"], ["s"], ["secret "], ["secretsecret"]])(
+    "forbids non-loopback with a wrong token: %s",
+    async (token) => {
+      const { fastify } = await setup(undefined, { token: "secret" });
+      const res = await fastify.inject({
+        method: "GET",
+        url: "/_control/state",
+        remoteAddress: "10.0.0.8",
+        headers: { "x-control-token": token },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: "FORBIDDEN" });
+    },
+  );
+
+  // 許可判定はソケットの対向アドレスだけを見る。trustProxy を有効にしたサーバでも
+  // X-Forwarded-For でループバックを騙れない（buildServer は trustProxy を設定しないが、
+  // 判定が request.ip に依存していると、有効にした瞬間に境界が消える）。
+  it("ignores X-Forwarded-For even when the server trusts proxies", async () => {
+    const store = new SessionStore(buildState(), { path: null, fillMode: "manual" });
+    const fastify = Fastify({ logger: false, trustProxy: true });
+    fastify.decorate("store", store);
+    await fastify.register(controlRoutes, { prefix: "/_control", token: "secret" });
+    cleanups.push(async () => {
+      await fastify.close();
+    });
+    for (const forwarded of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "127.0.0.1, 10.0.0.8"]) {
+      const res = await fastify.inject({
+        method: "GET",
+        url: "/_control/state",
+        remoteAddress: "10.0.0.8",
+        headers: { "x-forwarded-for": forwarded },
+      });
+      expect(res.statusCode).toBe(403);
+    }
   });
 
   it("fills an active order completely", async () => {
@@ -270,6 +310,59 @@ describe("/_control routes", () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: "INVALID_CANDLE" });
     expect(activeOrders(store.state())).toHaveLength(1);
+  });
+
+  // Date の表現範囲を超える timestamp は有限でも足として使えない。runTick の
+  // new Date(nowMs).toISOString() が RangeError になり 500 を返していた経路。
+  it.each([[1e20], [8.64e15], [-1e20]])(
+    "rejects a candle timestamp outside the Date range without filling: %s",
+    async (timestamp) => {
+      const { fastify, store } = await setup();
+      const before = JSON.stringify(store.state());
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/_control/tick",
+        payload: { pair: "btc_jpy", candle: { open: 1, high: 1, low: 1, close: 1, timestamp } },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: "INVALID_CANDLE" });
+      expect(JSON.stringify(store.state())).toBe(before);
+    },
+  );
+
+  // 資産キーは互換ルートが作るペアのセグメントと同じ文字種だけ通す。通してしまうと
+  // GET /v1/user/assets の asset にそのまま現れ、状態ファイルにも残る。
+  it.each([['{"balances":{"":1}}'], ['{"balances":{"BTC":1}}'], ['{"balances":{"btc jpy":1}}'],
+    ['{"balances":{"btc\\n2026-01-01 INFO injected":1}}'], ['{"balances":{"../../etc/passwd":1}}']])(
+    "rejects a malformed asset key without touching state: %s",
+    async (payload) => {
+      const { fastify, store } = await setup();
+      const before = JSON.stringify(store.state());
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/_control/reset",
+        headers: { "content-type": "application/json" },
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: "INVALID_BALANCES" });
+      expect(JSON.stringify(store.state())).toBe(before);
+    },
+  );
+
+  // __proto__ はルートへ届く前に Fastify の JSON パーサが本文ごと弾く。
+  it("rejects a body carrying a __proto__ key before the route sees it", async () => {
+    const { fastify, store } = await setup();
+    const before = JSON.stringify(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/reset",
+      headers: { "content-type": "application/json" },
+      payload: '{"balances":{"__proto__":1}}',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(store.state())).toBe(before);
+    expect(Object.getPrototypeOf(store.state().balances)).toBe(Object.prototype);
   });
 
   it("resets state", async () => {
