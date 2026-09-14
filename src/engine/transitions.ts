@@ -24,7 +24,27 @@ export const TransitionError = {
   MARKET_PRICE_REQUIRED: "MARKET_PRICE_REQUIRED",
   INVALID_PAIR: "INVALID_PAIR",
   LIMIT_PRICE_REQUIRED: "LIMIT_PRICE_REQUIRED",
+  ORDER_SEQ_EXHAUSTED: "ORDER_SEQ_EXHAUSTED",
+  TRADE_SEQ_EXHAUSTED: "TRADE_SEQ_EXHAUSTED",
 } as const;
+
+/**
+ * 採番がもう一意な id を配れないか。`String(seq)` を配って `seq + 1` へ進める採番は、
+ * `seq` が安全整数を外れた時点で `+ 1` が飽和し、以後は同じ id を配り続ける。
+ *
+ * 読み込み時の検査（`preconditionViolations()`）だけではこれを防げない。検査が見るのは
+ * 読み込んだ時点の `seq` で、飽和は実行中の `+ 1` で起きるからである。境界をどこに引いても
+ * 「あと数件で飽和する `seq`」は検査を通ってしまい、その数件を配った後に重複が出る
+ * （`Number.MAX_SAFE_INTEGER` を弾いても `MAX_SAFE_INTEGER - 1` が同じ道を辿る）。
+ * だから配る側で止める。ここで断る限り、配った id は必ず直前より大きく、重複しない。
+ *
+ * 本モックの採番は 1 から 1 ずつ進むので、通常の利用でここに到達することはない
+ * （`2^53` 件の発注が要る）。届くのは state ファイルに手で大きな採番を書いた場合と、
+ * 巨大な id を持つ v1 / v2 を移行した場合だけである（docs/fidelity.md の「不変量の前提」）。
+ */
+function canIssue(seq: number): boolean {
+  return Number.isSafeInteger(seq);
+}
 
 export type PlaceOrderInput = {
   pair: string;
@@ -69,6 +89,9 @@ export function placeOrder(
   if (!Number.isFinite(input.amount) || input.amount <= 0) {
     return fail(TransitionError.INVALID_AMOUNT);
   }
+  // 飽和した採番からは注文を作らない（同じ id を 2 回配らないため）。指値・成行の
+  // どちらも `String(state.nextOrderSeq)` を配るので、分岐の手前で 1 度だけ見る。
+  if (!canIssue(state.nextOrderSeq)) return fail(TransitionError.ORDER_SEQ_EXHAUSTED);
 
   const [base, quote] = assets;
   if (input.type === "limit") {
@@ -161,6 +184,8 @@ export function fillOrder(
   const current = state.orders.find((o) => o.id === orderId);
   if (!current) return fail(TransitionError.ORDER_NOT_FOUND);
   if (!isActive(current)) return fail(TransitionError.ORDER_NOT_ACTIVE);
+  // trade も同じ採番で id を配る。飽和していれば約定させない（状態は変えない）。
+  if (!canIssue(state.nextTradeSeq)) return fail(TransitionError.TRADE_SEQ_EXHAUSTED);
   const remaining = remainingOf(current);
   if (!Number.isFinite(amount) || amount <= 0 || amount - remaining > AMOUNT_EPS) {
     return fail(TransitionError.INVALID_AMOUNT);

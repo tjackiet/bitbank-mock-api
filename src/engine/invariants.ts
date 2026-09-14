@@ -3,6 +3,7 @@ import {
   computeLocked,
   DEFAULT_TAKER_FEE_RATE,
   isTerminal,
+  issuedSeqOf,
   type PaperState,
 } from "./state.ts";
 
@@ -49,6 +50,9 @@ function sumMismatch(sum: number, expected: number, absTol: number): boolean {
  * docs/fidelity.md の「状態の不変量（PaperState v3）」6 本のうち、ここで見るのは
  * 1〜3・5・6 である。不変量 4（終端のレコードは以後変化しない）は 2 つの状態を
  * 比べる性質なので対象外で、遷移関数のガードとプロパティテストが担保する。
+ *
+ * 6 本が成り立つための**前提**（id の一意性など）はここでは見ない。前提は 7 本目の
+ * 不変量ではないので、下の `preconditionViolations()` が別に見る。
  *
  * 返す文字列は `<不変量の番号>: <対象を特定する識別子と値>` の形で、そのまま
  * 起動失敗のメッセージに載る（`src/engine/persist.ts` の `loadState()`）。
@@ -127,6 +131,95 @@ export function invariantViolations(
     }
     if (lockedAmount - total > 1e-9) {
       violations.push(`6: locked[${k}]=${lockedAmount} exceeds balance=${total}`);
+    }
+  }
+
+  return violations;
+}
+
+/**
+ * 同じ値が 2 件以上ある id を、最初に現れた順に「id → 件数」で返す。
+ */
+function duplicateIds(ids: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+  return new Map([...counts].filter(([, n]) => n > 1));
+}
+
+/**
+ * 採番と既存 id の整合を見る。採番が既存 id 以下だと、採番がその id に追いつく発注で
+ * id が重複する（`nextOrderSeq = 3` で id `5` の注文があると、配られる id は `3` → `4` → `5`
+ * で 3 件目が重なる）。
+ *
+ * **採番が安全整数を超えていること自体は違反にしない。** `+ 1` が飽和して同じ id を配り続ける
+ * のは確かだが、配る側（`src/engine/transitions.ts` の `canIssue()`）が飽和した採番から id を
+ * 配らないので、重複は起きない。飽和した採番は「壊れている」のではなく「使い切った」状態で、
+ * 新しい発注が `ORDER_SEQ_EXHAUSTED` で断られるだけである。
+ *
+ * ここで落とすと、**遷移関数だけを通って作った状態が次の起動で読めなくなる**。
+ * `nextOrderSeq = Number.MAX_SAFE_INTEGER` の state は id `9007199254740991` を 1 件配れて、
+ * そのとき書き出される採番は `9007199254740992` になるからである（不変量 5 の許容差で
+ * 起きたのと同じ型の不具合。docs/fidelity.md の「不変量 5 と `fillOrder` のクランプ」）。
+ *
+ * 飽和した採番は比較にも影響しない。`issuedSeqOf()` が安全整数でない id を除くので、
+ * 比較対象の id はすべて `2^53` 未満であり、飽和した採番より小さい。
+ */
+function seqViolations(kind: "order" | "trade", seq: number, ids: string[]): string[] {
+  const field = kind === "order" ? "nextOrderSeq" : "nextTradeSeq";
+  const violations: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    const n = issuedSeqOf(id);
+    if (n == null || n < seq || seen.has(id)) continue;
+    seen.add(id);
+    violations.push(`${kind}-seq: ${field}=${seq} <= existing ${kind} id ${id}`);
+  }
+  return violations;
+}
+
+/**
+ * 6 本の不変量が成り立つための**前提**の違反を並べる。違反が無ければ空配列。
+ *
+ * これは 7 本目の不変量ではない。6 本は Nyx 仕様書 D1 と対応していて本数も内容も変えない
+ * （docs/fidelity.md の「状態の不変量（PaperState v3）」）。ここで見るのは、その 6 本の主張と
+ * `invariantViolations()` の検査が意味を持つために必要な前提である。だから関数を分け、返す
+ * 文字列の前置きも不変量の番号ではなく前提の名前（`order-id` / `trade-id` / `order-seq` /
+ * `trade-seq` / `start-amount`）にしてある。
+ *
+ * 見るのは 3 つ。
+ *
+ * - **注文 id / trade id の一意性。** 同じ id のレコードが 2 件あると `replaceOrder()`
+ *   （`src/engine/transitions.ts`）が id 一致の全件を置き換えるので、active な方への約定が
+ *   終端レコードまで書き換えて不変量 4 が破れる。`runTick()` は同じ id を 2 回 `applyFill()` へ
+ *   渡すので 2 件目が `ORDER_NOT_ACTIVE` で throw して 500 になり、先頭が終端レコードなら
+ *   取消も約定もできない注文が残る。trade id の重複は `trade_history` に同じ行を 2 つ出す。
+ * - **採番と既存 id の整合。** 一意性は「これから配る id が既存 id と重ならない」ことに
+ *   依存する。判定は上の `seqViolations()` にある。採番が安全整数を使い切った状態は違反に
+ *   しない（配る側が止めるので重複しない。同じく `seqViolations()` の項）。
+ * - **`startAmount > 0`。** 不変量 3（`FULLY_FILLED` ⇔ `executedAmount == startAmount`）が
+ *   条件に含む前提。`startAmount == 0` の注文は残量 0 のまま永遠に active で、`fillOrder` が
+ *   非正の量を断るので約定させる手段が無い。
+ *
+ * 返す文字列は `<前提の名前>: <対象を特定する識別子と値>` の形で、そのまま起動失敗の
+ * メッセージに載る（`src/engine/persist.ts` の `loadState()`）。
+ */
+export function preconditionViolations(state: PaperState): string[] {
+  const violations: string[] = [];
+
+  for (const [id, count] of duplicateIds(state.orders.map((o) => o.id))) {
+    violations.push(`order-id: duplicate order id ${id} (${count} records)`);
+  }
+  for (const [id, count] of duplicateIds(state.trades.map((t) => t.tradeId))) {
+    violations.push(`trade-id: duplicate trade id ${id} (${count} records)`);
+  }
+
+  violations.push(...seqViolations("order", state.nextOrderSeq, state.orders.map((o) => o.id)));
+  violations.push(...seqViolations("trade", state.nextTradeSeq, state.trades.map((t) => t.tradeId)));
+
+  for (const o of state.orders) {
+    // `> 0` の否定なので 0・負・NaN をまとめて拾う（負は不変量 1 も捕まえる）。
+    if (!(o.startAmount > 0)) {
+      violations.push(`start-amount: order ${o.id} startAmount=${o.startAmount}`);
     }
   }
 

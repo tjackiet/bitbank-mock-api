@@ -1,6 +1,6 @@
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { invariantViolations } from "../../src/engine/invariants.ts";
+import { invariantViolations, preconditionViolations } from "../../src/engine/invariants.ts";
 import { activeOrders, isTerminal, remainingOf, type PaperState } from "../../src/engine/state.ts";
 import { cancelOrder, fillOrder, placeOrder, rejectOrder } from "../../src/engine/transitions.ts";
 import { buildOrder, buildState, buildTrade } from "./helpers.ts";
@@ -285,5 +285,129 @@ describe("invariants", () => {
       ),
       { numRuns: 40 },
     );
+  });
+});
+
+/**
+ * 6 本の不変量が成り立つための前提。7 本目の不変量ではないので `invariantViolations()` とは
+ * 別の関数で、返す文字列の前置きも番号ではなく前提の名前になる（docs/fidelity.md の
+ * 「不変量の前提」）。ここでは前提の側だけを見る。
+ */
+describe("invariant preconditions", () => {
+  it("hold on a fresh state", () => {
+    expect(preconditionViolations(buildState())).toEqual([]);
+  });
+
+  it("hold on a state with distinct ids, trades and a consistent sequence", () => {
+    const state = buildState({
+      balances: { jpy: 9_995_000, btc: 0.001 },
+      orders: [
+        buildOrder({ status: "FULLY_FILLED", executedAmount: 0.001, executedNotional: 5_000 }),
+        buildOrder({ id: "2", side: "sell", price: 6_000_000 }),
+      ],
+      trades: [buildTrade()],
+    });
+    expect(preconditionViolations(state)).toEqual([]);
+    expect(invariantViolations(state, 0)).toEqual([]);
+  });
+
+  // 同じ id のレコードが 2 件あると replaceOrder が id 一致の全件を置き換えるので、
+  // active な方への約定が終端レコードまで書き換える（不変量 4 が破れる）。
+  it("flag duplicate order ids with the id and the record count", () => {
+    const state = buildState({
+      orders: [buildOrder(), buildOrder({ status: "REJECTED" })],
+    });
+    expect(preconditionViolations(state)).toEqual(["order-id: duplicate order id 1 (2 records)"]);
+  });
+
+  it("flag duplicate trade ids", () => {
+    const state = buildState({
+      orders: [buildOrder({ status: "FULLY_FILLED", executedAmount: 0.002, executedNotional: 10_000 })],
+      trades: [buildTrade(), buildTrade()],
+    });
+    expect(preconditionViolations(state)).toEqual(["trade-id: duplicate trade id 1 (2 records)"]);
+  });
+
+  // この state 自身に重複は無いが、採番が id 5 に追いつく 3 件目の発注で重複が生まれる。
+  it("flag a sequence that is not greater than an existing id", () => {
+    const orders = buildState({
+      orders: [buildOrder({ id: "5", side: "sell" }), buildOrder({ id: "3", side: "sell" })],
+      nextOrderSeq: 3,
+    });
+    expect(preconditionViolations(orders)).toEqual([
+      "order-seq: nextOrderSeq=3 <= existing order id 5",
+      "order-seq: nextOrderSeq=3 <= existing order id 3",
+    ]);
+
+    const trades = buildState({
+      orders: [buildOrder({ status: "FULLY_FILLED", executedAmount: 0.001, executedNotional: 5_000 })],
+      trades: [buildTrade({ tradeId: "2" })],
+      nextTradeSeq: 1,
+    });
+    expect(preconditionViolations(trades)).toEqual([
+      "trade-seq: nextTradeSeq=1 <= existing trade id 2",
+    ]);
+  });
+
+  // 飽和した採番は「壊れている」のではなく「使い切った」状態である。配る側
+  // （transitions.ts の canIssue）が止めるので重複は起きない。ここで違反にすると、
+  // 遷移関数だけを通って作った状態が次の起動で読めなくなる（tests/engine/persist.test.ts
+  // の「採番を使い切った直後の状態」）。
+  it("do not flag an exhausted sequence", () => {
+    const orders = buildState({ nextOrderSeq: Number.MAX_SAFE_INTEGER + 1 });
+    expect(preconditionViolations(orders)).toEqual([]);
+    const trades = buildState({ nextTradeSeq: Number.MAX_SAFE_INTEGER + 1 });
+    expect(preconditionViolations(trades)).toEqual([]);
+  });
+
+  // 採番は `String(seq)` を配るので、`"007"` や安全整数を超える表記の id とはぶつからない。
+  it("do not flag ids the numbering can never issue", () => {
+    const state = buildState({
+      orders: [
+        buildOrder({ id: "007", side: "sell" }),
+        buildOrder({ id: "9007199254740993", side: "sell" }),
+        buildOrder({ id: "0", side: "sell" }),
+      ],
+      nextOrderSeq: 1,
+    });
+    expect(preconditionViolations(state)).toEqual([]);
+  });
+
+  // 不変量 3 が条件に含む前提。残量 0 のまま永遠に active で、約定させる手段が無い。
+  it("flag startAmount that is not positive", () => {
+    const state = buildState({ orders: [buildOrder({ startAmount: 0 })] });
+    expect(preconditionViolations(state)).toEqual(["start-amount: order 1 startAmount=0"]);
+  });
+
+  // 読み込みで前提を検査しても、起動後に遷移関数が前提を壊すなら意味がない。発注は
+  // `String(nextOrderSeq)` を配って採番を 1 進めるだけなので、前提を満たす状態から
+  // 始まる限り重複は生まれない。不変量と同じランダムな操作列で確かめる。
+  it("hold after random place/fill/cancel/reject sequences", () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.tuple(fc.integer(), fc.integer(), fc.integer()), {
+          minLength: 1,
+          maxLength: 40,
+        }),
+        (ops) => {
+          let state = buildState({ balances: { jpy: 10_000_000_000, btc: 1_000_000 } });
+          expect(preconditionViolations(state)).toEqual([]);
+          for (const [kind, a, b] of ops) {
+            state = applyRandomOp(state, kind, a, b);
+            expect(preconditionViolations(state)).toEqual([]);
+          }
+        },
+      ),
+      { numRuns: 40 },
+    );
+  });
+
+  // 前提と不変量は別物である。重複 id の state は 6 本の不変量をどれも破っていない。
+  it("are disjoint from the six invariants", () => {
+    const state = buildState({
+      orders: [buildOrder(), buildOrder({ status: "REJECTED" })],
+    });
+    expect(invariantViolations(state, 0)).toEqual([]);
+    expect(preconditionViolations(state)).toHaveLength(1);
   });
 });

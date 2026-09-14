@@ -277,3 +277,74 @@ describe("cancelOrder / rejectOrder", () => {
     expect(invariantViolations(r.data.state)).toEqual([]);
   });
 });
+
+/**
+ * 採番は `String(seq)` を配って `seq + 1` へ進めるので、`seq` が安全整数を外れると
+ * `+ 1` が飽和して同じ id を配り続ける。読み込み時の検査（`preconditionViolations()`）は
+ * 読み込んだ時点の `seq` しか見られず、飽和は実行中に起きるので防げない。配る側で断る。
+ */
+describe("採番の飽和", () => {
+  const MAX = Number.MAX_SAFE_INTEGER;
+
+  function idsFrom(seq: number, count: number): string[] {
+    let state = buildState({ balances: { jpy: 1e12, btc: 1e6 }, nextOrderSeq: seq });
+    const ids: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const r = placeOrder(
+        state,
+        { pair: "btc_jpy", side: "sell", type: "limit", amount: 0.001, price: 6_000_000 },
+        NOW,
+        undefined,
+        0,
+      );
+      if (!r.success) {
+        ids.push(`FAIL:${r.error}`);
+        break;
+      }
+      state = r.data.state;
+      ids.push(r.data.order.id);
+    }
+    return ids;
+  }
+
+  // 境界のどこから始めても、配る id は必ず直前より大きく、重複しない。
+  // `MAX_SAFE_INTEGER` を配り切った次で断る。
+  it("飽和した採番からは発注できず、同じ id を 2 回配らない", () => {
+    expect(idsFrom(MAX, 4)).toEqual(["9007199254740991", "FAIL:ORDER_SEQ_EXHAUSTED"]);
+    expect(idsFrom(MAX - 1, 4)).toEqual([
+      "9007199254740990",
+      "9007199254740991",
+      "FAIL:ORDER_SEQ_EXHAUSTED",
+    ]);
+    // 読み込み時の検査が弾く値（安全整数の外）からは 1 件も配らない。
+    expect(idsFrom(MAX + 1, 2)).toEqual(["FAIL:ORDER_SEQ_EXHAUSTED"]);
+  });
+
+  it("成行でも飽和した採番からは注文を作らない", () => {
+    const state = buildState({ nextOrderSeq: MAX + 1 });
+    const r = placeOrder(
+      state,
+      { pair: "btc_jpy", side: "buy", type: "market", amount: 0.001 },
+      NOW,
+      5_000_000,
+      0,
+    );
+    expect(r.success).toBe(false);
+    if (r.success) throw new Error("unreachable");
+    expect(r.error).toBe(TransitionError.ORDER_SEQ_EXHAUSTED);
+  });
+
+  it("trade の採番が飽和していれば約定させない（状態は変えない）", () => {
+    const state = buildState({
+      orders: [buildOrder({ side: "sell" })],
+      balances: { jpy: 10_000_000, btc: 1 },
+      nextTradeSeq: MAX + 1,
+    });
+    const snapshot = structuredClone(state);
+    const r = fillOrder(state, "1", 5_000_000, 0.001, LATER, 0);
+    expect(r.success).toBe(false);
+    if (r.success) throw new Error("unreachable");
+    expect(r.error).toBe(TransitionError.TRADE_SEQ_EXHAUSTED);
+    expect(state).toEqual(snapshot);
+  });
+});

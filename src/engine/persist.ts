@@ -2,11 +2,11 @@ import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import { invariantViolations } from "./invariants.ts";
+import { invariantViolations, preconditionViolations } from "./invariants.ts";
 import {
   DEFAULT_TAKER_FEE_RATE,
+  issuedSeqOf,
   PaperStateSchema,
-  parseNumericId,
   type OrderRecord,
   type PaperState,
   type TradeRecord,
@@ -75,13 +75,55 @@ function migrateToV2(parsed: z.infer<typeof PaperStateSchemaV1>): PaperStateV2 {
   };
 }
 
+/**
+ * 移行で重複した注文 id を振り直す採番器を作る。同じ id が初めて来たらそのまま通し、
+ * 2 件目からは入力のどの id とも既に配った id とも重ならない最小の 10 進表記を配る。
+ *
+ * **これは壊れた状態の修復ではなく変換の一部である。** v1 / v2 の `openOrders` と `history` は
+ * それぞれ別の配列で、移行は両者を 1 本の `orders` へ積み直す。積み方を決めるのは移行であり、
+ * 衝突しない id を振ることはその一部にあたる（v3 の壊れた state ファイルは修復せず落とす。
+ * `loadState()` の項を参照）。重複を残したまま起動させると、`replaceOrder()` が id 一致の
+ * 全件を置き換えるせいで不変量 4 が破れ、`runTick()` は 500 になり、先頭が終端レコードなら
+ * 取消も約定もできない注文が残る。warn で知らせても利用者にできることが無い。
+ *
+ * id を保つのは先に積まれる方、すなわち `openOrders` 側である。まだ生きている注文の id は
+ * 取消に使えなければならないので、履歴側より優先する。
+ *
+ * 配る側を 1 から探すのは、入力の id が大きくても採番が安全整数を超えないようにするため。
+ */
+function makeOrderIdAssigner(v2: PaperStateV2): (id: string) => string {
+  // 入力に現れる id は、まだ出力へ積んでいなくても避ける。避けないと後ろの
+  // `openOrders` / `history` が持つ id を先に配ってしまい、重複が戻ってくる。
+  const reserved = new Set<string>([
+    ...v2.openOrders.map((o) => o.id),
+    ...v2.history.map((h) => h.id),
+  ]);
+  const used = new Set<string>();
+  let next = 1;
+  return (id) => {
+    if (!used.has(id)) {
+      used.add(id);
+      return id;
+    }
+    let fresh = String(next);
+    while (reserved.has(fresh) || used.has(fresh)) {
+      next += 1;
+      fresh = String(next);
+    }
+    next += 1;
+    used.add(fresh);
+    return fresh;
+  };
+}
+
 function migrateToV3(v2: PaperStateV2): PaperState {
   const orders: OrderRecord[] = [];
   const trades: TradeRecord[] = [];
+  const assignOrderId = makeOrderIdAssigner(v2);
 
   for (const o of v2.openOrders) {
     orders.push({
-      id: o.id,
+      id: assignOrderId(o.id),
       pair: o.pair,
       side: o.side,
       type: "limit",
@@ -98,8 +140,10 @@ function migrateToV3(v2: PaperStateV2): PaperState {
 
   let tradeSeq = 1;
   for (const h of v2.history) {
+    // trade は同じ注文を指さなければならない（不変量 5）。振り直した id をそのまま使う。
+    const orderId = assignOrderId(h.id);
     orders.push({
-      id: h.id,
+      id: orderId,
       pair: h.pair,
       side: h.side,
       type: h.type,
@@ -114,7 +158,7 @@ function migrateToV3(v2: PaperStateV2): PaperState {
     });
     trades.push({
       tradeId: String(tradeSeq),
-      orderId: h.id,
+      orderId,
       pair: h.pair,
       side: h.side,
       type: h.type,
@@ -127,9 +171,14 @@ function migrateToV3(v2: PaperStateV2): PaperState {
     tradeSeq += 1;
   }
 
-  const numericIds = orders
-    .map((o) => parseNumericId(o.id))
-    .filter((n): n is number => n != null);
+  // 採番の初期値は「配り得る id の最大 + 1」。判定は `preconditionViolations()` と同じ
+  // `issuedSeqOf()` を使う。ずれると移行の出力が自分の検査に落ちるため。
+  // `"007"` のように配られない表記の id は最大に数えない（`String(seq)` と一致しないので
+  // 採番がぶつかることはなく、数えると採番を無用に大きくする）。
+  const maxIssued = orders.reduce((max, o) => {
+    const n = issuedSeqOf(o.id);
+    return n != null && n > max ? n : max;
+  }, 0);
 
   return {
     version: 3,
@@ -140,7 +189,7 @@ function migrateToV3(v2: PaperStateV2): PaperState {
     balances: v2.balances,
     orders,
     trades,
-    nextOrderSeq: numericIds.reduce((max, n) => (n > max ? n : max), 0) + 1,
+    nextOrderSeq: maxIssued + 1,
     nextTradeSeq: tradeSeq,
   };
 }
@@ -185,6 +234,18 @@ export type LoadStateOptions = {
  * 結果が不変量を破る場合は warn を出して起動する（docs/fidelity.md の同節に記載）。
  * 移行の入力は本モックが書いたとは限らず、ここで落とすと旧 state の利用者が
  * 起動できなくなるため。移行後の状態が書き戻されれば、次回の起動では v3 として検査される。
+ *
+ * 不変量の**前提**（注文 id / trade id の一意性、採番と既存 id の整合、`startAmount > 0`）も
+ * 同じ扱いで検査する（`preconditionViolations()`）。前提の違反は不変量とは別の関数・別の
+ * メッセージにする。6 本は Nyx 仕様書 D1 と対応していて本数も内容も変えないからで、
+ * 前提を混ぜると 7 本目に見える。
+ *
+ * 前提を破って落とすときは不変量の違反を並べない。`invariantViolations()` の文字列は注文を
+ * id で指すので、id が重複している状態ではどのレコードの話か定まらないためである。
+ *
+ * 移行の側は id の重複を作らない（`makeOrderIdAssigner()`）ので、重複を抱えた状態はここを
+ * 必ず fail-closed で通る。移行の warn に残る前提の破れは、`startAmount == 0` のように
+ * 移行の入力そのものが持っていたものだけで、どれも起動後に 500 や書き換えを起こさない。
  */
 export async function loadState(
   path: string,
@@ -198,6 +259,18 @@ export async function loadState(
     }
     const migrated = parsed.data.version !== 3;
     const state = migrateToLatest(parsed.data);
+    const logger = opts.logger ?? noopLogger;
+
+    const preconditions = preconditionViolations(state);
+    if (preconditions.length > 0) {
+      // 違反文字列は preconditionViolations が返すまま出す（どの前提のどの id かを残す）。
+      const detail = `${preconditions.length} violation(s): ${preconditions.join("; ")}`;
+      if (!migrated) {
+        return { success: false, error: `paper state violates invariant preconditions: ${detail}` };
+      }
+      logger.warn(`migrated paper state violates invariant preconditions: ${detail}`);
+    }
+
     const violations = invariantViolations(state, opts.feeRate ?? DEFAULT_TAKER_FEE_RATE);
     if (violations.length > 0) {
       // 違反文字列は invariantViolations が返すまま出す（どの不変量のどの注文かを残す）。
@@ -205,7 +278,6 @@ export async function loadState(
       if (!migrated) {
         return { success: false, error: `paper state violates invariants: ${detail}` };
       }
-      const logger = opts.logger ?? noopLogger;
       logger.warn(`migrated paper state violates invariants: ${detail}`);
     }
     return { success: true, data: state };

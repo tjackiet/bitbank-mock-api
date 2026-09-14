@@ -19,7 +19,7 @@
 | 存在しない単一注文 ID | `GET order` は `50009` を返す。`pair` 不一致も `50009` | 公式は「3 か月超の終端注文は 50009」のみ明記 | 存在しない ID 自体の明記はない | はい | snapshot を取得できない注文は DCL が stale / fail-closed と扱う |
 | 存在しない一括照会 ID | `orders_info` はエラーにせず該当 ID を `orders` から除外する。0 件でも `success: 1`。応答順はリクエストの `order_ids` 順 | 公式は「3 か月超の終端注文は返さない」と明記 | 存在しない ID への適用と配列順は未明記 | はい | Nyx 側は欠落 ID の再照会上限を持つ必要がある |
 | 注文状態 | `INACTIVE` を含む公式の 7 値を `OrderRecord.status` に持つ。Plan A で `INACTIVE` は到達しない | REST API: Fetch order information | 逆指値等は未実装 | いいえ | 終端状態の不変性を検証対象にする |
-| 注文 ID | 状態の `nextOrderSeq`（初期値 1）を永続化し、発注のたびに単調増加させる | 公式は数値の order id を定義 | 実取引所の桁数・採番方式とは異なる。v2 から移行した巨大 ID（旧 `Date.now() * 1000 + counter`）がある場合は、その最大値 + 1 から続くので桁が大きく残る | はい | シナリオの再現性と再起動後の一意性を優先 |
+| 注文 ID | 状態の `nextOrderSeq`（初期値 1）を永続化し、発注のたびに単調増加させる。採番が安全整数を使い切ったら発注を断る（`create_order` は 70001。同じ id を 2 回配らないため。下の「不変量の前提」） | 公式は数値の order id を定義 | 実取引所の桁数・採番方式とは異なる。v2 から移行した巨大 ID（旧 `Date.now() * 1000 + counter`）がある場合は、その最大値 + 1 から続くので桁が大きく残る | はい | シナリオの再現性と再起動後の一意性を優先 |
 | trade ID | 注文 ID とは別の `nextTradeSeq`（初期値 1）を永続化する。v2 の `history.id` は使わず 1 から振り直す | 公式の trade history は trade_id を持つ | 本物の採番とは一致しない | はい | 部分約定でも trade を一意に参照できる |
 | 成行注文の記録 | 成行も `OrderRecord` を採番し、即時 `fillOrder` して `FULLY_FILLED` として残す | 公式は成行も order id を返す | 旧モックは成行を `history` にだけ入れ、注文レコードを持たなかった | はい | Phase 2 の ID 照会で成行も引ける前提になる |
 | v2 からの移行 | 旧 `openOrders` は `UNFILLED`、旧 `history` は `FULLY_FILLED` + `trades`。`history.filledAt` を移行後の `orderedAt` とする | 旧 state に発注時刻がない | 移行済み注文の `ordered_at` は真の発注時刻ではない | はい | 既存ローカル state の照会結果は研究データに使わない |
@@ -55,7 +55,7 @@
 | 状態の永続化 | 発注・取消・約定のたびに `PaperState` 全体を状態ファイルへ書き出す。書き出しは一時ファイル + `rename` で原子的なので、読み手が途中の内容を見ることはない。同一プロセス内の書き込みは `SessionStore.persist()` で直列化する。`await store.persist()` が返った時点で、ファイルは**呼び出し時点の状態と同じか、それより新しい状態**を反映する。重なった書き込みは 1 本にまとめ、途中のスナップショットは捨てるが、最後の 1 本は必ず着地する | 本モック固有（`src/store/session.ts` / `src/engine/persist.ts`） | 本物の取引所はクライアント側に口座状態の永続化を持たせない | はい | 書き込みが成功していれば、2xx を受け取った注文は再起動後も状態ファイルに残る。**ただし 2xx だけでは書き込みの成否を判定できない。** 書き込みに失敗したとき（ディスク不足・権限など）、`persist()` は `persist failed: ...` を warn ログへ出すだけで throw せず、ルートは 2xx を返す。応答を返した注文が再起動後に消える経路がここに残るので、実験中は警告ログを監視する。またディレクトリの fsync はしないので、OS ごと落ちた場合の `rename` の耐久性も保証しない（プロセスの再起動は保証範囲） |
 | 同一状態ファイルの多重起動 | **保証しない。** ファイルロックを持たない。同じ `BITBANK_MOCK_STATE_PATH` を指す 2 プロセスを同時に動かすと、各プロセスが独立したメモリ上の状態と `nextOrderSeq` を持ち、後から `rename` した側が相手の注文を丸ごと消す。両プロセスが同じ order id を採番して払い出すことも起きる。状態ファイル 1 つにつきプロセス 1 つで運用する | 本モック固有 | 本物は口座状態を取引所側が単一に持つ | はい（ロックを足さない判断。書き込みロックを入れてもプロセスごとにメモリ上の状態と採番が分かれる以上、注文の消失と id 重複は防げないため、運用の制約として書くことを選んだ） | 実験は 1 プロセスで走らせる。並列度が要るときは `BITBANK_MOCK_STATE_PATH` をシナリオごとに分ける |
 | 壊れた状態ファイル | fail-closed。不正な JSON・スキーマ違反・途中で切れたファイル・空ファイルはいずれも `loadState` が失敗を返し、`loadOrInitDefault` が throw して起動しない。黙って初期状態へ戻さず、壊れたファイルも消さない。ファイルが存在しないときだけ初期状態で始める | 本モック固有 | 本物には対応する概念がない | はい | 「残高が初期値に戻っている」状態でシナリオが進むことはない。起動しなかったこと自体を state 破損の合図として扱える |
-| 不変量を破る状態ファイル | fail-closed。zod スキーマは通るが「状態の不変量」を破る v3 の状態ファイル（`executedAmount > startAmount`、負の残高など）は、`loadState` が移行の直後に `invariantViolations()` を走らせて失敗を返し、`loadOrInitDefault` が throw して起動しない。失敗のメッセージには違反した不変量の番号と、対象を特定する識別子と値をそのまま載せる（不変量 1〜3・5 は注文 ID、注文の無い trade は trade ID、不変量 6 は資産キー `balance[<asset>]` / `locked[<asset>]`）（例: `paper state violates invariants: 6 violation(s): 1: order 1 executedAmount=0.005 startAmount=0.001; ...`）。状態は自動修復せず、ファイルも消さない。**v1 / v2 から移行した結果が破っている場合は warn を出して起動する**（下の「不変量をどこで担保するか」を参照） | 本モック固有 | 本物には対応する概念がない | はい | 負の `remaining_amount` や負の `free_amount` が Reconcile 経路へ出ない。ただし保証の範囲は 6 本すべてではない。warn なしで起動した v3 の state について読み込み時に検査済みなのは不変量 1〜3・5・6 で、不変量 4 は単一の状態からは判定できないため検査していない（遷移関数のガードとテストで担保）。移行の warn が出た state は違反したまま起動しているので、この検査済みの保証は付かない |
+| 不変量を破る状態ファイル | fail-closed。zod スキーマは通るが「状態の不変量」を破る v3 の状態ファイル（`executedAmount > startAmount`、負の残高など）は、`loadState` が移行の直後に `invariantViolations()` を走らせて失敗を返し、`loadOrInitDefault` が throw して起動しない。同じ場所で不変量の**前提**（注文 id / trade id の一意性、採番と既存 id の整合、`startAmount > 0`）も `preconditionViolations()` が検査し、破れていれば `paper state violates invariant preconditions: ...` で同じく起動しない（下の「不変量の前提」）。失敗のメッセージには違反した不変量の番号と、対象を特定する識別子と値をそのまま載せる（不変量 1〜3・5 は注文 ID、注文の無い trade は trade ID、不変量 6 は資産キー `balance[<asset>]` / `locked[<asset>]`）（例: `paper state violates invariants: 6 violation(s): 1: order 1 executedAmount=0.005 startAmount=0.001; ...`）。状態は自動修復せず、ファイルも消さない。**v1 / v2 から移行した結果が破っている場合は warn を出して起動する**（下の「不変量をどこで担保するか」を参照） | 本モック固有 | 本物には対応する概念がない | はい | 負の `remaining_amount` や負の `free_amount` が Reconcile 経路へ出ない。ただし保証の範囲は 6 本すべてではない。warn なしで起動した v3 の state について読み込み時に検査済みなのは不変量 1〜3・5・6 で、不変量 4 は単一の状態からは判定できないため検査していない（遷移関数のガードとテストで担保）。移行の warn が出た state は違反したまま起動しているので、この検査済みの保証は付かない |
 | 状態の移行の冪等性 | v1 / v2 の状態ファイルを v3 へ移行する変換は決定的で、移行後の v3 を書き戻してもう一度読んでも結果は変わらない | 本モック固有 | 本物には対応する概念がない | いいえ | 旧 state から始めたシナリオでも、再起動のたびに注文・trade が動くことはない |
 | private stream | Phase 5 で PubNub ではなく素の WebSocket を提供する予定 | private stream docs のメッセージ形 | 接続・配信トランスポートが異なる | はい | Nyx 側は PubNub SDK ではなく WebSocket 接続層を使う |
 | private stream の順序 | 配信順序・重複なしを保証しない | private stream docs に順序保証の記載なし | Plan A では障害注入は提供しない | はい | DCL は順不同・重複を許容して状態を解釈する |
@@ -63,6 +63,8 @@
 ## 状態の不変量（PaperState v3）
 
 6 本の不変量は Nyx 仕様書 D1 の前提になる。うち単一の状態から判定できる 1〜3・5・6 の述語は `src/engine/invariants.ts` の `invariantViolations()` が定義する。不変量 4 は 2 つの状態を比べる性質なので `invariantViolations()` の対象外である（担保は次節）。
+
+6 本が成り立つための**前提**（注文 id / trade id の一意性など）は同じファイルの `preconditionViolations()` が別に定義する。前提は 7 本目の不変量ではないので関数を分けてある（下の「不変量の前提」）。
 
 ### 不変量をどこで担保するか
 
@@ -72,8 +74,8 @@
 | 層 | 場所 | いつ走るか |
 | --- | --- | --- |
 | 生成 | `src/engine/transitions.ts`（`placeOrder` / `fillOrder` / `cancelOrder` / `rejectOrder`）と `src/engine/match.ts` | 常時。注文・約定・残高を変える唯一の経路（`rejectOrder` は本番経路から呼ばれておらず、テストからのみ到達する）。`SessionStore.tick()` は market モードでこの層（`runTick()` → `fillOrder()`）を通して注文・約定・残高・`nextTradeSeq` を変え、そのうえで `lastTickAt` / `updatedAt` を実時刻へ上書きする（manual モードは早期 return で何も変えない）。この層を通さずに `PaperState` を差し替えるのは `POST /_control/reset`（全レコードを捨てて作り直す）と `POST /_control/clock`（`lastTickAt` / `updatedAt` だけ）である |
-| 読み込み時の検査 | `src/engine/persist.ts` の `loadState()` | 起動時に状態ファイルを読み、v3 へ移行した直後に 1 回。違反があれば起動しない（v1 / v2 からの移行だけは warn で通す） |
-| テスト | `tests/engine/invariants.test.ts` | `npm test`。fast-check のランダム操作列 40 本 × 各操作の後。操作は `btc_jpy` の**指値**の発注・約定・取消・拒否だけで、手数料率は 0、数量は `0.001`〜`0.006` と `8192.0011`〜`8192.006`（約 1/3 が大きい側。クランプの境界を跨ぐため）。約定は半分の確率で部分約定済みの注文から選ぶ（クランプは「部分約定のあとに残量ちょうどを約定させる」経路でしか踏まないため）。これとは別に、`8192`〜`16383` の `startAmount` を部分約定 → 全約定させる性質を 500 本回す。成行・`runTick()`・移行・`/_control/` の各口・複数ペア・重複 id は含まない |
+| 読み込み時の検査 | `src/engine/persist.ts` の `loadState()` | 起動時に状態ファイルを読み、v3 へ移行した直後に 1 回。不変量の前提（`preconditionViolations()`）を先に、続けて不変量（`invariantViolations()`）を見る。違反があれば起動しない（v1 / v2 からの移行だけは warn で通す）。前提が破れて落とすときは不変量の違反を並べない。`invariantViolations()` の文字列は注文を id で指すので、id が重複した状態ではどのレコードの話か定まらないため |
+| テスト | `tests/engine/invariants.test.ts` | `npm test`。fast-check のランダム操作列 40 本 × 各操作の後。操作は `btc_jpy` の**指値**の発注・約定・取消・拒否だけで、手数料率は 0、数量は `0.001`〜`0.006` と `8192.0011`〜`8192.006`（約 1/3 が大きい側。クランプの境界を跨ぐため）。約定は半分の確率で部分約定済みの注文から選ぶ（クランプは「部分約定のあとに残量ちょうどを約定させる」経路でしか踏まないため）。これとは別に、`8192`〜`16383` の `startAmount` を部分約定 → 全約定させる性質を 500 本回す。成行・`runTick()`・移行・`/_control/` の各口・複数ペア・重複 id は含まない。同じ操作列で不変量の前提（`preconditionViolations()`）も各操作の後に検査する（遷移関数からは重複 id を作れないことの確認であり、重複した状態を操作列が作るわけではない） |
 
 6 本それぞれの担保箇所は次のとおり。「実行時」は本番経路（`src/`）で検査していることを指す。
 
@@ -82,50 +84,121 @@
 | 1 | `0 <= executedAmount <= startAmount` | `fillOrder` が残量超過を `INVALID_AMOUNT` で断り、残量との差が `1e-12` 以下なら `startAmount` にクランプする。`POST /_control/orders/:id/fill` も残量超過を 400 で断る | 読み込み時のみ | あり（ランダム操作列 + 明示ケース） |
 | 2 | `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端。`CANCELED_UNFILLED` / `REJECTED` も 0、`CANCELED_PARTIALLY_FILLED` は `> 0` | `cancelOrder` が現在の status（`PARTIALLY_FILLED` かどうか）で `CANCELED_PARTIALLY_FILLED` / `CANCELED_UNFILLED` を選び、`rejectOrder` は `UNFILLED` / `INACTIVE` にしか許さない | 読み込み時のみ | あり |
 | 3 | `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`） | `fillOrder` が残量 0 になった注文だけを `FULLY_FILLED` にする | 読み込み時のみ | あり |
-| 4 | 終端状態のレコードは以後の遷移で変化しない | `fillOrder` / `cancelOrder` / `rejectOrder` が非 active な注文を `ORDER_NOT_ACTIVE` で断る。`POST /_control/orders/:id/fill` も終端は 409。ただしこのガードは**注文 id が一意であること**を前提にしており、同じ id のレコードが 2 件あると `replaceOrder()`（`src/engine/transitions.ts`）が id 一致の全件を置き換えるため、active な方への約定・取消が終端レコードを書き換える（下の「不変量の前提として検査していないもの」） | **無し**（単一状態の述語ではないので `invariantViolations()` は検査できない。読み込み時にも検査されない） | あり。`tests/engine/invariants.test.ts` の「hold after random place/fill/cancel/reject sequences」が終端レコードを `JSON.stringify` で控え、各操作の後と操作列の最後に一致を見る（2 状態の比較なのでここでしか検査できない） |
+| 4 | 終端状態のレコードは以後の遷移で変化しない | `fillOrder` / `cancelOrder` / `rejectOrder` が非 active な注文を `ORDER_NOT_ACTIVE` で断る。`POST /_control/orders/:id/fill` も終端は 409。ただしこのガードは**注文 id が一意であること**を前提にしており、同じ id のレコードが 2 件あると `replaceOrder()`（`src/engine/transitions.ts`）が id 一致の全件を置き換えるため、active な方への約定・取消が終端レコードを書き換える。この前提は `loadState()` が読み込み時に検査するので、重複を抱えた v3 の状態ファイルでは起動しない（下の「不変量の前提」） | **無し**（単一状態の述語ではないので `invariantViolations()` は検査できない。読み込み時にも検査されない） | あり。`tests/engine/invariants.test.ts` の「hold after random place/fill/cancel/reject sequences」が終端レコードを `JSON.stringify` で控え、各操作の後と操作列の最後に一致を見る（2 状態の比較なのでここでしか検査できない） |
 | 5 | 各注文で `trades` の `amount` 合計 == `executedAmount`、`amount × price` 合計 == `executedNotional`。孤児 trade は禁止 | `fillOrder` が注文の更新と trade の追加を同じ返り値で行う（部分適用が起きない） | 読み込み時のみ（合計の一致は大きさに比例する許容差つきで判定。下記） | あり（ランダム操作列 + クランプ境界の性質 + 合計が本当に間違っている明示ケース） |
-| 6 | 各資産で残高は負にならず、`locked` は残高を超えない | `placeOrder` が `availableOf`（残高 − 拘束）を見て足りなければ `60001` で断る。約定は発注時に拘束した分を超えて使わない（指値の約定価格は order price より不利にならない）ので、`fillOrder` の残高更新で負にはならない。`POST /_control/reset` は負の残高・非有限の残高・`[a-z0-9]+` でない資産キーを 400 `INVALID_BALANCES` で断る。**例外**: `price == null` の買い注文は `computeLocked()` が拘束に数えず、`POST /_control/orders/:id/fill` は成行に価格の上限を掛けないので、state ファイル由来の active な成行買いを約定させると残高が負になる（下の「不変量の前提として検査していないもの」） | 読み込み時のみ（負の残高・拘束超過はどちらも許容差 `1e-9` を超える差だけを違反とする） | あり（ただしプロパティテストは手数料率 0 でしか回らない） |
+| 6 | 各資産で残高は負にならず、`locked` は残高を超えない | `placeOrder` が `availableOf`（残高 − 拘束）を見て足りなければ `60001` で断る。約定は発注時に拘束した分を超えて使わない（指値の約定価格は order price より不利にならない）ので、`fillOrder` の残高更新で負にはならない。`POST /_control/reset` は負の残高・非有限の残高・`[a-z0-9]+` でない資産キーを 400 `INVALID_BALANCES` で断る。**例外**: `price == null` の買い注文は `computeLocked()` が拘束に数えず、`POST /_control/orders/:id/fill` は成行に価格の上限を掛けないので、state ファイル由来の active な成行買いを約定させると残高が負になる（下の「不変量の前提」に残した未決の項目） | 読み込み時のみ（負の残高・拘束超過はどちらも許容差 `1e-9` を超える差だけを違反とする） | あり（ただしプロパティテストは手数料率 0 でしか回らない） |
 
 不変量 4 以外は単一の状態から判定できるので、`loadState()` が読み込み時に 1 回検査する。
 不変量 4 は「前の状態と比べて変わっていない」という 2 状態の性質なので、`invariantViolations()` の
 対象外であり、遷移関数のガードと上記のプロパティテストだけが担保である。
 
-**移行してきた状態は fail-closed にしない。** 読み込み時の検査で起動を止めるのは、ファイルが
-もともと v3 だったときだけである。v1 / v2 から移行した結果が不変量を破っている場合は
-`migrated paper state violates invariants: ...` を warn に出して起動する。移行の入力は本モックが
-書いたとは限らず（手で書かれた state・別実装が書いた state）、ここで落とすと旧 state の利用者が
-起動できなくなるため。ただし移行後の状態が v3 として書き戻された後は、次の起動で通常の
+**移行してきた状態は fail-closed にしない。ただし注文 id の重複は移行の側で作らない。**
+読み込み時の検査で起動を止めるのは、ファイルがもともと v3 だったときだけである。v1 / v2 から
+移行した結果が不変量やその前提を破っている場合は `migrated paper state violates invariants: ...` /
+`migrated paper state violates invariant preconditions: ...` を warn に出して起動する。移行の入力は
+本モックが書いたとは限らず（手で書かれた state・別実装が書いた state）、ここで落とすと旧 state の
+利用者が起動できなくなるため。ただし移行後の状態が v3 として書き戻された後は、次の起動で通常の
 fail-closed にかかる。なお、v2 のエンジン自身は発注時に `availableOf` を見ていたので、
 v2 が書いた state が不変量 6 を破ることはない（境界の実測は PR の報告を参照）。
 
-**不変量の前提として検査していないもの。** 次の 3 つは 6 本の不変量が成り立つための前提だが、
-`PaperStateSchema` も `invariantViolations()` も検査しない。どれも読み込み時の fail-closed を素通りする。
-**不変量の本数と内容は変えていない**（6 本はそのまま）。検査を足すかは未確定で、現状は「検査しない」を
-選んでいる。
+**注文 id の重複だけは warn に回さず、移行が衝突しない id を振り直す**
+（`src/engine/persist.ts` の `makeOrderIdAssigner()`）。重複を残したまま起動させると
+`POST /_control/tick` が 500 になり、拘束だけ残して取消も約定もできない注文が残るので、warn を
+読んでも利用者にできることが無い。かといって落とすと旧 state の利用者が詰む。**これは壊れた v3 を
+自動修復するのとは別である。** 移行はもともと `openOrders` と `history` という別々の配列を 1 本の
+`orders` へ積み直す変換で、積む順序も id も決めるのは移行の側だから、衝突しない id を振ることは
+変換の一部にあたる。振り直すのは 2 件目以降だけで、先に積まれる `openOrders` 側が元の id を保つ
+（生きている注文の id は取消に使うため）。配る id は入力のどの id とも既に配った id とも重ならない
+最小の 10 進表記で、`orderId` を持つ trade も振り直した後の id を指す。採番の初期値も振り直した
+後の id から決めるので、移行の出力が読み込み時の検査に落ちることはない。
 
-- **注文 id / trade id の一意性。** 同じ id のレコードが 2 件あると、`replaceOrder()` が id 一致の全件を
-  置き換えるので不変量 4 が破れる。`UNFILLED` と `REJECTED` が同じ id で並ぶ v3 の state は
-  `invariantViolations()` を無違反で通り、その注文へ約定を 1 件適用すると `REJECTED` のレコードが
-  `FULLY_FILLED` に書き換わる（書き換わった後の状態も無違反で通る）。`runTick()` は同じ id を 2 回
+**不変量の前提（決着済み。読み込み時に検査するようにした）。** 次の 3 つは 6 本の不変量が成り立つ
+ための前提であって、7 本目の不変量ではない。**不変量の本数と内容は変えていない**（6 本はそのまま）。
+検査は `src/engine/invariants.ts` の `preconditionViolations()` が `invariantViolations()` とは
+別の関数として持ち、`loadState()` が移行の直後、不変量より先に走らせる。v3 の状態ファイルが
+破っていれば `paper state violates invariant preconditions: <件数> violation(s): ...` で起動しない。
+zod スキーマにも `invariantViolations()` にも混ぜなかった理由は下の「どこで検査するか」を参照。
+
+返す文字列は `<前提の名前>: <対象を特定する識別子と値>` の形で、不変量の `<番号>: ...` と混ざらない。
+
+- **注文 id / trade id の一意性** → 検査する（`order-id` / `trade-id`）。同じ id のレコードが 2 件あると
+  `replaceOrder()` が id 一致の全件を置き換えるので不変量 4 が破れる。`UNFILLED` と `REJECTED` が
+  同じ id で並ぶ v3 の state は `invariantViolations()` を無違反で通り、その注文へ約定を 1 件適用すると
+  `REJECTED` のレコードが `FULLY_FILLED` に書き換わっていた。`runTick()` は同じ id を 2 回
   `applyFill()` へ渡すので 2 件目が `ORDER_NOT_ACTIVE` で throw し、`POST /_control/tick` は 500、
   market モードでは `SessionStore.tick()` を通る互換ルートも 500 になる。id が先頭の終端レコードと
   重なった新しい注文は、`cancel_order` も `POST /_control/orders/:id/fill` も先頭の終端レコードに
   当たるため、拘束だけ残して取消も約定もできない。trade id の重複は
-  `GET /v1/user/spot/trade_history` に同じ `trade_id` の 2 行として出る。
-  v1 / v2 の移行はこの重複を作り得る（`openOrders` に同じ id が 2 つある state は warn すら出ずに起動する。
-  移行は `openOrders` → `history` の順に積むだけで、id の衝突を見ない）。
-- **`nextOrderSeq` / `nextTradeSeq` と既存 id の整合。** スキーマは正の整数しか見ないので、
-  `nextOrderSeq` が既存の注文 id と一致する state ファイルでは、次の発注がその id を再発行する。
-  一致せず小さいだけなら次の発注は重複しないが、採番がその id に追いつく発注で重複する
-  （`nextOrderSeq = 3` で id `5` の注文があると、配られる id は `3` → `4` → `5` で 3 件目が重なる）。
-  `nextOrderSeq` が `2^53`（`Number.MAX_SAFE_INTEGER + 1`）に達すると `+ 1` が飽和し、以後は毎回
-  同じ id になる（`Number.MAX_SAFE_INTEGER` から始めると 1 件目の `9007199254740991` だけが一意で、
-  2 件目以降はすべて `9007199254740992`）。移行も `nextOrderSeq` を「数値 id の最大 + 1」で決めるため、
-  数値 id が `2^53` 以上になる v1 / v2 の state からは飽和した `nextOrderSeq` が出る。
-  `nextTradeSeq` と trade id の関係も同じ。
-- **`startAmount > 0`。** 不変量 3 の判定にしか使っておらず、`startAmount == 0` の `UNFILLED` 注文は
-  無違反で通る（残量 0 のまま永遠に active で、約定させる手段は無い）。`placeOrder` は `amount <= 0` を
-  断るので本モックの経路では作れないが、state ファイルと v1 / v2 の `history` からは入る。
+  `GET /v1/user/spot/trade_history` に同じ `trade_id` の 2 行として出る。メッセージは
+  `order-id: duplicate order id 1 (2 records)` の形で、重なった id と件数を出す。
+  v1 / v2 の移行はこの重複を作らなくなった（上の段落）。
+- **`nextOrderSeq` / `nextTradeSeq` と既存 id の整合** → 検査する（`order-seq` / `trade-seq`）。
+  一意性は「これから配る id が既存 id と重ならない」ことに依存する。採番が既存 id 以下だと、
+  一致していなくても採番がその id に追いつく発注で重複する（`nextOrderSeq = 3` で id `5` の注文が
+  あると、配られる id は `3` → `4` → `5` で 3 件目が重なる）。メッセージは
+  `order-seq: nextOrderSeq=3 <= existing order id 5`。比べるのは**採番が配り得る id だけ**である
+  （`src/engine/state.ts` の `issuedSeqOf()`）。配るのは `String(seq)` なので、`"007"` や
+  `"9007199254740993"` のように `String(Number(id))` と一致しない表記はぶつかりようがなく、
+  数えると採番を無用に大きくする。
+
+  `2^53`（`Number.MAX_SAFE_INTEGER + 1`）に達した採番は `+ 1` が飽和して同じ id を配り続ける。
+  これは**読み込み時の検査では防げない**。検査が見られるのは読み込んだ時点の採番で、飽和は
+  実行中の `+ 1` で起きるからである。境界をどこに引いても「あと数件で飽和する採番」は検査を通り、
+  その数件を配った後に重複が出る（`Number.MAX_SAFE_INTEGER` を弾いても `- 1` が同じ道を辿る。
+  実測は PR #25 の報告）。そこで**配る側で止める**（`src/engine/transitions.ts` の `canIssue()`）。
+  `placeOrder` は `nextOrderSeq` が、`fillOrder` は `nextTradeSeq` が安全整数を外れていたら、
+  状態を変えずに `ORDER_SEQ_EXHAUSTED` / `TRADE_SEQ_EXHAUSTED` で断る（互換ルートでは
+  `mapPlaceError` の既定で 70001）。これで**配った id は必ず直前より大きく、重複しない**。
+
+  **逆に、飽和した採番そのものは読み込み時の違反にしない。** 配る側が止める以上、飽和は
+  「壊れている」のではなく「使い切った」状態で、新しい発注が 70001 で断られるだけである。
+  ここで落とすと、遷移関数だけを通って作った状態が次の起動で読めなくなる
+  （`nextOrderSeq = Number.MAX_SAFE_INTEGER` の state は id `9007199254740991` を 1 件配れて、
+  そのとき書き出される採番は `9007199254740992` になる）。不変量 5 の許容差で起きたのと同じ型の
+  不具合なので、同じ轍は踏まない。比較にも影響しない（`issuedSeqOf()` が安全整数でない id を
+  除くので、比較対象の id はすべて飽和した採番より小さい）。移行が飽和した採番を出した state も、
+  履歴は読めて新しい発注だけが断られる。
+
+  なお移行が決める採番も「配り得る id の最大 + 1」なので、数値 id が `2^53` に届く v1 / v2 の
+  state からは飽和した採番が出る**理屈**だが、実際の桁では届かない。v2 の id は
+  `Date.now() * 1000 + counter`（上の「注文 ID」の行）で、2026-09-14 時点の `Date.now()` は
+  `1789353937656`、`× 1000` で `1.789e15`。`2^53 = 9007199254740992 ≈ 9.007e15` なので
+  **5.03 倍の余裕**がある。`Date.now() * 1000` が `2^53` に届くのは
+  `Date.now() = 9007199254740.992 ms`、すなわち **2255-06-05T23:47:34Z（今から約 229 年後）**
+  である。したがって v2 由来の飽和は現実には到達しない。
+- **`startAmount > 0`** → 検査する（`start-amount`）。不変量 3 が条件に含む前提。`startAmount == 0` の
+  `UNFILLED` 注文は残量 0 のまま永遠に active で、`fillOrder` が非正の量を断るので約定させる手段が
+  無い。`placeOrder` は `amount <= 0` を断るので本モックの経路では作れないが、state ファイルと
+  v1 / v2 の `history` からは入る。メッセージは `start-amount: order 1 startAmount=0`。判定は
+  `> 0` の否定なので、`0`・負・`NaN` をまとめて拾う（負は不変量 1 も捕まえる）。移行では直さない。
+  数量を書き換えるのは変換ではなく修復だからで、v1 / v2 から入った場合は warn で起動する。
+
+**どこで検査するか。** zod スキーマ（`PaperStateSchema`）ではなく、`invariantViolations()` でもなく、
+同じファイルの別関数にした。
+
+- **zod スキーマに入れない。** スキーマは形を見る層で、`PaperStateAnySchema` の v3 分岐が失敗すると
+  `invalid paper state: ...`（壊れた JSON と同じメッセージ）になり、前提の破れが「形が違う」と
+  区別できなくなる。移行の出力はスキーマを通らない（`migrateToV3()` が直接組む）ので、
+  スキーマに置くと移行の結果を検査できない。
+- **`invariantViolations()` に混ぜない。** 6 本は Nyx 仕様書 D1 と対応していて本数も内容も変えない。
+  同じ関数に混ぜると `<番号>: ...` の並びに番号を持たない項目が混ざり、7 本目に見える。
+- **`replaceOrder()` は防御的にしない。** id 一致の全件ではなく先頭 1 件だけを置き換える案は検討して
+  採らなかった。理由は 2 つ。(1) 症状（終端レコードの書き換え）を薄めるだけで、影のレコードは残り、
+  `runTick()` の 500 も「取消も約定もできない注文」も消えない。(2) 読み込みで前提を検査した後は、
+  重複した状態はどの経路からも作れない。新しい注文を足すのは `placeOrder` だけで、配る id は
+  `String(nextOrderSeq)`、その `nextOrderSeq` は既存のどの配り得る id より大きく安全整数に収まる。
+  したがって配る id は既存のどれとも重ならず、採番は 1 進んで次も同じことが言える。
+  `POST /_control/reset` は全レコードを捨てて作り直し、移行は id を振り直す。到達できない分岐の
+  防御コードになるので入れなかった。読み込み時の検査の代わりに入れたのではない。
+
+**引き続き検査していないもの。**
+
+- **不変量 4 そのもの。** 2 つの状態を比べる性質なので単一の状態からは判定できない。前提
+  （id の一意性）を読み込みで検査するようになったが、不変量 4 の検査そのものではない。
+- **`price == null` の active な買い注文**（不変量 6 の例外。`computeLocked()` が拘束に数えず、
+  `POST /_control/orders/:id/fill` は成行に価格の上限を掛けないので、state ファイル由来の
+  active な成行買いを約定させると残高が負になる）。これは前提ではなく不変量 6 側の穴で、
+  別の題材である。
 
 **不変量 5 と `fillOrder` のクランプ（決着済み。許容差を大きさへ比例させた）。**
 `fillOrder` は残量ちょうどの約定を全約定として `executedAmount` を `startAmount` へ揃える（下の内部規則）。
