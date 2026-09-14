@@ -71,7 +71,7 @@
 
 | 層 | 場所 | いつ走るか |
 | --- | --- | --- |
-| 生成 | `src/engine/transitions.ts`（`placeOrder` / `fillOrder` / `cancelOrder` / `rejectOrder`）と `src/engine/match.ts` | 常時。注文・約定・残高を変える唯一の経路（`rejectOrder` は本番経路から呼ばれておらず、テストからのみ到達する）。ほかに `PaperState` を差し替えるのは `POST /_control/reset`（全レコードを捨てて作り直す）と、`POST /_control/clock` / `SessionStore.tick()`（`lastTickAt` / `updatedAt` だけ）である |
+| 生成 | `src/engine/transitions.ts`（`placeOrder` / `fillOrder` / `cancelOrder` / `rejectOrder`）と `src/engine/match.ts` | 常時。注文・約定・残高を変える唯一の経路（`rejectOrder` は本番経路から呼ばれておらず、テストからのみ到達する）。`SessionStore.tick()` は market モードでこの層（`runTick()` → `fillOrder()`）を通して注文・約定・残高・`nextTradeSeq` を変え、そのうえで `lastTickAt` / `updatedAt` を実時刻へ上書きする（manual モードは早期 return で何も変えない）。この層を通さずに `PaperState` を差し替えるのは `POST /_control/reset`（全レコードを捨てて作り直す）と `POST /_control/clock`（`lastTickAt` / `updatedAt` だけ）である |
 | 読み込み時の検査 | `src/engine/persist.ts` の `loadState()` | 起動時に状態ファイルを読み、v3 へ移行した直後に 1 回。違反があれば起動しない（v1 / v2 からの移行だけは warn で通す） |
 | テスト | `tests/engine/invariants.test.ts` | `npm test`。fast-check のランダム操作列 40 本 × 各操作の後。操作は `btc_jpy` の**指値**の発注・約定・取消・拒否だけで、手数料率は 0、数量は `0.001`〜`0.006`。成行・`runTick()`・移行・`/_control/` の各口・複数ペア・重複 id・`8192` 以上の数量は含まない |
 
