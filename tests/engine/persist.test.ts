@@ -12,7 +12,7 @@ import { buildOrder, buildState, buildTrade } from "./helpers.ts";
 
 // `rename` の後のディレクトリの fsync を観測する入れ物。既定は素通しで、
 // 失敗させるテストだけが dirFsync.fail を立てる。
-const dirFsync = vi.hoisted(() => ({ synced: [] as string[], fail: false }));
+const dirFsync = vi.hoisted(() => ({ synced: [] as string[], fail: false, failOpen: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -23,12 +23,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
      * 包むのは `"r"` で開いたときだけである。`saveState` はディレクトリを `"r"`、
      * 一時ファイルを `"wx"` で開き、状態の読み込みは `readFile` を通るので混ざらない。
      *
-     * **観測も注入も `sync()` の側で行う。** `open` の時点で拾うと、fsync を呼ばずに
-     * `open` と `close` だけする退行をテストが素通しする（実際に `syncDirectory()` から
-     * `dh.sync()` を外して 40 件すべて通ることを確認した）。固定したいのは
-     * 「ディレクトリを開いたこと」ではなく「fsync したこと」である。
+     * **観測と `dirFsync.fail` の注入は `sync()` の側で行う。** `open` の時点で拾うと、
+     * fsync を呼ばずに `open` と `close` だけする退行をテストが素通しする（実際に
+     * `syncDirectory()` から `dh.sync()` を外して 40 件すべて通ることを確認した）。
+     * 固定したいのは「ディレクトリを開いたこと」ではなく「fsync したこと」である。
+     *
+     * `dirFsync.failOpen` だけは `open` の側で投げる。実際の fs のエラーは**対象のパスを
+     * 生のまま含む**（`ENOENT: ..., open '/a\nb'`）ので、ログの組み立てがそれを包んで
+     * いるかは、パス入りのメッセージが出る経路でしか検査できない。
      */
     open: async (p: Parameters<typeof actual.open>[0], flags?: unknown, mode?: unknown) => {
+      if (flags === "r" && dirFsync.failOpen) {
+        throw Object.assign(
+          new Error(`ENOENT: no such file or directory, open '${String(p)}'`),
+          { code: "ENOENT" },
+        );
+      }
       const fh = await actual.open(p, flags as never, mode as never);
       if (flags !== "r") return fh;
       return new Proxy(fh, {
@@ -636,23 +646,48 @@ describe("saveState", () => {
     // 他の describe も saveState を呼ぶので、観測は各テストの開始時に空にする。
     dirFsync.synced = [];
     dirFsync.fail = false;
+    dirFsync.failOpen = false;
   });
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
     dirFsync.synced = [];
     dirFsync.fail = false;
+    dirFsync.failOpen = false;
   });
 
   // rename はディレクトリの更新なので、親を fsync しないと OS ごと落ちたときに
   // 差し替えが失われる（ファイルの中身は fh.sync() で落ちている）。
   it("rename の後に状態ファイルの親ディレクトリを fsync する", async () => {
     expect(await saveState(path, buildState())).toEqual({ success: true, data: true });
-    expect(dirFsync.synced).toEqual([join(dir, "nested")]);
+    // "nested" は saveState が作るので、その親（mkdtemp が作った dir）まで遡る。
+    expect(dirFsync.synced).toEqual([join(dir, "nested"), dir]);
   });
 
   // ディレクトリの fsync はどの環境でも通るとは限らない。ここで失敗を書き込みの失敗へ
   // 昇格させると、今まで書けていた環境が書けなくなる。警告だけ出して成功のまま返す。
+  // 葉だけ fsync しても、mkdir -p が新しく作った段のエントリが親に残っていなければ
+  // OS クラッシュで階層ごと消え、state.json も一緒に失われる。
+  it("新しく作った階層は、その親まで遡って fsync する", async () => {
+    const deep = join(dir, "a", "b", "c", "state.json");
+    expect(await saveState(deep, buildState())).toEqual({ success: true, data: true });
+    // 葉 → 中間 → 作った段の親（= dir。mkdtemp が作ったので saveState は作っていない）。
+    expect(dirFsync.synced).toEqual([
+      join(dir, "a", "b", "c"),
+      join(dir, "a", "b"),
+      join(dir, "a"),
+      dir,
+    ]);
+  });
+
+  it("階層が既に在るなら葉だけ fsync する", async () => {
+    await saveState(path, buildState());
+    dirFsync.synced = [];
+    // 2 回目は mkdir が何も作らないので、遡る先が無い。
+    expect(await saveState(path, buildState())).toEqual({ success: true, data: true });
+    expect(dirFsync.synced).toEqual([join(dir, "nested")]);
+  });
+
   it("ディレクトリの fsync が失敗しても書き込みは成功し、警告だけ出す", async () => {
     const state = buildState();
     const warnings: string[] = [];
@@ -668,7 +703,8 @@ describe("saveState", () => {
     expect(warnings[0]).toContain(JSON.stringify(join(dir, "nested")));
     expect(warnings[0]).toContain("EINVAL");
     // 失敗したのは fsync であって open ではない（handle は開けている）。
-    expect(dirFsync.synced).toEqual([join(dir, "nested")]);
+    // 新規に作った階層なので、葉の後も遡って試している。
+    expect(dirFsync.synced[0]).toBe(join(dir, "nested"));
   });
 
   // この戻り値は呼び出し側が状態の扱いを決める根拠になるので、ログの副作用で
@@ -680,6 +716,23 @@ describe("saveState", () => {
     });
     expect(r).toEqual({ success: true, data: true });
     expect(existsSync(path)).toBe(true);
+  });
+
+  // fs のエラーは対象のパスを生のまま含む（`ENOENT: ..., open '/a\nb'`）。パスは
+  // BITBANK_MOCK_STATE_PATH 由来なので、包まないと改行で偽のログ行を差し込める。
+  it("改行を含むパスでも警告が 1 行に収まる", async () => {
+    const evil = join(dir, "a\n2026-01-01 FAKE LOG LINE", "state.json");
+    const warnings: string[] = [];
+    dirFsync.failOpen = true;
+
+    const r = await saveState(evil, buildState(), {
+      logger: { warn: (m) => warnings.push(m), info: () => {} },
+    });
+
+    expect(r).toEqual({ success: true, data: true });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.split("\n")).toHaveLength(1);
+    expect(warnings[0]).toContain("FAKE LOG LINE");
   });
 
   it("logger を渡さなければディレクトリの fsync が失敗しても黙って成功する", async () => {
