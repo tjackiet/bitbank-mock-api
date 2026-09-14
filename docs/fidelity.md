@@ -115,10 +115,14 @@ v2 が書いた state が不変量 6 を破ることはない（境界の実測�
   v1 / v2 の移行はこの重複を作り得る（`openOrders` に同じ id が 2 つある state は warn すら出ずに起動する。
   移行は `openOrders` → `history` の順に積むだけで、id の衝突を見ない）。
 - **`nextOrderSeq` / `nextTradeSeq` と既存 id の整合。** スキーマは正の整数しか見ないので、
-  `nextOrderSeq` が既存の注文 id 以下の state ファイルでは次の発注が既存 id を再発行する。
-  `Number.MAX_SAFE_INTEGER`（`2^53 - 1`）以上では `+ 1` が飽和するので、発注のたびに同じ id を配る。
-  移行も `nextOrderSeq` を「数値 id の最大 + 1」で決めるため、`2^53` を超える数値 id を持つ v1 / v2 の
-  state からは飽和した `nextOrderSeq` が出る。
+  `nextOrderSeq` が既存の注文 id と一致する state ファイルでは、次の発注がその id を再発行する。
+  一致せず小さいだけなら次の発注は重複しないが、採番がその id に追いつく発注で重複する
+  （`nextOrderSeq = 3` で id `5` の注文があると、配られる id は `3` → `4` → `5` で 3 件目が重なる）。
+  `nextOrderSeq` が `2^53`（`Number.MAX_SAFE_INTEGER + 1`）に達すると `+ 1` が飽和し、以後は毎回
+  同じ id になる（`Number.MAX_SAFE_INTEGER` から始めると 1 件目の `9007199254740991` だけが一意で、
+  2 件目以降はすべて `9007199254740992`）。移行も `nextOrderSeq` を「数値 id の最大 + 1」で決めるため、
+  数値 id が `2^53` 以上になる v1 / v2 の state からは飽和した `nextOrderSeq` が出る。
+  `nextTradeSeq` と trade id の関係も同じ。
 - **`startAmount > 0`。** 不変量 3 の判定にしか使っておらず、`startAmount == 0` の `UNFILLED` 注文は
   無違反で通る（残量 0 のまま永遠に active で、約定させる手段は無い）。`placeOrder` は `amount <= 0` を
   断るので本モックの経路では作れないが、state ファイルと v1 / v2 の `history` からは入る。
