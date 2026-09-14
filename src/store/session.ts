@@ -11,7 +11,8 @@ import {
 } from "../engine/state.ts";
 import type { FetchCandles, Logger } from "../engine/types.ts";
 import { noopLogger } from "../engine/types.ts";
-import { fillMode, type FillMode } from "../server/config.ts";
+import { fillMode, persistFailureMode, type FillMode } from "../server/config.ts";
+import type { PersistFailureMode } from "../server/degraded.ts";
 
 const LATEST_LOOKBACK_MS = 5 * 60_000;
 
@@ -39,6 +40,7 @@ export type SessionStoreOptions = {
   feeRate?: number;
   logger?: Logger;
   fillMode?: FillMode;
+  persistFailureMode?: PersistFailureMode;
 };
 
 export class SessionStore {
@@ -47,6 +49,7 @@ export class SessionStore {
   private readonly path: string | null;
   readonly feeRate: number;
   readonly fillMode: FillMode;
+  readonly persistFailureMode: PersistFailureMode;
   private readonly logger: Logger;
   /** 直列化した書き込みの末尾。次の書き込みはこれが解決してから始める。 */
   private persistTail: Promise<void> = Promise.resolve();
@@ -61,6 +64,7 @@ export class SessionStore {
     this.path = opts.path === undefined ? defaultStatePath("default") : opts.path;
     this.feeRate = opts.feeRate ?? DEFAULT_TAKER_FEE_RATE;
     this.fillMode = opts.fillMode ?? fillMode();
+    this.persistFailureMode = opts.persistFailureMode ?? persistFailureMode();
     this.logger = opts.logger ?? noopLogger;
   }
 
@@ -82,9 +86,27 @@ export class SessionStore {
     return this._persistHealth;
   }
 
+  /**
+   * 書き出しに失敗して劣化しているか。劣化中は状態を変える要求を断り、読み取りは生かす。
+   *
+   * 判定に使うのは `lastError`（**成功しても消さない**）であって連続失敗数ではない。
+   * 一度でも書けなかったなら、そこから先の注文は状態ファイルと食い違い得るので、
+   * その実験は続けさせない。**復帰手段は用意していない**（ディスクを直す →
+   * `GET /_control/state` でシナリオを読み出す → 再起動。`docs/plan-lab-mock.md` 10.5）。
+   *
+   * `BITBANK_MOCK_PERSIST_FAILURE=ignore` なら常に偽（v0.1.0 の挙動）。
+   */
+  isDegraded(): boolean {
+    return this.persistFailureMode === "degrade" && this._persistHealth.lastError !== null;
+  }
+
   async tick(nowMs: number = Date.now()): Promise<Map<string, Candle[]>> {
     const result = new Map<string, Candle[]>();
     if (this.fillMode === "manual") return result;
+    // 劣化中は約定させない。読み取りは生かすが、tick は読み取りルートの先頭から呼ばれるので、
+    // 止めないと「読むたびにメモリだけ進み、状態ファイルとの差が開く」ことになる。
+    // lastTickAt / updatedAt の上書きも状態の変更なので、ここで丸ごと抜ける。
+    if (this.isDegraded()) return result;
     const pairs = new Set(activeOrders(this._state).map((o) => o.pair));
     const lastMs = Date.parse(this._state.lastTickAt);
     const tickFrom = this._state.lastTickAt;
