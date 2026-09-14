@@ -393,9 +393,10 @@ describe("SessionStore.persist", () => {
       expect(health.lastError?.message).toContain("EISDIR");
     });
 
-    // 記録は warn より先に行う。閉じた標準出力への console.warn は EPIPE で投げるので、
-    // logger の例外で「失敗した事実」まで落とすと、見る手段が無くなる。
-    it("logger が投げても失敗は記録されている", async () => {
+    // 閉じた標準出力への console.warn は EPIPE で投げる。ここで投げ返すと、発注が
+    // メモリ上では成立しているのにルートが封筒でない 500 を返し、クライアントの再送が
+    // 二重注文になる。書き込みが失敗しても 2xx を返すのがここの約束。
+    it("logger が投げても persist は解決し、失敗は記録されている", async () => {
       const path = join(dir, "health-throw", "state.json");
       await mkdir(path, { recursive: true });
       const store = new SessionStore(buildState(), {
@@ -404,9 +405,40 @@ describe("SessionStore.persist", () => {
         logger: { warn: () => { throw new Error("logger が壊れている"); }, info: () => {} },
       });
 
-      await expect(store.persist()).rejects.toThrow("logger が壊れている");
+      await expect(store.persist()).resolves.toBeUndefined();
       expect(store.persistHealth().consecutiveFailures).toBe(1);
       expect(store.persistHealth().lastError?.message).toContain("EISDIR");
+    });
+
+    // 指摘の本質は応答が壊れること。ルート越しに固定する。
+    it("logger が投げても互換ルートは封筒の 2xx を返す", async () => {
+      const path = join(dir, "health-route", "state.json");
+      await mkdir(path, { recursive: true });
+      const { fastify, store, close } = await buildTestServer(
+        buildState({ balances: { jpy: 100_000_000 } }),
+        {},
+        {
+          path,
+          fillMode: "manual",
+          logger: { warn: () => { throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" }); }, info: () => {} },
+        },
+      );
+      try {
+        const res = await fastify.inject({
+          method: "POST",
+          url: "/v1/user/spot/order",
+          payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
+        });
+        // 封筒でない 500 が返ると、発注がメモリ上では成立しているのにクライアントは
+        // 失敗と見て再送し、二重注文になる。
+        expect(res.statusCode).toBe(200);
+        expect(res.json().success).toBe(1);
+        expect(store.state().orders).toHaveLength(1);
+        // 書けていないことは control から分かる。
+        expect(store.persistHealth().consecutiveFailures).toBe(1);
+      } finally {
+        await close();
+      }
     });
 
     // fs のエラーは対象のパスを生のまま含み、パスは BITBANK_MOCK_STATE_PATH 由来。

@@ -203,16 +203,24 @@ export class SessionStore {
       this._persistHealth = { ...this._persistHealth, consecutiveFailures: 0 };
       return;
     }
-    // **記録は warn より先に行う。** logger が投げても（閉じた標準出力への console.warn は
-    // EPIPE で投げる）、書き込みに失敗した事実まで一緒に落とさないため。
+    // 記録は warn より先に行い、warn が投げても握り潰す。閉じた標準出力への console.warn は
+    // EPIPE で投げるので（`npm run dev | head`）、包まないと **発注はメモリ上で成立している
+    // のに、ルートが封筒でない 500 を返す**（実測: `{"statusCode":500,"code":"EPIPE",...}`）。
+    // クライアントは失敗と見て再送し、二重注文になる。書き込みが失敗しても 2xx を返すのが
+    // ここの約束（docs/fidelity.md の「状態の永続化」）で、ログに出せなかったことで
+    // その約束を破ってはならない。saveState 側も同じ扱い。
     this._persistHealth = {
       lastError: { at: nowIso(), message: r.error },
       consecutiveFailures: this._persistHealth.consecutiveFailures + 1,
     };
-    // エラーメッセージは JSON で包む。fs のエラーは対象のパスを生のまま含み
-    // （`rename '/a\nb.tmp' -> '/a\nb'`）、パスは BITBANK_MOCK_STATE_PATH 由来なので、
-    // 包まないと改行でログ行を割られる（saveState 側と同じ扱い）。
-    this.logger.warn(`persist failed: ${JSON.stringify(r.error)}`);
+    try {
+      // エラーメッセージは JSON で包む。fs のエラーは対象のパスを生のまま含み
+      // （`rename '/a\nb.tmp' -> '/a\nb'`）、パスは BITBANK_MOCK_STATE_PATH 由来なので、
+      // 包まないと改行でログ行を割られる。
+      this.logger.warn(`persist failed: ${JSON.stringify(r.error)}`);
+    } catch {
+      // 失敗は既に `_persistHealth` へ記録済みなので、ログに出せなくても見る手段は残る。
+    }
   }
 }
 
