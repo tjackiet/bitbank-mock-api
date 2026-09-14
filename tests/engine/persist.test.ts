@@ -11,21 +11,35 @@ import { loadOrInitDefault } from "../../src/store/session.ts";
 import { buildOrder, buildState, buildTrade } from "./helpers.ts";
 
 // `rename` の後のディレクトリの fsync を観測する。saveState は "r" でディレクトリを開くので、
-// その open だけを拾う（一時ファイルは "wx"、状態の読み込みは readFile なので混ざらない）。
+// その handle だけを包む（一時ファイルは "wx"、状態の読み込みは readFile なので混ざらない）。
+//
+// **観測も注入も `sync()` の側で行う。** open の時点で拾うと、fsync を呼ばずに open と
+// close だけする退行をテストが素通しする（実際に dh.sync() を外して 40 件すべて通ることを
+// 確認した）。固定したいのは「ディレクトリを開いたこと」ではなく「fsync したこと」である。
 // 既定は素通しで、失敗させるテストだけが dirFsync.fail を立てる。
-const dirFsync = vi.hoisted(() => ({ opened: [] as string[], fail: false }));
+const dirFsync = vi.hoisted(() => ({ synced: [] as string[], fail: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
     open: async (p: Parameters<typeof actual.open>[0], flags?: unknown, mode?: unknown) => {
-      if (flags === "r") {
-        dirFsync.opened.push(String(p));
-        if (dirFsync.fail) {
-          throw Object.assign(new Error("EINVAL: invalid argument, open"), { code: "EINVAL" });
-        }
-      }
-      return actual.open(p, flags as never, mode as never);
+      const fh = await actual.open(p, flags as never, mode as never);
+      if (flags !== "r") return fh;
+      return new Proxy(fh, {
+        get(target, prop) {
+          if (prop === "sync") {
+            return async () => {
+              dirFsync.synced.push(String(p));
+              if (dirFsync.fail) {
+                throw Object.assign(new Error("EINVAL: invalid argument, fsync"), { code: "EINVAL" });
+              }
+              return target.sync();
+            };
+          }
+          const value = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
     },
   };
 });
@@ -614,13 +628,13 @@ describe("saveState", () => {
     dir = await mkdtemp(join(tmpdir(), "bitbank-mock-save-"));
     path = join(dir, "nested", "state.json");
     // 他の describe も saveState を呼ぶので、観測は各テストの開始時に空にする。
-    dirFsync.opened = [];
+    dirFsync.synced = [];
     dirFsync.fail = false;
   });
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
-    dirFsync.opened = [];
+    dirFsync.synced = [];
     dirFsync.fail = false;
   });
 
@@ -628,7 +642,7 @@ describe("saveState", () => {
   // 差し替えが失われる（ファイルの中身は fh.sync() で落ちている）。
   it("rename の後に状態ファイルの親ディレクトリを fsync する", async () => {
     expect(await saveState(path, buildState())).toEqual({ success: true, data: true });
-    expect(dirFsync.opened).toEqual([join(dir, "nested")]);
+    expect(dirFsync.synced).toEqual([join(dir, "nested")]);
   });
 
   // ディレクトリの fsync はどの環境でも通るとは限らない。ここで失敗を書き込みの失敗へ
@@ -647,6 +661,8 @@ describe("saveState", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(JSON.stringify(join(dir, "nested")));
     expect(warnings[0]).toContain("EINVAL");
+    // 失敗したのは fsync であって open ではない（handle は開けている）。
+    expect(dirFsync.synced).toEqual([join(dir, "nested")]);
   });
 
   // この戻り値は呼び出し側が状態の扱いを決める根拠になるので、ログの副作用で

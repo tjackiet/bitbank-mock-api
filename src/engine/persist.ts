@@ -326,6 +326,18 @@ async function syncDirectory(dir: string): Promise<Result<true>> {
   }
 }
 
+/**
+ * `PaperState` 全体を状態ファイルへ原子的に書き出す。
+ *
+ * 一時ファイルを `wx`（既存を開かない）で `0o600` で作り、書いて `fsync` してから `rename`、
+ * 最後に親ディレクトリを `fsync` する。読み手が途中の内容を見ることはなく、`rename` の
+ * 差し替えは OS ごと落ちても残る。書き込みに失敗したときは自分が作った一時ファイルだけ消す
+ * （`open` に失敗した時点では消さない。置かれていたファイルを巻き込まないため）。
+ *
+ * **戻り値は「状態ファイルが置かれたか」だけを表す。** ディレクトリの `fsync` の失敗も
+ * `opts.logger` が投げたことも、ここを `false` にはしない（`syncDirectory()` の項）。
+ * この戻り値は呼び出し側が状態の扱いを決める根拠になるので、ログの副作用で反転させない。
+ */
 export async function saveState(
   path: string,
   state: PaperState,
