@@ -468,7 +468,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 | # | 内容 | 判断 | 主に触る所 | 状態 |
 |---|---|---|---|---|
-| 1 | `rename` 後のディレクトリ `fsync` | 不要 | `saveState()` / 対応表「状態の永続化」 | 未着手 |
+| 1 | `rename` 後のディレクトリ `fsync` | 不要 | `saveState()` / 対応表「状態の永続化」 | **完了** |
 | 2 | persist 失敗を store が覚え、`GET /_control/state` に出す | 不要 | `SessionStore` / `control.ts` / 同上 | 未着手 |
 | 3 | persist 失敗時は状態変更を断り、読み取りは生かす | **決定済み（10.5）** | `SessionStore` / `http.ts` / `config.ts` / 同上 | 未着手 |
 | 4 | 起動時の排他ロック | 要 | 新規モジュール / `loadOrInitDefault()` / 対応表「多重起動」/ README | 未着手 |
@@ -479,6 +479,8 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 ### 10.4 各 PR の中身
 
 **PR 1 — ディレクトリの `fsync`。** `rename` の直後に `dirname(path)` を開いて `fsync` する。保証範囲が「プロセスの再起動まで」から「OS ごと落ちた場合まで」に広がる。**ディレクトリの `fsync` は一部のファイルシステムで失敗する**（ネットワーク FS で `EINVAL` など）ので、失敗は warn に留めて `saveState()` の成否には昇格させない。昇格させると、今まで書けていた環境が書けなくなる。
+
+PR 1 で 1 点、PR 3 が引き取るべきものが見つかった。**`SessionStore.write()` の `this.logger.warn()` は素で呼んでいる**ので、logger が投げると `persist()` が reject してルートが 500 になる。`npm run dev | head` のように標準出力が閉じた後の `console.warn` は `EPIPE` で投げるので、想像上の経路ではない。PR 3 は `write()` の戻りで劣化を決めるため、ログの副作用でその判定が動かないようにする（`saveState()` 側は PR 1 で握り潰し済み）。
 
 **PR 2 — 失敗の記録と可視化。** `SessionStore` が最後の persist 失敗（時刻・メッセージ・連続失敗数）を持ち、`GET /_control/state` に添える。互換ルートの応答も封筒も変えないので決定不要。PR 3 の土台であり、方針を決めるための実測材料でもある。
 

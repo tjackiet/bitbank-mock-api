@@ -154,7 +154,8 @@ export class SessionStore {
   private async write(): Promise<void> {
     if (!this.path) return;
     // saveState は同期的に JSON 化するので、ここで読んだ状態がそのまま着地する。
-    const r = await saveState(this.path, this._state);
+    // logger は、書き込みは成立したがディレクトリの fsync に失敗した場合の warn に使う。
+    const r = await saveState(this.path, this._state, { logger: this.logger });
     if (!r.success) this.logger.warn(`persist failed: ${r.error}`);
   }
 }
