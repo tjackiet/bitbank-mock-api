@@ -1,5 +1,5 @@
 import { buildServer } from "./server/http.ts";
-import { fillMode, isControlEnabled, listenHost } from "./server/config.ts";
+import { fillMode, isControlEnabled, listenHost, persistFailureMode } from "./server/config.ts";
 import { loadOrInitDefault } from "./store/session.ts";
 
 const DEFAULT_PORT = 14000;
@@ -30,6 +30,7 @@ async function main() {
   const port = parsePort(argv);
   const control = isControlEnabled();
   const mode = fillMode();
+  const persistMode = persistFailureMode();
   const host = listenHost();
   const store = await loadOrInitDefault(DEFAULT_INITIAL_JPY, {
     logger: { warn: (m) => console.warn(m), info: (m) => console.log(m) },
@@ -42,8 +43,10 @@ async function main() {
     controlToken: process.env.BITBANK_MOCK_CONTROL_TOKEN,
   });
   await fastify.listen({ port, host });
+  // persistFailure は既定が degrade（v0.1.0 からの変更）なので、起動時に見えるようにしておく。
   console.log(
-    `bitbank-lab-mock listening on http://${host}:${port} fillMode=${mode}${control ? " control=on" : ""}`,
+    `bitbank-lab-mock listening on http://${host}:${port} fillMode=${mode} ` +
+      `persistFailure=${persistMode}${control ? " control=on" : ""}`,
   );
 }
 

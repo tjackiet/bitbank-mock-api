@@ -411,7 +411,9 @@ describe("SessionStore.persist", () => {
     });
 
     // 指摘の本質は応答が壊れること。ルート越しに固定する。
-    it("logger が投げても互換ルートは封筒の 2xx を返す", async () => {
+    // 既定の degrade では中身が「断り」の封筒になるが、封筒であること自体が要点。
+    // 劣化の中身そのものは tests/server/degraded.test.ts で見る。
+    it("logger が投げても互換ルートは封筒を返す（生の 500 にならない）", async () => {
       const path = join(dir, "health-route", "state.json");
       await mkdir(path, { recursive: true });
       const { fastify, store, close } = await buildTestServer(
@@ -429,12 +431,14 @@ describe("SessionStore.persist", () => {
           url: "/v1/user/spot/order",
           payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
         });
-        // 封筒でない 500 が返ると、発注がメモリ上では成立しているのにクライアントは
-        // 失敗と見て再送し、二重注文になる。
+        // 封筒でない 500（`{"statusCode":500,"code":"EPIPE",...}`）が返ってはいけない。
         expect(res.statusCode).toBe(200);
-        expect(res.json().success).toBe(1);
+        expect(res.json()).toHaveProperty("success");
+        expect(res.json()).not.toHaveProperty("statusCode");
+        // 既定は degrade なので、書き込みに失敗したこの要求自体が断られる。
+        expect(res.json()).toEqual({ success: 0, data: { code: 70001 } });
+        // 巻き戻さないので注文はメモリに残る。書けていないことは control から分かる。
         expect(store.state().orders).toHaveLength(1);
-        // 書けていないことは control から分かる。
         expect(store.persistHealth().consecutiveFailures).toBe(1);
       } finally {
         await close();

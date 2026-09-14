@@ -1,0 +1,402 @@
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadState } from "../../src/engine/persist.ts";
+import type { PaperState } from "../../src/engine/state.ts";
+import { persistFailureMode } from "../../src/server/config.ts";
+import {
+  assertRouteClassified,
+  MUTATING_ROUTES,
+  READ_ROUTES,
+  routeKey,
+} from "../../src/server/degraded.ts";
+import { buildServer } from "../../src/server/http.ts";
+import { SessionStore } from "../../src/store/session.ts";
+import type { PersistFailureMode } from "../../src/server/degraded.ts";
+import { buildOrder, buildState, buildTrade, candle } from "../engine/helpers.ts";
+import { stubFetchCandles } from "../routes/helpers.ts";
+
+const NOW = Date.now();
+const iso = (ms: number) => new Date(ms).toISOString();
+
+/** 発注済み・一部約定済みの状態。劣化中も読み取りが中身を返すことを見るために使う。 */
+function seededState(): PaperState {
+  return buildState({
+    balances: { jpy: 100_000_000, btc: 0.001 },
+    orders: [
+      buildOrder({ id: "1", status: "UNFILLED", startAmount: 0.002 }),
+      buildOrder({
+        id: "2",
+        status: "FULLY_FILLED",
+        startAmount: 0.001,
+        executedAmount: 0.001,
+        executedNotional: 5_000,
+      }),
+    ],
+    trades: [buildTrade({ tradeId: "1", orderId: "2" })],
+  });
+}
+
+describe("劣化モード（persist に失敗した後）", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "bitbank-mock-degraded-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * 書き出しが必ず失敗する store でサーバを建てる。状態ファイルのパスをディレクトリに
+   * すると `rename` が `EISDIR` で落ちる（モックしない）。
+   */
+  async function buildDegradable(opts: {
+    state?: PaperState;
+    mode?: PersistFailureMode;
+    fillMode?: "manual" | "market";
+    candles?: Parameters<typeof stubFetchCandles>[0];
+  } = {}) {
+    const path = join(dir, `s${Math.random().toString(36).slice(2, 8)}`, "state.json");
+    await mkdir(path, { recursive: true });
+    const store = new SessionStore(opts.state ?? seededState(), {
+      path,
+      fillMode: opts.fillMode ?? "manual",
+      persistFailureMode: opts.mode ?? "degrade",
+      feeRate: 0,
+      fetchCandles: stubFetchCandles(opts.candles ?? {}),
+    });
+    const fastify = await buildServer({ store, logger: false, controlEnabled: true });
+    return { fastify, store, close: () => fastify.close() };
+  }
+
+  /** 劣化させる（書き込みを 1 回失敗させる）。 */
+  async function degrade(store: SessionStore): Promise<void> {
+    await store.persist();
+    expect(store.persistHealth().lastError).not.toBeNull();
+  }
+
+  // --- 完了条件 1: 状態を変える要求が全部断られる ---
+
+  const MUTATING_REQUESTS: Array<{
+    name: string;
+    method: "POST";
+    url: string;
+    payload: Record<string, unknown>;
+  }> = [
+    {
+      name: "POST /v1/user/spot/order",
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
+    },
+    {
+      name: "POST /v1/user/spot/cancel_order",
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "btc_jpy", order_id: 1 },
+    },
+    {
+      name: "POST /v1/user/spot/cancel_orders",
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: [1] },
+    },
+    { name: "POST /_control/reset", method: "POST", url: "/_control/reset", payload: {} },
+    {
+      name: "POST /_control/tick",
+      method: "POST",
+      url: "/_control/tick",
+      payload: { pair: "btc_jpy", price: 4_000_000 },
+    },
+    { name: "POST /_control/clock", method: "POST", url: "/_control/clock", payload: {} },
+    {
+      name: "POST /_control/orders/:order_id/fill",
+      method: "POST",
+      url: "/_control/orders/1/fill",
+      payload: {},
+    },
+  ];
+
+  it.each(MUTATING_REQUESTS)("劣化中は $name を断る", async ({ method, url, payload }) => {
+    const { fastify, store, close } = await buildDegradable();
+    try {
+      await degrade(store);
+      const before = JSON.stringify(store.state());
+
+      const res = await fastify.inject({ method, url, payload });
+
+      if (url.startsWith("/_control/")) {
+        // control は bitbank API に無いので素の JSON + 503。
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toEqual({ error: "PERSIST_DEGRADED" });
+      } else {
+        // 互換ルートは封筒 + INTERNAL(70001)。
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ success: 0, data: { code: 70001 } });
+      }
+      // 断ったのだから状態は 1 バイトも動いていない。
+      expect(JSON.stringify(store.state())).toBe(before);
+    } finally {
+      await close();
+    }
+  });
+
+  // --- 完了条件 2（これが完了条件）: 読み取りが全部 200 でメモリの状態を返す ---
+
+  it("劣化中も読み取りは全部 200 で、メモリの状態を返す", async () => {
+    const { fastify, store, close } = await buildDegradable();
+    try {
+      await degrade(store);
+      const memory = store.state();
+
+      const order = await fastify.inject({
+        method: "GET",
+        url: "/v1/user/spot/order?pair=btc_jpy&order_id=1",
+      });
+      expect(order.statusCode).toBe(200);
+      expect(order.json().success).toBe(1);
+      expect(String(order.json().data.order_id)).toBe("1");
+
+      const ordersInfo = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/orders_info",
+        payload: { pair: "btc_jpy", order_ids: [1, 2] },
+      });
+      expect(ordersInfo.statusCode).toBe(200);
+      expect(ordersInfo.json().success).toBe(1);
+      expect(ordersInfo.json().data.orders).toHaveLength(2);
+
+      const active = await fastify.inject({
+        method: "GET",
+        url: "/v1/user/spot/active_orders?pair=btc_jpy",
+      });
+      expect(active.statusCode).toBe(200);
+      expect(active.json().success).toBe(1);
+      expect(active.json().data.orders).toHaveLength(1);
+
+      const trades = await fastify.inject({
+        method: "GET",
+        url: "/v1/user/spot/trade_history?pair=btc_jpy",
+      });
+      expect(trades.statusCode).toBe(200);
+      expect(trades.json().success).toBe(1);
+      expect(trades.json().data.trades).toHaveLength(1);
+
+      const assets = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
+      expect(assets.statusCode).toBe(200);
+      expect(assets.json().success).toBe(1);
+
+      // シナリオの読み出し口。ここから状態ファイルへ書き戻して再起動するのが復帰手順。
+      const state = await fastify.inject({ method: "GET", url: "/_control/state" });
+      expect(state.statusCode).toBe(200);
+      expect(state.json()).toEqual({ ...memory, persist: store.persistHealth() });
+      expect(state.json().persist.lastError).not.toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
+  it("劣化中に読み出した /_control/state を書き戻して読み込める（復帰手順）", async () => {
+    const { fastify, store, close } = await buildDegradable();
+    try {
+      await degrade(store);
+      const res = await fastify.inject({ method: "GET", url: "/_control/state" });
+      const path = join(dir, "recovered.json");
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(path, JSON.stringify(res.json(), null, 2));
+      expect(await loadState(path)).toEqual({ success: true, data: store.state() });
+    } finally {
+      await close();
+    }
+  });
+
+  // --- 完了条件 3: 劣化中は読み取りを叩いても tick が約定させない ---
+
+  it("劣化中は読み取りを叩いても market の tick が約定させない", async () => {
+    const state = buildState({
+      balances: { jpy: 100_000_000 },
+      createdAt: iso(NOW - 600_000),
+      updatedAt: iso(NOW - 600_000),
+      lastTickAt: iso(NOW - 300_000),
+      orders: [
+        buildOrder({
+          id: "1",
+          price: 5_000_000,
+          startAmount: 0.001,
+          orderedAt: iso(NOW - 300_000),
+          updatedAt: iso(NOW - 300_000),
+        }),
+      ],
+    });
+    const { fastify, store, close } = await buildDegradable({
+      state,
+      fillMode: "market",
+      // この足なら指値 5,000,000 の買いは約定する。
+      candles: { btc_jpy: [candle(NOW - 120_000, 4_900_000, 4_900_000, 4_900_000, 4_900_000)] },
+    });
+    try {
+      // 劣化前は約定することを先に確かめる（テストが空振りしていないことの確認）。
+      await fastify.inject({ method: "GET", url: "/v1/user/spot/active_orders?pair=btc_jpy" });
+      expect(store.state().trades).toHaveLength(1);
+      expect(store.persistHealth().lastError).not.toBeNull(); // 約定したので書きに行って失敗した
+      expect(store.isDegraded()).toBe(true);
+
+      const filledAt = JSON.stringify(store.state());
+      // 劣化後は、読み取りを何度叩いてもメモリが動かない。
+      for (let i = 0; i < 3; i += 1) {
+        const res = await fastify.inject({
+          method: "GET",
+          url: "/v1/user/spot/active_orders?pair=btc_jpy",
+        });
+        expect(res.statusCode).toBe(200);
+      }
+      expect(JSON.stringify(store.state())).toBe(filledAt);
+    } finally {
+      await close();
+    }
+  });
+
+  // --- 完了条件 4: ignore で v0.1.0 の挙動に戻る ---
+
+  it("ignore なら劣化せず、失敗しても今までどおり通る", async () => {
+    const { fastify, store, close } = await buildDegradable({ mode: "ignore" });
+    try {
+      await degrade(store);
+      expect(store.isDegraded()).toBe(false);
+
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/order",
+        payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().success).toBe(1);
+      expect(store.state().orders).toHaveLength(3);
+      // 記録は ignore でも残る（PR 2）。
+      expect(store.persistHealth().lastError).not.toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
+  // --- 失敗の引き金になった要求自体も断る ---
+
+  it("書き込みに失敗した当の要求も断るが、巻き戻さないので状態には残る", async () => {
+    const { fastify, store, close } = await buildDegradable();
+    try {
+      expect(store.isDegraded()).toBe(false); // まだ劣化していない
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/order",
+        payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
+      });
+
+      // preHandler では素通りし、persist が失敗したので preSerialization で差し替わる。
+      expect(res.json()).toEqual({ success: 0, data: { code: 70001 } });
+      // 巻き戻さない（合流した書き込みの巻き戻しは安全でない。10.5 の「採らなかった案」）。
+      // 断られた注文はメモリに残り、読み取りから見つけられる。
+      expect(store.state().orders).toHaveLength(3);
+      const active = await fastify.inject({
+        method: "GET",
+        url: "/v1/user/spot/active_orders?pair=btc_jpy",
+      });
+      expect(active.json().data.orders).toHaveLength(2);
+      // 再送は断られるので二重注文にはならない。
+      const retry = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/order",
+        payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
+      });
+      expect(retry.json()).toEqual({ success: 0, data: { code: 70001 } });
+      expect(store.state().orders).toHaveLength(3);
+    } finally {
+      await close();
+    }
+  });
+
+  // --- 劣化していないときは何も変わらない ---
+
+  it("劣化していなければ状態を変える要求は今までどおり通る", async () => {
+    const path = join(dir, "ok", "state.json");
+    const store = new SessionStore(seededState(), { path, fillMode: "manual", feeRate: 0 });
+    const fastify = await buildServer({ store, logger: false, controlEnabled: true });
+    try {
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/order",
+        payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
+      });
+      expect(res.json().success).toBe(1);
+      expect(store.isDegraded()).toBe(false);
+    } finally {
+      await fastify.close();
+    }
+  });
+
+  // --- 未登録のパスは劣化中も 404 のまま ---
+
+  it("劣化中でも未登録のパスは 404 のまま", async () => {
+    const { fastify, store, close } = await buildDegradable();
+    try {
+      await degrade(store);
+      const res = await fastify.inject({ method: "POST", url: "/v1/user/spot/nope" });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).not.toHaveProperty("success");
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("経路の分類", () => {
+  it("HEAD は GET と同じ鍵になる（Fastify が GET から自動登録する）", () => {
+    expect(routeKey("HEAD", "/v1/user/assets")).toBe("GET /v1/user/assets");
+  });
+
+  // メソッドで機械的に判定すると Nyx のリコンサイルの主経路を劣化中に殺す。
+  it("POST /v1/user/spot/orders_info は読み取りとして分類されている", () => {
+    expect(READ_ROUTES.has("POST /v1/user/spot/orders_info")).toBe(true);
+    expect(MUTATING_ROUTES.has("POST /v1/user/spot/orders_info")).toBe(false);
+  });
+
+  it("分類済みの経路は通り、未分類は throw する", () => {
+    expect(() => assertRouteClassified("GET", "/v1/user/assets")).not.toThrow();
+    expect(() => assertRouteClassified("POST", "/v1/user/spot/order")).not.toThrow();
+    expect(() => assertRouteClassified("HEAD", "/_control/state")).not.toThrow();
+    expect(() => assertRouteClassified("POST", "/v1/user/spot/amend_order")).toThrow(
+      /unclassified route POST \/v1\/user\/spot\/amend_order/,
+    );
+  });
+
+  // 起動時に落とすので、分類し忘れた経路を持つサーバは建たない。
+  it("未分類の経路を登録するとサーバが建たない", async () => {
+    const store = new SessionStore(buildState(), { path: null, fillMode: "manual" });
+    await expect(
+      buildServer({
+        store,
+        logger: false,
+        controlEnabled: false,
+        // buildServer の中で登録される経路はすべて分類済みなので、ここでは
+        // register を挟んで未分類の経路を足す形で確かめる。
+      }).then(async (fastify) => {
+        try {
+          fastify.get("/v1/user/spot/unclassified", async () => ({}));
+          await fastify.ready();
+        } finally {
+          await fastify.close();
+        }
+      }),
+    ).rejects.toThrow(/unclassified route/);
+  });
+
+  it("既定のモードは degrade で、ignore だけが例外", () => {
+    expect(persistFailureMode({})).toBe("degrade");
+    expect(persistFailureMode({ BITBANK_MOCK_PERSIST_FAILURE: "" })).toBe("degrade");
+    expect(persistFailureMode({ BITBANK_MOCK_PERSIST_FAILURE: "なにか" })).toBe("degrade");
+    expect(persistFailureMode({ BITBANK_MOCK_PERSIST_FAILURE: "degrade" })).toBe("degrade");
+    expect(persistFailureMode({ BITBANK_MOCK_PERSIST_FAILURE: "ignore" })).toBe("ignore");
+  });
+});
