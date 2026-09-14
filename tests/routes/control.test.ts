@@ -1,5 +1,9 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadState } from "../../src/engine/persist.ts";
 import { activeOrders } from "../../src/engine/state.ts";
 import { controlRoutes, controlTokenHeader } from "../../src/routes/control.ts";
 import { buildServer } from "../../src/server/http.ts";
@@ -60,7 +64,26 @@ describe("/_control routes", () => {
     const { fastify, store } = await setup();
     const res = await fastify.inject({ method: "GET", url: "/_control/state" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(store.state());
+    // PaperState に、状態ファイルへの書き出しの状況を添えて返す。
+    expect(res.json()).toEqual({ ...store.state(), persist: store.persistHealth() });
+    expect(res.json().persist).toEqual({ lastError: null, consecutiveFailures: 0 });
+  });
+
+  // `persist` は PaperState の一部ではない。PaperStateSchema は不明なキーを落とすので、
+  // この応答をそのまま状態ファイルへ書き戻しても読み込みは通る。
+  it("応答をそのまま状態ファイルへ書き戻しても読み込める", async () => {
+    const { fastify, store } = await setup();
+    const res = await fastify.inject({ method: "GET", url: "/_control/state" });
+    expect(res.json().persist).toBeDefined();
+
+    const dir = await mkdtemp(join(tmpdir(), "bitbank-mock-control-"));
+    try {
+      const path = join(dir, "state.json");
+      await writeFile(path, JSON.stringify(res.json(), null, 2));
+      expect(await loadState(path)).toEqual({ success: true, data: store.state() });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("forbids non-loopback when no token is configured", async () => {

@@ -113,8 +113,16 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
     }
   });
 
-  /** `PaperState` をそのまま返す（デバッグ用）。 */
-  fastify.get("/state", async () => fastify.store.state());
+  /**
+   * `PaperState` に、状態ファイルへの書き出しの状況（`persist`）を添えて返す（デバッグ用）。
+   *
+   * `persist` は `PaperState` の一部ではない。`PaperStateSchema` は不明なキーを落とすので、
+   * この応答をそのまま状態ファイルへ書き戻しても読み込みは通る。
+   */
+  fastify.get("/state", async () => ({
+    ...fastify.store.state(),
+    persist: fastify.store.persistHealth(),
+  }));
 
   /**
    * 状態を初期化する。`initialJpy` は非負の有限数、`balances` は資産キーが

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -341,6 +341,122 @@ describe("SessionStore.persist", () => {
         await close();
       }
     }
+  });
+
+  // 2xx だけでは書き込みの成否を判定できないので、失敗を store が覚える。
+  // 状態ファイルのパスをディレクトリにすると rename が必ず EISDIR で落ちる。
+  describe("書き出しの失敗の記録", () => {
+    it("成功しかしていなければ初期値のまま", async () => {
+      const path = join(dir, "health-ok", "state.json");
+      const store = new SessionStore(buildState(), { path, fillMode: "manual" });
+      await store.persist();
+      expect(store.persistHealth()).toEqual({ lastError: null, consecutiveFailures: 0 });
+    });
+
+    it("失敗のたびに連続失敗数が増え、直近の失敗を覚える", async () => {
+      const path = join(dir, "health-ng", "state.json");
+      await mkdir(path, { recursive: true }); // ここをディレクトリにすると rename が落ちる
+      const warnings: string[] = [];
+      const store = new SessionStore(buildState(), {
+        path,
+        fillMode: "manual",
+        logger: { warn: (m) => warnings.push(m), info: () => {} },
+      });
+
+      await store.persist();
+      const first = store.persistHealth();
+      expect(first.consecutiveFailures).toBe(1);
+      expect(first.lastError?.message).toContain("EISDIR");
+      expect(Date.parse(first.lastError!.at)).not.toBeNaN();
+
+      store.replace(buildState({ nextOrderSeq: 2 }));
+      await store.persist();
+      expect(store.persistHealth().consecutiveFailures).toBe(2);
+      expect(warnings).toHaveLength(2);
+    });
+
+    it("書き込みが成功すると連続失敗数は 0 に戻るが、直近の失敗は残る", async () => {
+      const path = join(dir, "health-recover", "state.json");
+      await mkdir(path, { recursive: true });
+      const store = new SessionStore(buildState(), { path, fillMode: "manual" });
+      await store.persist();
+      expect(store.persistHealth().consecutiveFailures).toBe(1);
+
+      // ディレクトリを退けると書けるようになる。
+      await rm(path, { recursive: true });
+      store.replace(buildState({ nextOrderSeq: 2 }));
+      await store.persist();
+
+      const health = store.persistHealth();
+      expect(health.consecutiveFailures).toBe(0);
+      // 一度でも失敗したことは消さない（その実験の記録は疑ってかかる必要がある）。
+      expect(health.lastError?.message).toContain("EISDIR");
+    });
+
+    // 閉じた標準出力への console.warn は EPIPE で投げる。ここで投げ返すと、発注が
+    // メモリ上では成立しているのにルートが封筒でない 500 を返し、クライアントの再送が
+    // 二重注文になる。書き込みが失敗しても 2xx を返すのがここの約束。
+    it("logger が投げても persist は解決し、失敗は記録されている", async () => {
+      const path = join(dir, "health-throw", "state.json");
+      await mkdir(path, { recursive: true });
+      const store = new SessionStore(buildState(), {
+        path,
+        fillMode: "manual",
+        logger: { warn: () => { throw new Error("logger が壊れている"); }, info: () => {} },
+      });
+
+      await expect(store.persist()).resolves.toBeUndefined();
+      expect(store.persistHealth().consecutiveFailures).toBe(1);
+      expect(store.persistHealth().lastError?.message).toContain("EISDIR");
+    });
+
+    // 指摘の本質は応答が壊れること。ルート越しに固定する。
+    it("logger が投げても互換ルートは封筒の 2xx を返す", async () => {
+      const path = join(dir, "health-route", "state.json");
+      await mkdir(path, { recursive: true });
+      const { fastify, store, close } = await buildTestServer(
+        buildState({ balances: { jpy: 100_000_000 } }),
+        {},
+        {
+          path,
+          fillMode: "manual",
+          logger: { warn: () => { throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" }); }, info: () => {} },
+        },
+      );
+      try {
+        const res = await fastify.inject({
+          method: "POST",
+          url: "/v1/user/spot/order",
+          payload: { pair: "btc_jpy", side: "buy", type: "limit", price: 5_000_000, amount: 0.001 },
+        });
+        // 封筒でない 500 が返ると、発注がメモリ上では成立しているのにクライアントは
+        // 失敗と見て再送し、二重注文になる。
+        expect(res.statusCode).toBe(200);
+        expect(res.json().success).toBe(1);
+        expect(store.state().orders).toHaveLength(1);
+        // 書けていないことは control から分かる。
+        expect(store.persistHealth().consecutiveFailures).toBe(1);
+      } finally {
+        await close();
+      }
+    });
+
+    // fs のエラーは対象のパスを生のまま含み、パスは BITBANK_MOCK_STATE_PATH 由来。
+    it("改行を含むパスでも警告が 1 行に収まる", async () => {
+      const evil = join(dir, "a\n2026-01-01 FAKE LOG LINE", "state.json");
+      await mkdir(evil, { recursive: true });
+      const warnings: string[] = [];
+      const store = new SessionStore(buildState(), {
+        path: evil,
+        fillMode: "manual",
+        logger: { warn: (m) => warnings.push(m), info: () => {} },
+      });
+
+      await store.persist();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.split("\n")).toHaveLength(1);
+      expect(warnings[0]).toContain("FAKE LOG LINE");
+    });
   });
 
   it("重なった persist() は 1 本にまとめるが最後の 1 本は必ず着地する", async () => {

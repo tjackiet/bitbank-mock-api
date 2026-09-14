@@ -1,6 +1,6 @@
 import { afterEach } from "vitest";
 import type { Candle } from "../../src/engine/candles.ts";
-import type { FetchCandles } from "../../src/engine/types.ts";
+import type { FetchCandles, Logger } from "../../src/engine/types.ts";
 import { buildState } from "../engine/helpers.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
@@ -19,6 +19,8 @@ export type TestServerOptions = {
   path?: string | null;
   fillMode?: FillMode;
   controlEnabled?: boolean;
+  /** 既定は捨てる。ログの副作用が応答に出ないことを見るテストだけが渡す。 */
+  logger?: Logger;
 };
 
 export async function buildTestServer(
@@ -30,6 +32,7 @@ export async function buildTestServer(
     path: opts.path ?? null,
     fillMode: opts.fillMode ?? "market",
     fetchCandles: stubFetchCandles(candlesByPair),
+    logger: opts.logger,
   });
   const fastify = await buildServer({
     store,
