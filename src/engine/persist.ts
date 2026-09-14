@@ -295,9 +295,60 @@ export async function loadState(
   }
 }
 
-export async function saveState(path: string, state: PaperState): Promise<Result<true>> {
+export type SaveStateOptions = {
+  /** ディレクトリの fsync が失敗したことを知らせる先。既定は捨てる。 */
+  logger?: Logger;
+};
+
+/**
+ * `rename` が差し替えたディレクトリのエントリをディスクへ落とす。
+ *
+ * 一時ファイルの中身は `fh.sync()` で落ちているが、`rename` 自体はディレクトリの更新なので、
+ * ここを fsync しないと OS ごと落ちた場合に差し替えが失われ、古い `state.json` が残る。
+ *
+ * **失敗を書き込みの失敗へ昇格させてはいけない。** ディレクトリの fsync はどの環境でも
+ * 通るとは限らない（ファイルシステムによっては `EINVAL`、Windows では open 自体が失敗する）。
+ * ここで失敗を返すと、今まで書けていた環境が書けなくなる。差し替え自体は済んでいて
+ * `state.json` は正しく置かれているので、耐久性が落ちたことだけを呼び出し側へ返す。
+ */
+async function syncDirectory(dir: string): Promise<Result<true>> {
+  try {
+    const dh = await open(dir, "r");
+    try {
+      await dh.sync();
+    } finally {
+      await dh.close();
+    }
+    return { success: true, data: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * `PaperState` 全体を状態ファイルへ原子的に書き出す。
+ *
+ * 一時ファイルを `wx`（既存を開かない）で `0o600` で作り、書いて `fsync` してから `rename`、
+ * 最後に親ディレクトリを `fsync` する。読み手が途中の内容を見ることはなく、`rename` の
+ * 差し替えは OS ごと落ちても残る。書き込みに失敗したときは自分が作った一時ファイルだけ消す
+ * （`open` に失敗した時点では消さない。置かれていたファイルを巻き込まないため）。
+ *
+ * **戻り値は「状態ファイルが置かれたか」だけを表す。** ディレクトリの `fsync` の失敗も
+ * `opts.logger` が投げたことも、ここを `false` にはしない（`syncDirectory()` の項）。
+ * この戻り値は呼び出し側が状態の扱いを決める根拠になるので、ログの副作用で反転させない。
+ */
+export async function saveState(
+  path: string,
+  state: PaperState,
+  opts: SaveStateOptions = {},
+): Promise<Result<true>> {
   const data = `${JSON.stringify(state, null, 2)}\n`;
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
+  // ディレクトリの fsync の失敗は書き込みの成否と別に持つ。warn は try を出てから呼ぶ
+  // （logger が投げても、成立した書き込みを失敗として報告しないため。この戻り値は
+  // 呼び出し側が状態の扱いを決める根拠になる）。
+  let dirSyncError: string | null = null;
   try {
     await mkdir(dirname(path), { recursive: true });
     // "wx" は既存ファイルを開かない。一時ファイル名は pid + 乱数なので通常は衝突せず、
@@ -316,11 +367,30 @@ export async function saveState(path: string, state: PaperState): Promise<Result
       await unlink(tmp).catch(() => {});
       throw e;
     }
-    return { success: true, data: true };
+    // `rename` はディレクトリの更新なので、ここを fsync しないと OS ごと落ちたときに
+    // 差し替えが失われる。失敗しても `state.json` は置かれているので、書き込みは成功の
+    // まま返す（一時ファイルは rename で消えているので、後片付けも伴わない）。
+    const synced = await syncDirectory(dirname(path));
+    if (!synced.success) dirSyncError = synced.error;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { success: false, error: `failed to write paper state: ${msg}` };
   }
+  // ここへ来た時点で状態ファイルは置かれている。以降は成否を変えない。
+  // ログには生のパスを出さない（改行・制御文字で行を割られないよう JSON で包む）。
+  if (dirSyncError !== null) {
+    try {
+      (opts.logger ?? noopLogger).warn(
+        `state dir fsync failed for ${JSON.stringify(dirname(path))}: ${dirSyncError}; ` +
+          "the rename may not survive an OS crash",
+      );
+    } catch {
+      // logger が投げても握り潰す。`npm run dev | head` のように標準出力が閉じた後の
+      // console.warn は EPIPE で投げるので、これは想像上の経路ではない。書き込みは
+      // 既に成立していて、ログに出せなかったことでその事実を覆してはならない。
+    }
+  }
+  return { success: true, data: true };
 }
 
 export async function deleteState(path: string): Promise<Result<true>> {

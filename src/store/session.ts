@@ -151,10 +151,20 @@ export class SessionStore {
     return pending;
   }
 
+  /**
+   * 直列化された書き込みの実体。`persist()` からのみ呼ぶ。
+   *
+   * `saveState` は同期的に JSON 化するので、ここで読んだ `this._state` がそのまま着地する。
+   * 書き込みに失敗しても throw しない（warn だけ出す）。ルートは `await store.persist()` の
+   * 戻りを見ていないので、ここで投げるとハンドラの未捕捉例外になり、封筒でない 500 が返る。
+   * 応答を返した注文が再起動後に消える経路がここに残る点は `docs/fidelity.md` の
+   * 「状態の永続化」の行に記録してある（`docs/plan-lab-mock.md` 10 節の PR 3 で扱う）。
+   */
   private async write(): Promise<void> {
     if (!this.path) return;
     // saveState は同期的に JSON 化するので、ここで読んだ状態がそのまま着地する。
-    const r = await saveState(this.path, this._state);
+    // logger は、書き込みは成立したがディレクトリの fsync に失敗した場合の warn に使う。
+    const r = await saveState(this.path, this._state, { logger: this.logger });
     if (!r.success) this.logger.warn(`persist failed: ${r.error}`);
   }
 }
