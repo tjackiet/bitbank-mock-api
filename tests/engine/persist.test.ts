@@ -703,8 +703,9 @@ describe("saveState", () => {
     expect(warnings[0]).toContain(JSON.stringify(join(dir, "nested")));
     expect(warnings[0]).toContain("EINVAL");
     // 失敗したのは fsync であって open ではない（handle は開けている）。
-    // 新規に作った階層なので、葉の後も遡って試している。
-    expect(dirFsync.synced[0]).toBe(join(dir, "nested"));
+    // 1 段落ちても遡るのをやめない（最初の 1 件だけ覚えて残りも試す）。列全体を見ないと、
+    // 最初の失敗で break する実装を素通しする。
+    expect(dirFsync.synced).toEqual([join(dir, "nested"), dir]);
   });
 
   // この戻り値は呼び出し側が状態の扱いを決める根拠になるので、ログの副作用で
