@@ -659,6 +659,13 @@ describe("defaultStatePath", () => {
     );
   });
 
+  // 相対パスはどちらの env でも通す（明示的に渡した値を黙って書き換えない）。
+  // docs/fidelity.md の「状態ファイルのパス解決」行がこの形を正とする。
+  it("相対パスは STATE_PATH でも HOME でもそのまま相対パスとして解決する", () => {
+    expect(defaultStatePath("s1", { BITBANK_MOCK_STATE_PATH: "rel.json" })).toBe("rel.json");
+    expect(defaultStatePath("s1", { BITBANK_MOCK_HOME: "rel" })).toBe("rel/sessions/s1/state.json");
+  });
+
   it("env 未指定なら process.env を読む", () => {
     const before = process.env.BITBANK_MOCK_STATE_PATH;
     process.env.BITBANK_MOCK_STATE_PATH = "/tmp/z/state.json";
