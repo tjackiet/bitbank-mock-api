@@ -109,6 +109,99 @@ describe("SessionStore.tick", () => {
     ]);
     expect(warnings.every((w) => !/[\u0000-\u001f]/.test(w))).toBe(true);
   });
+
+  // `/_control/tick` で進めた lastTickAt が実時刻より先にあると、取得範囲が
+  // (未来, 現在) と逆転する。逆転した範囲では返った足が runTick の窓から全部外れて
+  // 1 本も約定しないので、取得ごと飛ばして警告を出す（以前は黙って止まっていた）。
+  it("skips the candle fetch and warns when lastTickAt is ahead of now", async () => {
+    const fetched: Array<[string, number, number]> = [];
+    const warnings: string[] = [];
+    const store = new SessionStore(
+      buildState({
+        // 時計が 5 時間先にある状態（control の tick で進めた後の形）。
+        lastTickAt: new Date(T0 + 5 * 60 * MIN).toISOString(),
+        balances: { jpy: 10_000_000 },
+        orders: [buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 })],
+      }),
+      {
+        path: null,
+        fillMode: "market",
+        feeRate: 0,
+        logger: { info: () => {}, warn: (m: string) => warnings.push(m) },
+        fetchCandles: async (pair, fromMs, toMs) => {
+          fetched.push([pair, fromMs, toMs]);
+          // 本来なら必ず約定する安い足。取得が走らないことを見たいので中身は関係ない。
+          return { success: true, data: [candle(T0 + MIN, 110, 110, 50, 105)] };
+        },
+      },
+    );
+    await store.tick(T0 + 2 * MIN);
+    // 逆転した範囲の問い合わせは走らない。
+    expect(fetched).toEqual([]);
+    expect(activeOrders(store.state())).toHaveLength(1);
+    expect(warnings).toEqual([
+      `tick: lastTickAt "${new Date(T0 + 5 * 60 * MIN).toISOString()}" is ahead of ` +
+        `now "${new Date(T0 + 2 * MIN).toISOString()}"; skipping candle fetch`,
+    ]);
+    expect(warnings.every((w) => !/[\u0000-\u001f]/.test(w))).toBe(true);
+  });
+
+  // 戻した時計は状態ファイルにも残す。約定が 0 でも書かないと、再起動で未来の時計を
+  // 読み直して同じ空振りを繰り返す。
+  it("persists the recovered clock even though nothing filled", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bitbank-mock-clock-"));
+    try {
+      const path = join(dir, "state.json");
+      const store = new SessionStore(
+        buildState({
+          lastTickAt: new Date(T0 + 5 * 60 * MIN).toISOString(),
+          balances: { jpy: 10_000_000 },
+          orders: [buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 })],
+        }),
+        {
+          path,
+          fillMode: "market",
+          feeRate: 0,
+          fetchCandles: async () => ({ success: true, data: [] }),
+        },
+      );
+      await store.tick(T0 + 2 * MIN);
+      const reloaded = await loadState(path, {});
+      expect(reloaded.success).toBe(true);
+      expect(reloaded.success && reloaded.data?.lastTickAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // 時計が先にあっても、tick の最後で lastTickAt は実時刻に戻る（既存の挙動）。
+  // だから警告が出るのはその 1 回だけで、次の tick は今までどおり取得して約定する。
+  it("recovers on the next tick once lastTickAt is back to now", async () => {
+    const fetched: Array<[string, number, number]> = [];
+    const warnings: string[] = [];
+    const store = new SessionStore(
+      buildState({
+        lastTickAt: new Date(T0 + 5 * 60 * MIN).toISOString(),
+        balances: { jpy: 10_000_000 },
+        orders: [buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 })],
+      }),
+      {
+        path: null,
+        fillMode: "market",
+        feeRate: 0,
+        logger: { info: () => {}, warn: (m: string) => warnings.push(m) },
+        fetchCandles: async (pair, fromMs, toMs) => {
+          fetched.push([pair, fromMs, toMs]);
+          return { success: true, data: [candle(T0 + 3 * MIN, 110, 110, 50, 105)] };
+        },
+      },
+    );
+    await store.tick(T0 + 2 * MIN);
+    await store.tick(T0 + 4 * MIN);
+    expect(fetched).toEqual([["btc_jpy", T0 + 2 * MIN, T0 + 4 * MIN]]);
+    expect(activeOrders(store.state())).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+  });
 });
 
 describe("SessionStore.persist", () => {

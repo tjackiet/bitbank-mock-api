@@ -58,8 +58,25 @@ export class SessionStore {
     const pairs = new Set(activeOrders(this._state).map((o) => o.pair));
     const lastMs = Date.parse(this._state.lastTickAt);
     const tickFrom = this._state.lastTickAt;
+    // `/_control/tick` で進めた lastTickAt が実時刻より先にあると、取得範囲
+    // (lastMs, nowMs) が逆転する。逆転した範囲で外へ問い合わせても、返った足は
+    // runTick の窓（fromMs = min(lastTickAt, nowMs) 以上 nowMs 以下）から全部外れて
+    // 1 本も約定しない。無駄な問い合わせなので取得ごと飛ばし、黙って止まらないよう
+    // 警告を出す（この後 lastTickAt は nowMs で上書きされるので、次の tick は通る）。
+    // ログには生の値を出さない（改行・制御文字で行を割られないよう JSON で包む）。
+    const clockAhead = lastMs > nowMs;
+    if (clockAhead && pairs.size > 0) {
+      this.logger.warn(
+        `tick: lastTickAt ${JSON.stringify(tickFrom)} is ahead of now ` +
+          `${JSON.stringify(new Date(nowMs).toISOString())}; skipping candle fetch`,
+      );
+    }
     let totalFilled = 0;
     for (const pair of pairs) {
+      if (clockAhead) {
+        result.set(pair, []);
+        continue;
+      }
       // 状態ファイルから読んだ注文のペアは検証を通っていない（PaperStateSchema は文字種を
       // 見ない）。文字種が不正なペアは外向きに問い合わせても意味が無く、足が返ってくると
       // fillOrder が INVALID_PAIR を返して applyFill が throw する。ここで落とす。
@@ -92,7 +109,12 @@ export class SessionStore {
     }
     const ts = new Date(nowMs).toISOString();
     this._state = { ...this._state, lastTickAt: ts, updatedAt: ts };
-    if (totalFilled > 0) await this.persist();
+    // 約定が無いときは書かない（互換ルートは読み取りでも tick を回すので、毎回書くと
+    // 状態ファイルへの書き込みが要求ごとに起きる）。ただし時計が先にあった回だけは、
+    // ここで実時刻へ戻した lastTickAt を残す。残さないと、再起動後にファイルから
+    // 未来の時計を読み直して同じ空振りを繰り返す。戻した後は clockAhead が偽になるので、
+    // この書き込みが続くことはない。
+    if (totalFilled > 0 || clockAhead) await this.persist();
     return result;
   }
 
