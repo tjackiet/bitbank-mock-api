@@ -10,18 +10,24 @@ import type { Logger } from "../../src/engine/types.ts";
 import { loadOrInitDefault } from "../../src/store/session.ts";
 import { buildOrder, buildState, buildTrade } from "./helpers.ts";
 
-// `rename` の後のディレクトリの fsync を観測する。saveState は "r" でディレクトリを開くので、
-// その handle だけを包む（一時ファイルは "wx"、状態の読み込みは readFile なので混ざらない）。
-//
-// **観測も注入も `sync()` の側で行う。** open の時点で拾うと、fsync を呼ばずに open と
-// close だけする退行をテストが素通しする（実際に dh.sync() を外して 40 件すべて通ることを
-// 確認した）。固定したいのは「ディレクトリを開いたこと」ではなく「fsync したこと」である。
-// 既定は素通しで、失敗させるテストだけが dirFsync.fail を立てる。
+// `rename` の後のディレクトリの fsync を観測する入れ物。既定は素通しで、
+// 失敗させるテストだけが dirFsync.fail を立てる。
 const dirFsync = vi.hoisted(() => ({ synced: [] as string[], fail: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    /**
+     * `open` を包み、ディレクトリの handle の `sync()` だけを観測・失敗させる。
+     *
+     * 包むのは `"r"` で開いたときだけである。`saveState` はディレクトリを `"r"`、
+     * 一時ファイルを `"wx"` で開き、状態の読み込みは `readFile` を通るので混ざらない。
+     *
+     * **観測も注入も `sync()` の側で行う。** `open` の時点で拾うと、fsync を呼ばずに
+     * `open` と `close` だけする退行をテストが素通しする（実際に `syncDirectory()` から
+     * `dh.sync()` を外して 40 件すべて通ることを確認した）。固定したいのは
+     * 「ディレクトリを開いたこと」ではなく「fsync したこと」である。
+     */
     open: async (p: Parameters<typeof actual.open>[0], flags?: unknown, mode?: unknown) => {
       const fh = await actual.open(p, flags as never, mode as never);
       if (flags !== "r") return fh;
