@@ -19,7 +19,7 @@
 | 存在しない単一注文 ID | `GET order` は `50009` を返す。`pair` 不一致も `50009` | 公式は「3 か月超の終端注文は 50009」のみ明記 | 存在しない ID 自体の明記はない | はい | snapshot を取得できない注文は DCL が stale / fail-closed と扱う |
 | 存在しない一括照会 ID | `orders_info` はエラーにせず該当 ID を `orders` から除外する。0 件でも `success: 1`。応答順はリクエストの `order_ids` 順 | 公式は「3 か月超の終端注文は返さない」と明記 | 存在しない ID への適用と配列順は未明記 | はい | Nyx 側は欠落 ID の再照会上限を持つ必要がある |
 | 注文状態 | `INACTIVE` を含む公式の 7 値を `OrderRecord.status` に持つ。Plan A で `INACTIVE` は到達しない | REST API: Fetch order information | 逆指値等は未実装 | いいえ | 終端状態の不変性を検証対象にする |
-| 注文 ID | 状態の `nextOrderSeq`（初期値 1）を永続化し、発注のたびに単調増加させる | 公式は数値の order id を定義 | 実取引所の桁数・採番方式とは異なる。v2 から移行した巨大 ID（旧 `Date.now() * 1000 + counter`）がある場合は、その最大値 + 1 から続くので桁が大きく残る | はい | シナリオの再現性と再起動後の一意性を優先 |
+| 注文 ID | 状態の `nextOrderSeq`（初期値 1）を永続化し、発注のたびに単調増加させる。採番が安全整数を使い切ったら発注を断る（`create_order` は 70001。同じ id を 2 回配らないため。下の「不変量の前提」） | 公式は数値の order id を定義 | 実取引所の桁数・採番方式とは異なる。v2 から移行した巨大 ID（旧 `Date.now() * 1000 + counter`）がある場合は、その最大値 + 1 から続くので桁が大きく残る | はい | シナリオの再現性と再起動後の一意性を優先 |
 | trade ID | 注文 ID とは別の `nextTradeSeq`（初期値 1）を永続化する。v2 の `history.id` は使わず 1 から振り直す | 公式の trade history は trade_id を持つ | 本物の採番とは一致しない | はい | 部分約定でも trade を一意に参照できる |
 | 成行注文の記録 | 成行も `OrderRecord` を採番し、即時 `fillOrder` して `FULLY_FILLED` として残す | 公式は成行も order id を返す | 旧モックは成行を `history` にだけ入れ、注文レコードを持たなかった | はい | Phase 2 の ID 照会で成行も引ける前提になる |
 | v2 からの移行 | 旧 `openOrders` は `UNFILLED`、旧 `history` は `FULLY_FILLED` + `trades`。`history.filledAt` を移行後の `orderedAt` とする | 旧 state に発注時刻がない | 移行済み注文の `ordered_at` は真の発注時刻ではない | はい | 既存ローカル state の照会結果は研究データに使わない |
@@ -150,10 +150,16 @@ zod スキーマにも `invariantViolations()` にも混ぜなかった理由は
   **2255-06-05T23:47:34Z（今から約 229 年後）**である。したがって v2 由来の飽和は現実には到達しない。
   それでも検査を残したのは、費用が `Number.isSafeInteger` 1 回で、手で書かれた state と
   別実装が書いた state が同じ入口から入るためである。
-  **残る穴**: `nextOrderSeq = Number.MAX_SAFE_INTEGER` ちょうどの state は通り、1 件目の
-  `9007199254740991` だけが一意で 2 件目から飽和する。本モックの採番は 1 から 1 ずつ進むので、
-  そこへ到達するには `9.007e15` 件の発注が要る（毎秒 1000 件でも約 28.5 万年）。到達するのは
-  state ファイルを手でその値に書いた場合だけで、検査を足していない。
+  **読み込み時の検査だけでは飽和を防げない**ので、配る側にもガードを置いた
+  （`src/engine/transitions.ts` の `canIssue()`）。検査が見られるのは読み込んだ時点の採番で、
+  飽和は実行中の `+ 1` で起きる。境界をどこに引いても「あと数件で飽和する採番」は検査を通り、
+  その数件を配った後に重複が出る（`Number.MAX_SAFE_INTEGER` を弾いても `- 1` が同じ道を辿る。
+  実測は PR #25 の報告を参照）。そこで `placeOrder` は `nextOrderSeq` が、`fillOrder` は
+  `nextTradeSeq` が安全整数を外れていたら、状態を変えずに `ORDER_SEQ_EXHAUSTED` /
+  `TRADE_SEQ_EXHAUSTED` で断る。互換ルートでは `mapPlaceError` の既定で 70001 になる。
+  これで**配った id は必ず直前より大きく、重複しない**（`MAX_SAFE_INTEGER` から始めると
+  1 件目の `9007199254740991` を配り、2 件目を断る）。移行が飽和した採番を出した state も、
+  warn で起動して履歴は読めるが新しい発注は 70001 で断られる（重複 id は配らない）。
 - **`startAmount > 0`** → 検査する（`start-amount`）。不変量 3 が条件に含む前提。`startAmount == 0` の
   `UNFILLED` 注文は残量 0 のまま永遠に active で、`fillOrder` が非正の量を断るので約定させる手段が
   無い。`placeOrder` は `amount <= 0` を断るので本モックの経路では作れないが、state ファイルと
