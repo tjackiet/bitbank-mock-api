@@ -469,7 +469,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 | # | 内容 | 判断 | 主に触る所 | 状態 |
 |---|---|---|---|---|
 | 1 | `rename` 後のディレクトリ `fsync` | 不要 | `saveState()` / 対応表「状態の永続化」 | **完了** |
-| 2 | persist 失敗を store が覚え、`GET /_control/state` に出す | 不要 | `SessionStore` / `control.ts` / 同上 | 未着手 |
+| 2 | persist 失敗を store が覚え、`GET /_control/state` に出す | 不要 | `SessionStore` / `control.ts` / 同上 | **完了** |
 | 3 | persist 失敗時は状態変更を断り、読み取りは生かす | **決定済み（10.5）** | `SessionStore` / `http.ts` / `config.ts` / 同上 | 未着手 |
 | 4 | 起動時の排他ロック | 要 | 新規モジュール / `loadOrInitDefault()` / 対応表「多重起動」/ README | 未着手 |
 | 5 | 起動時の孤児 `.tmp` 掃除（任意） | 不要 | `loadOrInitDefault()` | 未着手 |
@@ -486,7 +486,7 @@ PR 1 のマージ直後に CodeRabbit から「diff の外」の指摘が 2 件�
 
 **PR 2 — 失敗の記録と可視化。** `SessionStore` が最後の persist 失敗（時刻・メッセージ・連続失敗数）を持ち、`GET /_control/state` に添える。互換ルートの応答も封筒も変えないので決定不要。PR 3 の土台であり、方針を決めるための実測材料でもある。
 
-**PR 3 — 失敗時に状態変更を断る。** 10.5 の決定に従う。
+**PR 3 — 失敗時に状態変更を断る。** 10.5 の決定に従う。PR 2 で `SessionStore.write()` の `this.logger.warn()` に `EPIPE` の穴（logger が投げると `persist()` が reject してルートが 500）が残っているのは変わらない。PR 2 は記録を warn より先に行うことで「失敗した事実は残る」ところまで担保したので、PR 3 は劣化の判定がログの副作用で動かないことを仕上げる。
 
 **PR 4 — 起動時の排他ロック。** 対応表「同一状態ファイルの多重起動」の**既決事項を書き換える PR**。現行の根拠は「書き込みロックを入れてもプロセスごとに状態と採番が分かれるので、注文の消失と id 重複は防げない」だが、これは**書き込みロック**についての議論である。起動時の排他は状況そのものを作らせない別の機構だ、というのが新しい根拠になる。設計の要点は stale lock で、`<state path>.lock` を `wx` で作って pid を書き、`EEXIST` なら `process.kill(pid, 0)` で生存を見て、死んでいれば奪う。これが無いと `SIGKILL` の後に二度と起動できないという、今より悪い footgun になる。README の警告文も差し替える。
 

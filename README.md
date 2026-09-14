@@ -74,6 +74,8 @@ Error: paper state violates invariants: 6 violation(s): 1: order 1 executedAmoun
 
 v1 / v2 の状態ファイルを v3 へ移行した結果が不変量を破っている場合だけは、起動を止めずに warn を出します（`migrated paper state violates invariants: ...`）。
 
+書き出しに失敗しても互換ルートは 2xx を返すので、**書き込みが効いているかは `GET /_control/state` の `persist` で確かめてください**（`consecutiveFailures > 0` なら今まさに失敗しています。`lastError` は成功しても消えないので、一度でも失敗したかが残ります）。
+
 状態ファイルはファイルロックを持ちません。**同じ `BITBANK_MOCK_STATE_PATH` を 2 プロセスから同時に使わないでください。** 後から書いた側が相手の注文を丸ごと消し、order id も重複します。並列にシナリオを流すときはパスを分けてください。詳しくは [`docs/fidelity.md`](docs/fidelity.md) の「状態の永続化」以下の行を見てください。
 
 ## `/_control/`
@@ -86,7 +88,7 @@ bitbank API には存在しません。DCL や本番クライアントから叩�
 | `POST` | `/_control/tick` | `{ pair, price }` または `{ pair, candle }` で人工の足を 1 本適用 |
 | `POST` | `/_control/clock` | `lastTickAt` だけを動かす。本文省略で現在時刻、`{ lastTickAt }` に ISO 文字列かエポックミリ秒。注文・約定・残高は残る |
 | `POST` | `/_control/reset` | 状態を初期化 |
-| `GET` | `/_control/state` | `PaperState` を返す |
+| `GET` | `/_control/state` | `PaperState` に、状態ファイルへの書き出しの状況（`persist`）を添えて返す |
 
 `POST /_control/tick` が進める `lastTickAt`（control の時計）は、足の `timestamp` でも tick ごとの 60 秒の前進でも、実時刻より先へは 24 時間までしか動きません。超える要求は 400（`CANDLE_TOO_FAR_AHEAD` / `CLOCK_TOO_FAR_AHEAD`）で断り、状態は変えません。戻すのは `POST /_control/clock` です（`reset` と違って注文・約定・残高は残ります）。詳細は [`docs/fidelity.md`](docs/fidelity.md) の「control の時計」の行にあります。
 

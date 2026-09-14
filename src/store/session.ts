@@ -15,6 +15,24 @@ import { fillMode, type FillMode } from "../server/config.ts";
 
 const LATEST_LOOKBACK_MS = 5 * 60_000;
 
+/**
+ * 状態ファイルへの書き出しが今どうなっているか。`GET /_control/state` に添えて返す。
+ *
+ * 2xx だけでは書き込みの成否を判定できない（`write()` は失敗しても throw しない）ので、
+ * 警告ログを読む以外に確かめる手段が無かった。実験中にここを見れば、応答を返した注文が
+ * 再起動後に消える状態になっていないかを機械的に判定できる。
+ *
+ * `lastError` は**成功しても消さない**。一度でも失敗したなら、その実験で取った記録は
+ * 疑ってかかる必要があるため。今まさに失敗し続けているかどうかは
+ * `consecutiveFailures > 0` で見る。
+ */
+export type PersistHealth = {
+  /** 直近の書き込み失敗。まだ一度も失敗していなければ `null`。 */
+  lastError: { at: string; message: string } | null;
+  /** 直近の書き込みが連続で失敗した回数。1 回でも成功すると 0 に戻る。 */
+  consecutiveFailures: number;
+};
+
 export type SessionStoreOptions = {
   fetchCandles?: FetchCandles;
   path?: string | null;
@@ -34,6 +52,8 @@ export class SessionStore {
   private persistTail: Promise<void> = Promise.resolve();
   /** 予約済みでまだ始まっていない書き込み。重なった persist() はここへ合流する。 */
   private persistPending: Promise<void> | null = null;
+  /** 書き出しの失敗の記録。`persistHealth()` で読む。 */
+  private _persistHealth: PersistHealth = { lastError: null, consecutiveFailures: 0 };
 
   constructor(state: PaperState, opts: SessionStoreOptions = {}) {
     this._state = state;
@@ -50,6 +70,16 @@ export class SessionStore {
 
   replace(next: PaperState): void {
     this._state = next;
+  }
+
+  /**
+   * 状態ファイルへの書き出しが今どうなっているか（`PersistHealth`）。
+   *
+   * `path` を持たない store（テストや `path: null`）は書き出し自体をしないので、
+   * 初期値のまま動かない。
+   */
+  persistHealth(): PersistHealth {
+    return this._persistHealth;
   }
 
   async tick(nowMs: number = Date.now()): Promise<Map<string, Candle[]>> {
@@ -155,17 +185,34 @@ export class SessionStore {
    * 直列化された書き込みの実体。`persist()` からのみ呼ぶ。
    *
    * `saveState` は同期的に JSON 化するので、ここで読んだ `this._state` がそのまま着地する。
-   * 書き込みに失敗しても throw しない（warn だけ出す）。ルートは `await store.persist()` の
-   * 戻りを見ていないので、ここで投げるとハンドラの未捕捉例外になり、封筒でない 500 が返る。
+   * 書き込みに失敗しても throw しない。`_persistHealth` へ記録して warn を出すだけである。
+   * ルートは `await store.persist()` の戻りを見ていないので、ここで投げるとハンドラの
+   * 未捕捉例外になり、封筒でない 500 が返る。
+   *
    * 応答を返した注文が再起動後に消える経路がここに残る点は `docs/fidelity.md` の
    * 「状態の永続化」の行に記録してある（`docs/plan-lab-mock.md` 10 節の PR 3 で扱う）。
+   * 呼び出し側がそれを検知する手段が `persistHealth()` であり、`GET /_control/state` の
+   * `persist` として出る。
    */
   private async write(): Promise<void> {
     if (!this.path) return;
     // saveState は同期的に JSON 化するので、ここで読んだ状態がそのまま着地する。
     // logger は、書き込みは成立したがディレクトリの fsync に失敗した場合の warn に使う。
     const r = await saveState(this.path, this._state, { logger: this.logger });
-    if (!r.success) this.logger.warn(`persist failed: ${r.error}`);
+    if (r.success) {
+      this._persistHealth = { ...this._persistHealth, consecutiveFailures: 0 };
+      return;
+    }
+    // **記録は warn より先に行う。** logger が投げても（閉じた標準出力への console.warn は
+    // EPIPE で投げる）、書き込みに失敗した事実まで一緒に落とさないため。
+    this._persistHealth = {
+      lastError: { at: nowIso(), message: r.error },
+      consecutiveFailures: this._persistHealth.consecutiveFailures + 1,
+    };
+    // エラーメッセージは JSON で包む。fs のエラーは対象のパスを生のまま含み
+    // （`rename '/a\nb.tmp' -> '/a\nb'`）、パスは BITBANK_MOCK_STATE_PATH 由来なので、
+    // 包まないと改行でログ行を割られる（saveState 側と同じ扱い）。
+    this.logger.warn(`persist failed: ${JSON.stringify(r.error)}`);
   }
 }
 
