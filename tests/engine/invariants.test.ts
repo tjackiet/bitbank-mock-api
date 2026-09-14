@@ -7,12 +7,26 @@ import { buildOrder, buildState, buildTrade } from "./helpers.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
+/**
+ * 発注する数量。小さい側（`0.001` 付近）と、不変量 5 の境界を跨ぐ大きい側（`8192` 以上）の
+ * 両方を出す。
+ *
+ * 旧範囲は `0.001`〜`0.006` で、`fillOrder` の全約定クランプが作る 1 ulp のずれが不変量 5 の
+ * 許容差に埋もれてしまい、この操作列では違反を再現できなかった（`8192` 以上で 1 ulp が
+ * `1e-12` を超える）。桁 4 の格子へ丸めるのは互換ルートの `fitsDigits` と揃えるため。
+ */
+function randomAmount(seed: number, steps: number): number {
+  const n = Math.abs(seed) % steps;
+  const base = Math.abs(seed) % 3 === 0 ? 8192.0011 : 0.001;
+  return Math.round((base + n / 10000) * 10000) / 10000;
+}
+
 function applyRandomOp(state: PaperState, kind: number, a: number, b: number): PaperState {
   const at = NOW;
   const feeRate = 0;
   const k = Math.abs(kind) % 5;
   if (k === 0) {
-    const amount = Math.round((0.001 + (a % 50) / 10000) * 10000) / 10000;
+    const amount = randomAmount(a, 50);
     const price = 1000 + (b % 200);
     const r = placeOrder(
       state,
@@ -24,7 +38,7 @@ function applyRandomOp(state: PaperState, kind: number, a: number, b: number): P
     return r.success ? r.data.state : state;
   }
   if (k === 1) {
-    const amount = Math.round((0.001 + (a % 20) / 10000) * 10000) / 10000;
+    const amount = randomAmount(a, 20);
     const price = 1000 + (b % 200);
     const r = placeOrder(
       state,
@@ -40,11 +54,19 @@ function applyRandomOp(state: PaperState, kind: number, a: number, b: number): P
   const target = open[Math.abs(a) % open.length];
   if (!target) return state;
   if (k === 2) {
-    const rem = remainingOf(target);
+    // 合計と `executedAmount` がずれる唯一の箇所は `fillOrder` の全約定クランプで、
+    // 踏むのは「部分約定のあとに残量ちょうどを約定させる」経路だけ。毎回 open から
+    // 一様に選ぶと open が増えるぶん同じ注文を続けて引けず、40 操作では滅多に届かない。
+    // `kind` の別の桁（`k` が使うのは 5 で割った余りだけ）で、半分は部分約定済みから選ぶ。
+    const partial = open.filter((o) => o.status === "PARTIALLY_FILLED");
+    const pool = Math.abs(kind) % 10 === 7 && partial.length > 0 ? partial : open;
+    const picked = pool[Math.abs(a) % pool.length];
+    if (!picked) return state;
+    const rem = remainingOf(picked);
     const frac = 0.25 + (Math.abs(b) % 4) * 0.25;
     const amount = Math.round(rem * frac * 10000) / 10000;
-    const px = target.price ?? 1000;
-    const r = fillOrder(state, target.id, px, amount > 0 ? Math.min(amount, rem) : rem, at, feeRate);
+    const px = picked.price ?? 1000;
+    const r = fillOrder(state, picked.id, px, amount > 0 ? Math.min(amount, rem) : rem, at, feeRate);
     return r.success ? r.data.state : state;
   }
   if (k === 3) {
@@ -53,6 +75,30 @@ function applyRandomOp(state: PaperState, kind: number, a: number, b: number): P
   }
   const r = rejectOrder(state, target.id, at);
   return r.success ? r.data.state : state;
+}
+
+/**
+ * `8208.0011` の売り指値へ `16.0009` を約定させ、残量を全部約定させた状態。
+ * `fillOrder` の全約定クランプで trade の合計と `executedAmount` が 1 ulp ずれる。
+ * docs/fidelity.md の「不変量 5 と `fillOrder` のクランプ」に載る再現手順そのもの。
+ */
+function largeFilledState(): PaperState {
+  let state = buildState({ balances: { jpy: 1_000_000, xrp: 100_000 } });
+  const placed = placeOrder(
+    state,
+    { pair: "xrp_jpy", side: "sell", type: "limit", amount: 8208.0011, price: 50 },
+    NOW,
+    undefined,
+    0,
+  );
+  if (!placed.success) throw new Error(placed.error);
+  state = placed.data.state;
+  const partial = fillOrder(state, "1", 50, 16.0009, NOW, 0);
+  if (!partial.success) throw new Error(partial.error);
+  state = partial.data.state;
+  const rest = fillOrder(state, "1", 50, remainingOf(partial.data.order), NOW, 0);
+  if (!rest.success) throw new Error(rest.error);
+  return rest.data.state;
 }
 
 describe("invariants", () => {
@@ -102,6 +148,108 @@ describe("invariants", () => {
     expect(invariantViolations(state, 0)).toContain("6: locked[constructor]=999 exceeds balance=0");
   });
 
+  /**
+   * `fillOrder` の全約定クランプの境界。残量ちょうどの約定で `executedAmount` を
+   * `startAmount` へ揃える一方、trade には残量（`remainingOf()` の値）が入るので、
+   * trade の合計は `startAmount` と最大 1 ulp ずれる。`startAmount` が `8192` 以上だと
+   * その 1 ulp が `1e-12` を超えるため、遷移関数だけを通った状態が違反と判定されていた。
+   *
+   * 再現の値（docs/fidelity.md の同節）をそのまま固定する。ずれが実際に `1e-12` を
+   * 超えていることも見て、境界を踏んでいないテストが通り続けるのを防ぐ。
+   */
+  it("hold for a large order filled partially then fully", () => {
+    const state = largeFilledState();
+    const order = state.orders[0];
+    const tradeSum = state.trades.reduce((sum, t) => sum + t.amount, 0);
+    expect(order?.status).toBe("FULLY_FILLED");
+    expect(Math.abs(tradeSum - order!.executedAmount)).toBeGreaterThan(1e-12);
+    expect(invariantViolations(state, 0)).toEqual([]);
+  });
+
+  /**
+   * 同じ境界を `8192`〜`16383` の範囲で広く見る。ずれが `1e-12` を超えるのは
+   * 部分約定 → 全約定の組のうち約 3.6%（実測）なので、操作列の性質より本数を多く取る。
+   */
+  it("hold for large partial-then-full fills across the clamp boundary", () => {
+    fc.assert(
+      fc.property(
+        // 桁 4 の格子に載る 8192.0000〜16383.9999。
+        fc.integer({ min: 81_920_000, max: 163_839_999 }),
+        // 最初の約定が `startAmount` に占める割合（1/10000 単位）。
+        fc.integer({ min: 1, max: 9_999 }),
+        (rawAmount, rawFrac) => {
+          const startAmount = rawAmount / 10_000;
+          // startAmount * (rawFrac / 10000) を桁 4 の格子へ丸めた量。
+          const first = Math.round(startAmount * rawFrac) / 10_000;
+          if (!(first > 0) || first >= startAmount) return;
+          let state = buildState({ balances: { jpy: 1_000_000, xrp: 1_000_000 } });
+          const placed = placeOrder(
+            state,
+            { pair: "xrp_jpy", side: "sell", type: "limit", amount: startAmount, price: 50 },
+            NOW,
+            undefined,
+            0,
+          );
+          if (!placed.success) throw new Error(placed.error);
+          state = placed.data.state;
+          const partial = fillOrder(state, "1", 50, first, NOW, 0);
+          if (!partial.success) throw new Error(partial.error);
+          state = partial.data.state;
+          expect(invariantViolations(state, 0)).toEqual([]);
+          const rest = fillOrder(state, "1", 50, remainingOf(partial.data.order), NOW, 0);
+          if (!rest.success) throw new Error(rest.error);
+          state = rest.data.state;
+          expect(state.orders[0]?.status).toBe("FULLY_FILLED");
+          expect(invariantViolations(state, 0)).toEqual([]);
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
+
+  /**
+   * 許容差を大きさへ比例させても、**本当に間違っている合計は引き続き違反**になること。
+   * ここが通ってしまうと不変量 5 を無効化したのと同じになる。
+   */
+  it("still flags a trade sum that is off by 1%", () => {
+    const base = largeFilledState();
+    const trades = base.trades.map((t, i) =>
+      i === base.trades.length - 1 ? { ...t, amount: t.amount * 0.99 } : t,
+    );
+    const violations = invariantViolations({ ...base, trades }, 0);
+    expect(violations.some((v) => v.startsWith("5: order 1 trades="))).toBe(true);
+  });
+
+  it("still flags a missing trade", () => {
+    const base = largeFilledState();
+    const violations = invariantViolations({ ...base, trades: base.trades.slice(1) }, 0);
+    expect(violations.some((v) => v.startsWith("5: order 1 trades="))).toBe(true);
+  });
+
+  it("still flags a notional sum that is off by 1%", () => {
+    const base = largeFilledState();
+    const order = base.orders[0]!;
+    const violations = invariantViolations(
+      { ...base, orders: [{ ...order, executedNotional: order.executedNotional * 0.99 }] },
+      0,
+    );
+    expect(violations.some((v) => v.startsWith("5: order 1 tradeNotional="))).toBe(true);
+  });
+
+  /**
+   * 絶対項 `1e-12` は床として残してある。小さい注文では相対項がほぼ効かないので、
+   * 大きさが小さい側の検査の厳しさは変えていない。
+   */
+  it("still flags a 1e-11 drift on a small order", () => {
+    const order = buildOrder({ id: "1", startAmount: 0.001, executedAmount: 0.001, status: "FULLY_FILLED", executedNotional: 5_000 });
+    const state = buildState({
+      orders: [order],
+      trades: [buildTrade({ orderId: "1", amount: 0.001 + 1e-11, price: 5_000_000, feeQuote: 0 })],
+    });
+    const violations = invariantViolations(state, 0);
+    expect(violations.some((v) => v.startsWith("5: order 1 trades="))).toBe(true);
+  });
+
   it("hold after random place/fill/cancel/reject sequences", () => {
     fc.assert(
       fc.property(
@@ -110,7 +258,10 @@ describe("invariants", () => {
           maxLength: 40,
         }),
         (ops) => {
-          let state = buildState({ balances: { jpy: 10_000_000, btc: 1 } });
+          // 数量を 8192 以上まで広げたので、残高も 40 操作ぶんの拘束（買いは
+          // 1200 * 8200 ≒ 1e7 / 件）を飲み込める大きさにする。足りないと placeOrder が
+          // INSUFFICIENT_FUNDS で断って、大きい数量の注文が 1 件も作られない。
+          let state = buildState({ balances: { jpy: 10_000_000_000, btc: 1_000_000 } });
           const terminals = new Map<string, string>();
           for (const [kind, a, b] of ops) {
             const before = new Map(state.orders.filter(isTerminal).map((o) => [o.id, JSON.stringify(o)]));

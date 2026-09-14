@@ -73,7 +73,7 @@
 | --- | --- | --- |
 | 生成 | `src/engine/transitions.ts`（`placeOrder` / `fillOrder` / `cancelOrder` / `rejectOrder`）と `src/engine/match.ts` | 常時。注文・約定・残高を変える唯一の経路（`rejectOrder` は本番経路から呼ばれておらず、テストからのみ到達する）。`SessionStore.tick()` は market モードでこの層（`runTick()` → `fillOrder()`）を通して注文・約定・残高・`nextTradeSeq` を変え、そのうえで `lastTickAt` / `updatedAt` を実時刻へ上書きする（manual モードは早期 return で何も変えない）。この層を通さずに `PaperState` を差し替えるのは `POST /_control/reset`（全レコードを捨てて作り直す）と `POST /_control/clock`（`lastTickAt` / `updatedAt` だけ）である |
 | 読み込み時の検査 | `src/engine/persist.ts` の `loadState()` | 起動時に状態ファイルを読み、v3 へ移行した直後に 1 回。違反があれば起動しない（v1 / v2 からの移行だけは warn で通す） |
-| テスト | `tests/engine/invariants.test.ts` | `npm test`。fast-check のランダム操作列 40 本 × 各操作の後。操作は `btc_jpy` の**指値**の発注・約定・取消・拒否だけで、手数料率は 0、数量は `0.001`〜`0.006`。成行・`runTick()`・移行・`/_control/` の各口・複数ペア・重複 id・`8192` 以上の数量は含まない |
+| テスト | `tests/engine/invariants.test.ts` | `npm test`。fast-check のランダム操作列 40 本 × 各操作の後。操作は `btc_jpy` の**指値**の発注・約定・取消・拒否だけで、手数料率は 0、数量は `0.001`〜`0.006` と `8192.0011`〜`8192.006`（約 1/3 が大きい側。クランプの境界を跨ぐため）。約定は半分の確率で部分約定済みの注文から選ぶ（クランプは「部分約定のあとに残量ちょうどを約定させる」経路でしか踏まないため）。これとは別に、`8192`〜`16383` の `startAmount` を部分約定 → 全約定させる性質を 500 本回す。成行・`runTick()`・移行・`/_control/` の各口・複数ペア・重複 id は含まない |
 
 6 本それぞれの担保箇所は次のとおり。「実行時」は本番経路（`src/`）で検査していることを指す。
 
@@ -83,7 +83,7 @@
 | 2 | `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端。`CANCELED_UNFILLED` / `REJECTED` も 0、`CANCELED_PARTIALLY_FILLED` は `> 0` | `cancelOrder` が現在の status（`PARTIALLY_FILLED` かどうか）で `CANCELED_PARTIALLY_FILLED` / `CANCELED_UNFILLED` を選び、`rejectOrder` は `UNFILLED` / `INACTIVE` にしか許さない | 読み込み時のみ | あり |
 | 3 | `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`） | `fillOrder` が残量 0 になった注文だけを `FULLY_FILLED` にする | 読み込み時のみ | あり |
 | 4 | 終端状態のレコードは以後の遷移で変化しない | `fillOrder` / `cancelOrder` / `rejectOrder` が非 active な注文を `ORDER_NOT_ACTIVE` で断る。`POST /_control/orders/:id/fill` も終端は 409。ただしこのガードは**注文 id が一意であること**を前提にしており、同じ id のレコードが 2 件あると `replaceOrder()`（`src/engine/transitions.ts`）が id 一致の全件を置き換えるため、active な方への約定・取消が終端レコードを書き換える（下の「不変量の前提として検査していないもの」） | **無し**（単一状態の述語ではないので `invariantViolations()` は検査できない。読み込み時にも検査されない） | あり。`tests/engine/invariants.test.ts` の「hold after random place/fill/cancel/reject sequences」が終端レコードを `JSON.stringify` で控え、各操作の後と操作列の最後に一致を見る（2 状態の比較なのでここでしか検査できない） |
-| 5 | 各注文で `trades` の `amount` 合計 == `executedAmount`、`amount × price` 合計 == `executedNotional`。孤児 trade は禁止 | `fillOrder` が注文の更新と trade の追加を同じ返り値で行う（部分適用が起きない） | 読み込み時のみ（合計の一致は許容差つきで判定。下記） | あり |
+| 5 | 各注文で `trades` の `amount` 合計 == `executedAmount`、`amount × price` 合計 == `executedNotional`。孤児 trade は禁止 | `fillOrder` が注文の更新と trade の追加を同じ返り値で行う（部分適用が起きない） | 読み込み時のみ（合計の一致は大きさに比例する許容差つきで判定。下記） | あり（ランダム操作列 + クランプ境界の性質 + 合計が本当に間違っている明示ケース） |
 | 6 | 各資産で残高は負にならず、`locked` は残高を超えない | `placeOrder` が `availableOf`（残高 − 拘束）を見て足りなければ `60001` で断る。約定は発注時に拘束した分を超えて使わない（指値の約定価格は order price より不利にならない）ので、`fillOrder` の残高更新で負にはならない。`POST /_control/reset` は負の残高・非有限の残高・`[a-z0-9]+` でない資産キーを 400 `INVALID_BALANCES` で断る。**例外**: `price == null` の買い注文は `computeLocked()` が拘束に数えず、`POST /_control/orders/:id/fill` は成行に価格の上限を掛けないので、state ファイル由来の active な成行買いを約定させると残高が負になる（下の「不変量の前提として検査していないもの」） | 読み込み時のみ（負の残高・拘束超過はどちらも許容差 `1e-9` を超える差だけを違反とする） | あり（ただしプロパティテストは手数料率 0 でしか回らない） |
 
 不変量 4 以外は単一の状態から判定できるので、`loadState()` が読み込み時に 1 回検査する。
@@ -127,23 +127,56 @@ v2 が書いた state が不変量 6 を破ることはない（境界の実測�
   無違反で通る（残量 0 のまま永遠に active で、約定させる手段は無い）。`placeOrder` は `amount <= 0` を
   断るので本モックの経路では作れないが、state ファイルと v1 / v2 の `history` からは入る。
 
-**不変量 5 と `fillOrder` のクランプは、大きい `startAmount` で整合しない（未確定）。**
+**不変量 5 と `fillOrder` のクランプ（決着済み。許容差を大きさへ比例させた）。**
 `fillOrder` は残量ちょうどの約定を全約定として `executedAmount` を `startAmount` へ揃える（下の内部規則）。
 一方 trade には実際に約定した量（`remainingOf()` の値）が入るので、`trades` の `amount` 合計は
-`startAmount` と最大 1 ulp ずれる。`startAmount` が `8192` 以上だと 1 ulp が不変量 5 の許容差 `1e-12` を
-超えるため、**遷移関数だけを通って作った状態が不変量 5 の違反と判定される**。
+`startAmount` と最大 1 ulp ずれる。`startAmount` が `8192` 以上だと 1 ulp が `1e-12` を超えるため、
+**かつては遷移関数だけを通って作った状態が不変量 5 の違反と判定され、次の起動が止まっていた**。
 再現（`xrp_jpy`、数量はどちらも `fitsDigits(_, 4)` を通る）: `startAmount = 8208.0011` の売り指値へ
 `16.0009` を約定させ、残った `8192.000199999999` を約定させると、`executedAmount = 8208.0011` に対し
 trade の合計は `8208.001099999998`（差 `1.819e-12`）になる。この状態はそのまま書き出されるので、
-次の起動は `paper state violates invariants: 1 violation(s): 5: order 1 ...` で**止まる**
-（状態は自動修復しないので、state ファイルを手で直すか消すまで戻らない）。
+次の起動が `paper state violates invariants: 1 violation(s): 5: order 1 ...` で止まっていた
+（状態は自動修復しないので、state ファイルを手で直すか消すまで戻らなかった）。
 
-モックはこの 2 択のうち**不変量 3 を優先している**（`executedAmount == startAmount` を保ち、合計の
-ずれは許容差に収まる範囲でだけ吸収する）。許容差を広げることも、クランプをやめることもしていない。
-量を桁の格子へ量子化する（Phase 2）以外に両方を同時に満たす方法は決めていないため、
-`startAmount` が `8192` 以上になる部分約定はこの境界を踏み得る。なお `fitsDigits()` はスケール後の値と
-整数の差を `1e-8` で見るので、桁 4 なら `amount` に許す幅は大きさに依らず `1e-12` で、`startAmount` が
-`8192` を超えるあたりで倍精度の 1 ulp と同じ大きさになる。桁の検査は量を格子へ載せる保証ではない。
+**採った方式: 不変量 5 の許容差を、比べる量の大きさへ比例させる**（`src/engine/invariants.ts` の
+`sumMismatch()`）。許容差は `絶対項 + 4 * Number.EPSILON * max(|合計|, |対応する値|)` で、絶対項は
+従来の値をそのまま床に使う（`amount` は `1e-12`、`amount × price` は `1e-6`）。
+**等式そのものは緩めていない。** 「`trades` の合計 == `executedAmount`」は実数の等式で、倍精度で
+評価すると両辺が大きさに比例した丸め誤差を持つ。固定の絶対値を当てるのは大きさが増えるほど
+厳しくなる検査で、主張したい等式より強いことを要求していた。相対化はその等式を浮動小数で
+正しく表現し直したものである。絶対項を残したので、大きさが小さい注文に対する検査の厳しさは
+変わらない（たとえば `startAmount = 0.001` で `1e-11` ずれた合計は引き続き違反）。
+
+相対項を `4 * Number.EPSILON`（倍精度 4 ulp 相当）にした根拠は、**遷移関数だけを通って作った状態の
+ずれが高々 1 ulp に収まる**こと。`fillOrder` は部分約定のたびに trade と同じ値を同じ順序で
+`executedAmount` へ足すので、最後の全約定クランプまでは合計と完全に一致する。クランプは
+`executedAmount` を `startAmount` へ置くだけなので、残るずれは最後の 1 件の丸め
+（`<= ulp(fillAmount)/2`）と最後の加算の丸め（`<= ulp(startAmount)/2`）の和、すなわち
+`<= ulp(startAmount) <= Number.EPSILON * startAmount` である。**約定件数には依らない。**
+実測（PR の報告）では、ランダムな 20,000 注文（`startAmount` 最大 40 万、1〜6 分割）の最大ずれが
+`0.892 * Number.EPSILON * 大きさ` で、4 倍はその上界に対する余裕である。
+
+**`executedNotional` 側は現状ずれない**（許容差の相対化は予防）。`fillOrder` の
+`executedNotional` には `price * fillAmount` を同じ順序で足しており、検査側の
+`Σ amount × price` とビット単位で同じ値になる（クランプに相当する操作が無い）。実測でも、
+notional が `3.9e12` に達する 20,000 注文でずれは全件 `0` だった。ただし絶対値 `1e-6` は
+notional が `4.5e9`（`1e-6 / Number.EPSILON`）を超えると 1 ulp より小さくなり、`amount` 側と
+同じ形の破れ方をする閾値になっていたので、同じ式へ揃えてある。
+
+**採らなかった案。** (b) `fillOrder` を変えて trade の `amount` と `executedAmount` を正確に
+一致させる案は、倍精度では**達成できない**。最後の約定量は `fl(startAmount - prevExecuted)` で、
+`fl(prevExecuted + fl(startAmount - prevExecuted))` が `startAmount` に戻る保証は無い
+（上の再現がまさにその例で、差はちょうど 1 ulp = `2^-39`）。検査側を補償加算（Kahan など）に
+置き換えてもずれは消えない。trade の `amount` の**実数の**合計自体が `startAmount` から
+最大半 ulp ずれるからで（上の再現では実数の合計が `-0.5 ulp`）、`1e-12` を破る境界が `8192` から
+`16384`（この binade の半 ulp は `1.819e-12`）へ 1 つ上がるだけである。つまりどちらの案でも
+許容差の相対化は要る。加えて (b) は既に書き出された状態ファイルを起動できないままにする
+（状態そのものは正当なのに、手で直すか消すまで戻らない）。(c) 量を桁の格子へ量子化する案
+（Phase 2、整数最小単位への移行）は影響範囲が別件なのでこの決着には含めない。
+
+なお `fitsDigits()` はスケール後の値と整数の差を `1e-8` で見るので、桁 4 なら `amount` に許す幅は
+大きさに依らず `1e-12` で、`startAmount` が `8192` を超えるあたりで倍精度の 1 ulp と同じ大きさになる。
+桁の検査は量を格子へ載せる保証ではない（この性質自体は変わっていない）。
 
 **資産キー・ペア名で引く地図は継承値を返さない。** 資産名とペア名は state ファイルや
 リクエスト由来なので、`constructor` のように `Object.prototype` が持つ名前で引かれ得る。
@@ -179,7 +212,7 @@ trade の合計は `8208.001099999998`（差 `1.819e-12`）になる。この状
 2. `status ∈ {INACTIVE, UNFILLED}` ⇔ `executedAmount == 0` かつ非終端（`INACTIVE` は Plan A では到達しない）。`CANCELED_UNFILLED` / `REJECTED` も `executedAmount == 0`。`CANCELED_PARTIALLY_FILLED` は `executedAmount > 0`
 3. `status == FULLY_FILLED` ⇔ `executedAmount == startAmount`（`startAmount > 0`）
 4. 終端状態（`FULLY_FILLED` / `CANCELED_*` / `REJECTED`）のレコードは以後の遷移で変化しない
-5. 各注文について、`trades` の `amount` 合計 == `executedAmount`、かつ `amount × price` 合計 == `executedNotional`。`orderId` が注文に存在しない trade は禁止（`invariantViolations()` の判定は倍精度の丸め誤差を吸収する許容差つきで、`amount` の合計は `1e-12`、`amount × price` の合計は `1e-6` を超える差だけを違反とする。等式そのものは緩めていない）
+5. 各注文について、`trades` の `amount` 合計 == `executedAmount`、かつ `amount × price` 合計 == `executedNotional`。`orderId` が注文に存在しない trade は禁止（`invariantViolations()` の判定は倍精度の丸め誤差を吸収する許容差つきで、`絶対項 + 4 * Number.EPSILON * max(|合計|, |対応する値|)` を超える差だけを違反とする。絶対項は `amount` の合計が `1e-12`、`amount × price` の合計が `1e-6`。許容差を大きさへ比例させるのは、倍精度の和の誤差が大きさに比例するためで、等式そのものは緩めていない。上の「不変量 5 と `fillOrder` のクランプ」を参照）
 6. 各資産で残高は負にならず、`locked` は残高を超えない（`availableOf >= 0`。買いの拘束額は手数料込み。`invariantViolations()` の判定は倍精度の丸め誤差を吸収する許容差つきで、残高は `-1e-9` 未満を、拘束超過は `1e-9` を超える差だけを違反とする。等式そのものは緩めていない）
 
 そのほか Phase 1 で決めた内部規則:
@@ -190,5 +223,5 @@ trade の合計は `8208.001099999998`（差 `1.819e-12`）になる。この状
   - **ホワイトリストにはしない**: 公式一覧に無くても形が正しいペア（`foo_jpy`）はこれまでどおり受け付ける。「数量・価格の精度」行の「未登録ペアも同じ桁を仮置きする」を保つため。直したのは**文字種**であって**ペアの実在性**ではない（本物は未知のペアに `10000` を返すので実在性の検査には揃える価値があるが、挙動変更になるのでここでは決めていない）
   - **文字種を弾く理由**: pair は外向きの足取得 URL のパスへ入る（`src/engine/candles.ts` の `fetchOneDay`）。`..` はベース URL のパス接頭辞を脱出し、`?` / `#` は以降をクエリ・フラグメントに変える。入口（`pairAssets`）と URL 組み立て（`encodeURIComponent` で 1 パスセグメントに閉じ込める）の 2 層で守る
   - **状態ファイル由来の不正なペア**: `PaperStateSchema` は pair の文字種を検証しないので、この規則より前に書かれた注文はそのまま読み込まれる（起動は落ちず、その注文も消えない）。`SessionStore.tick()` はそのペアを外向きに問い合わせずに読み飛ばし、`POST /_control/tick` は 400 `INVALID_PAIR` で弾く。`cancel_order` は今までどおり通るので、取り除く手段は残る
-- `fillOrder` は残量との差が `1e-12` 以下なら全量約定として残量にクランプし、`executedAmount` を `startAmount` に揃える（倍精度の塵で終端に届かないことを防ぐ。Phase 2 の桁数量子化が主防御）
+- `fillOrder` は残量との差が `1e-12` 以下なら全量約定として残量にクランプし、`executedAmount` を `startAmount` に揃える（倍精度の塵で終端に届かないことを防ぐ。Phase 2 の桁数量子化が主防御）。このクランプで trade の `amount` 合計が `executedAmount` から最大 1 ulp ずれるが、不変量 5 の許容差を大きさへ比例させて吸収している（上の「不変量 5 と `fillOrder` のクランプ」）
 - `rejectOrder` は `UNFILLED` / `INACTIVE`（`executedAmount == 0`）にだけ許す。部分約定済みは `CANCELED_PARTIALLY_FILLED` へ取消する
