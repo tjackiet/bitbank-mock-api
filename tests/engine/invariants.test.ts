@@ -349,12 +349,15 @@ describe("invariant preconditions", () => {
     ]);
   });
 
-  // 2^53 では `+ 1` が飽和して同じ id を配り続ける。既存 id と重ならなくても 2 件目で重複する。
-  it("flag a saturated sequence without comparing it to existing ids", () => {
-    const state = buildState({ nextOrderSeq: Number.MAX_SAFE_INTEGER + 1 });
-    expect(preconditionViolations(state)).toEqual([
-      "order-seq: nextOrderSeq=9007199254740992 exceeds Number.MAX_SAFE_INTEGER",
-    ]);
+  // 飽和した採番は「壊れている」のではなく「使い切った」状態である。配る側
+  // （transitions.ts の canIssue）が止めるので重複は起きない。ここで違反にすると、
+  // 遷移関数だけを通って作った状態が次の起動で読めなくなる（tests/engine/persist.test.ts
+  // の「採番を使い切った直後の状態」）。
+  it("do not flag an exhausted sequence", () => {
+    const orders = buildState({ nextOrderSeq: Number.MAX_SAFE_INTEGER + 1 });
+    expect(preconditionViolations(orders)).toEqual([]);
+    const trades = buildState({ nextTradeSeq: Number.MAX_SAFE_INTEGER + 1 });
+    expect(preconditionViolations(trades)).toEqual([]);
   });
 
   // 採番は `String(seq)` を配るので、`"007"` や安全整数を超える表記の id とはぶつからない。

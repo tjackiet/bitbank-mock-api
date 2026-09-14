@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invariantViolations, preconditionViolations } from "../../src/engine/invariants.ts";
 import { defaultStatePath, loadState, saveState } from "../../src/engine/persist.ts";
+import { fillOrder, placeOrder } from "../../src/engine/transitions.ts";
 import type { Logger } from "../../src/engine/types.ts";
 import { loadOrInitDefault } from "../../src/store/session.ts";
 import { buildOrder, buildState, buildTrade } from "./helpers.ts";
@@ -347,18 +348,52 @@ describe("読み込み時の前提の検査", () => {
     expect(r.error).toContain("trade-seq: nextTradeSeq=2 <= existing trade id 2");
   });
 
-  // 2^53 では `+ 1` が飽和し、以後は毎回同じ id になる。既存 id と重ならなくても
-  // 2 件目の発注で重複するので、採番そのものを落とす。
-  it("nextOrderSeq が安全整数を超える state では fail-closed になる", async () => {
-    const state = buildState({ nextOrderSeq: Number.MAX_SAFE_INTEGER + 1 });
-    await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
-
-    const r = await loadState(path);
-    expect(r.success).toBe(false);
-    if (r.success) throw new Error("unreachable");
-    expect(r.error).toContain(
-      "order-seq: nextOrderSeq=9007199254740992 exceeds Number.MAX_SAFE_INTEGER",
+  // 採番の飽和は配る側（transitions.ts の canIssue）が止めるので、読み込みでは落とさない。
+  // ここで落とすと、遷移関数だけを通って作った状態が次の起動で読めなくなる。
+  // `nextOrderSeq = Number.MAX_SAFE_INTEGER` の state は id 9007199254740991 を 1 件配れて、
+  // そのとき書き出される採番は 9007199254740992 になるため。
+  it("採番を使い切った直後の状態を書き出して読み戻せる", async () => {
+    const seed = buildState({
+      balances: { jpy: 1_000_000_000_000, btc: 1_000_000 },
+      nextOrderSeq: Number.MAX_SAFE_INTEGER,
+    });
+    const placed = placeOrder(
+      seed,
+      { pair: "btc_jpy", side: "sell", type: "limit", amount: 0.001, price: 6_000_000 },
+      "2026-01-01T00:00:00.000Z",
+      undefined,
+      0,
     );
+    if (!placed.success) throw new Error(placed.error);
+    expect(placed.data.order.id).toBe("9007199254740991");
+    expect(placed.data.state.nextOrderSeq).toBe(Number.MAX_SAFE_INTEGER + 1);
+
+    expect(await saveState(path, placed.data.state)).toEqual({ success: true, data: true });
+    expect(await loadState(path, { feeRate: 0 })).toEqual({
+      success: true,
+      data: placed.data.state,
+    });
+    // 起動もでき、以後の発注だけが断られる（重複 id は配らない）。
+    const store = await loadOrInitDefault(1_000_000, { path, feeRate: 0, fillMode: "manual" });
+    expect(store.state().nextOrderSeq).toBe(Number.MAX_SAFE_INTEGER + 1);
+  });
+
+  it("trade の採番を使い切った直後の状態も読み戻せる", async () => {
+    const seed = buildState({
+      balances: { jpy: 1_000_000_000_000, btc: 1_000_000 },
+      orders: [buildOrder({ side: "sell" })],
+      nextTradeSeq: Number.MAX_SAFE_INTEGER,
+    });
+    const filled = fillOrder(seed, "1", 5_000_000, 0.001, "2026-01-01T00:01:00.000Z", 0);
+    if (!filled.success) throw new Error(filled.error);
+    expect(filled.data.trade?.tradeId).toBe("9007199254740991");
+    expect(filled.data.state.nextTradeSeq).toBe(Number.MAX_SAFE_INTEGER + 1);
+
+    expect(await saveState(path, filled.data.state)).toEqual({ success: true, data: true });
+    expect(await loadState(path, { feeRate: 0 })).toEqual({
+      success: true,
+      data: filled.data.state,
+    });
   });
 
   // 残量 0 のまま永遠に active で、fillOrder が非正の量を断るので約定させる手段が無い。

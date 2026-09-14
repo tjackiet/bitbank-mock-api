@@ -149,17 +149,23 @@ function duplicateIds(ids: string[]): Map<string, number> {
 /**
  * 採番と既存 id の整合を見る。採番が既存 id 以下だと、採番がその id に追いつく発注で
  * id が重複する（`nextOrderSeq = 3` で id `5` の注文があると、配られる id は `3` → `4` → `5`
- * で 3 件目が重なる）。安全整数を超える採番は `+ 1` が飽和して同じ id を配り続けるので、
- * 既存 id と重ならなくても 2 件目の発注で重複する。
+ * で 3 件目が重なる）。
  *
- * 飽和しているときは既存 id との比較を出さない。採番が動かない以上、どの id と重なるかは
- * 二次的で、直すべき箇所は採番そのものだから。
+ * **採番が安全整数を超えていること自体は違反にしない。** `+ 1` が飽和して同じ id を配り続ける
+ * のは確かだが、配る側（`src/engine/transitions.ts` の `canIssue()`）が飽和した採番から id を
+ * 配らないので、重複は起きない。飽和した採番は「壊れている」のではなく「使い切った」状態で、
+ * 新しい発注が `ORDER_SEQ_EXHAUSTED` で断られるだけである。
+ *
+ * ここで落とすと、**遷移関数だけを通って作った状態が次の起動で読めなくなる**。
+ * `nextOrderSeq = Number.MAX_SAFE_INTEGER` の state は id `9007199254740991` を 1 件配れて、
+ * そのとき書き出される採番は `9007199254740992` になるからである（不変量 5 の許容差で
+ * 起きたのと同じ型の不具合。docs/fidelity.md の「不変量 5 と `fillOrder` のクランプ」）。
+ *
+ * 飽和した採番は比較にも影響しない。`issuedSeqOf()` が安全整数でない id を除くので、
+ * 比較対象の id はすべて `2^53` 未満であり、飽和した採番より小さい。
  */
 function seqViolations(kind: "order" | "trade", seq: number, ids: string[]): string[] {
   const field = kind === "order" ? "nextOrderSeq" : "nextTradeSeq";
-  if (!Number.isSafeInteger(seq)) {
-    return [`${kind}-seq: ${field}=${seq} exceeds Number.MAX_SAFE_INTEGER`];
-  }
   const violations: string[] = [];
   const seen = new Set<string>();
   for (const id of ids) {
@@ -188,7 +194,8 @@ function seqViolations(kind: "order" | "trade", seq: number, ids: string[]): str
  *   渡すので 2 件目が `ORDER_NOT_ACTIVE` で throw して 500 になり、先頭が終端レコードなら
  *   取消も約定もできない注文が残る。trade id の重複は `trade_history` に同じ行を 2 つ出す。
  * - **採番と既存 id の整合。** 一意性は「これから配る id が既存 id と重ならない」ことに
- *   依存する。判定は上の `seqViolations()` にある。
+ *   依存する。判定は上の `seqViolations()` にある。採番が安全整数を使い切った状態は違反に
+ *   しない（配る側が止めるので重複しない。同じく `seqViolations()` の項）。
  * - **`startAmount > 0`。** 不変量 3（`FULLY_FILLED` ⇔ `executedAmount == startAmount`）が
  *   条件に含む前提。`startAmount == 0` の注文は残量 0 のまま永遠に active で、`fillOrder` が
  *   非正の量を断るので約定させる手段が無い。
