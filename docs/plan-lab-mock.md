@@ -482,6 +482,8 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 PR 1 で 1 点、PR 3 が引き取るべきものが見つかった。**`SessionStore.write()` の `this.logger.warn()` は素で呼んでいる**ので、logger が投げると `persist()` が reject してルートが 500 になる。`npm run dev | head` のように標準出力が閉じた後の `console.warn` は `EPIPE` で投げるので、想像上の経路ではない。PR 3 は `write()` の戻りで劣化を決めるため、ログの副作用でその判定が動かないようにする（`saveState()` 側は PR 1 で握り潰し済み）。
 
+PR 1 のマージ直後に CodeRabbit から「diff の外」の指摘が 2 件届き（GitHub の制約でインラインに出せず、マージに 1 分間に合わなかった）、どちらも実測で再現した。**葉だけの fsync では`mkdir -p` が新しく作った階層のエントリが親に残らない**（既定のパスは初回に 3 段作る）ことと、**warn が fs のエラーメッセージを生のまま埋めていた**こと（パスは `BITBANK_MOCK_STATE_PATH` 由来なので改行でログ行を割られる）。どちらも後追いで直した。
+
 **PR 2 — 失敗の記録と可視化。** `SessionStore` が最後の persist 失敗（時刻・メッセージ・連続失敗数）を持ち、`GET /_control/state` に添える。互換ルートの応答も封筒も変えないので決定不要。PR 3 の土台であり、方針を決めるための実測材料でもある。
 
 **PR 3 — 失敗時に状態変更を断る。** 10.5 の決定に従う。

@@ -301,6 +301,32 @@ export type SaveStateOptions = {
 };
 
 /**
+ * `fsync` すべきディレクトリを、葉から新しく作った段の親まで並べる。
+ *
+ * `rename` した先のディレクトリ（葉）を `fsync` すれば `state.json` のエントリは残る。
+ * だが `mkdir -p` が階層を新しく作った場合、**その段自身のエントリが親に残っていない**。
+ * 既定のパス `~/.bitbank-mock/sessions/<session>/state.json` は初回に 3 段作るので、
+ * 葉だけ `fsync` しても OS ごと落ちれば階層ごと消え、`state.json` も一緒に失われる。
+ *
+ * `created` は `mkdir(..., { recursive: true })` が返す**最初に作った段**（何も作って
+ * いなければ `undefined`）。その親は作る前から在ったので、そこまで遡れば足りる。
+ */
+function dirsToSync(path: string, created: string | undefined): string[] {
+  const dirs = [dirname(path)];
+  if (created === undefined) return dirs;
+  let dir = dirs[0]!;
+  while (dir !== created) {
+    const parent = dirname(dir);
+    // created が祖先でないときの保険（dirname が動かなくなったら打ち切る）。
+    if (parent === dir) return dirs;
+    dirs.push(parent);
+    dir = parent;
+  }
+  dirs.push(dirname(created));
+  return dirs;
+}
+
+/**
  * `rename` が差し替えたディレクトリのエントリをディスクへ落とす。
  *
  * 一時ファイルの中身は `fh.sync()` で落ちているが、`rename` 自体はディレクトリの更新なので、
@@ -348,9 +374,10 @@ export async function saveState(
   // ディレクトリの fsync の失敗は書き込みの成否と別に持つ。warn は try を出てから呼ぶ
   // （logger が投げても、成立した書き込みを失敗として報告しないため。この戻り値は
   // 呼び出し側が状態の扱いを決める根拠になる）。
-  let dirSyncError: string | null = null;
+  let dirSyncFailure: { dir: string; error: string } | null = null;
   try {
-    await mkdir(dirname(path), { recursive: true });
+    // 戻り値は「最初に作った段」。新しく作った階層は親のエントリも fsync する（dirsToSync）。
+    const created = await mkdir(dirname(path), { recursive: true });
     // "wx" は既存ファイルを開かない。一時ファイル名は pid + 乱数なので通常は衝突せず、
     // この排他は置かれていたファイル（シンボリックリンクを含む）の上書きだけを防ぐ。
     const fh = await open(tmp, "wx", 0o600);
@@ -370,19 +397,27 @@ export async function saveState(
     // `rename` はディレクトリの更新なので、ここを fsync しないと OS ごと落ちたときに
     // 差し替えが失われる。失敗しても `state.json` は置かれているので、書き込みは成功の
     // まま返す（一時ファイルは rename で消えているので、後片付けも伴わない）。
-    const synced = await syncDirectory(dirname(path));
-    if (!synced.success) dirSyncError = synced.error;
+    for (const dir of dirsToSync(path, created)) {
+      const synced = await syncDirectory(dir);
+      // 1 段でも落ちたら耐久性は落ちている。最初の 1 件だけ覚え、残りも試す。
+      if (!synced.success && dirSyncFailure === null) {
+        dirSyncFailure = { dir, error: synced.error };
+      }
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { success: false, error: `failed to write paper state: ${msg}` };
   }
   // ここへ来た時点で状態ファイルは置かれている。以降は成否を変えない。
   // ログには生のパスを出さない（改行・制御文字で行を割られないよう JSON で包む）。
-  if (dirSyncError !== null) {
+  if (dirSyncFailure !== null) {
     try {
+      // パスだけでなく**エラーメッセージも** JSON で包む。fs のエラーは対象のパスを生のまま
+      // 含むので（`ENOENT: ..., open '/a\nb'`）、包まないと改行で行が割れ、偽のログ行を
+      // 差し込める。パスは BITBANK_MOCK_STATE_PATH 由来で利用者の入力である。
       (opts.logger ?? noopLogger).warn(
-        `state dir fsync failed for ${JSON.stringify(dirname(path))}: ${dirSyncError}; ` +
-          "the rename may not survive an OS crash",
+        `state dir fsync failed for ${JSON.stringify(dirSyncFailure.dir)}: ` +
+          `${JSON.stringify(dirSyncFailure.error)}; the rename may not survive an OS crash`,
       );
     } catch {
       // logger が投げても握り潰す。`npm run dev | head` のように標準出力が閉じた後の
