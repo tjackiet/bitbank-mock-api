@@ -137,6 +137,25 @@ export function parseNumericId(id: string): number | null {
 }
 
 /**
+ * 採番（`nextOrderSeq` / `nextTradeSeq`）がいつか配り得る id なら、その連番を返す。
+ * 配り得ないなら null。
+ *
+ * 配る id は `String(seq)` なので、対象は正の安全整数の正準な 10 進表記だけである。
+ * `"007"` は `parseNumericId` では 7 になるが `String(7)` と一致しないので配られることはなく、
+ * `"9007199254740993"` は倍精度で `9007199254740992` へ丸まるのでやはり一致しない。
+ * `"0"` は採番が正の整数なので配られない。
+ *
+ * 「採番と既存 id の整合」を見る `preconditionViolations()`（`src/engine/invariants.ts`）と、
+ * 移行が採番の初期値を決める `migrateToV3()`（`src/engine/persist.ts`）が同じ判定を共有する。
+ * 判定がずれると、移行の出力が自分の検査に落ちる。
+ */
+export function issuedSeqOf(id: string): number | null {
+  const n = parseNumericId(id);
+  if (n == null || !Number.isSafeInteger(n) || n <= 0) return null;
+  return String(n) === id ? n : null;
+}
+
+/**
  * 資産キーで引く地図から金額を読む。素の `{}` は `Object.prototype` を継承するので、
  * `constructor` のようにそこへ生えている名前の資産では、キーが無くても継承値（関数）が
  * 返り `?? 0` が素通りする。そのまま数値演算へ流すと `NaN` や文字列連結になり、
