@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadState } from "../../src/engine/persist.ts";
-import { activeOrders } from "../../src/engine/state.ts";
+import { activeOrders, type PaperState } from "../../src/engine/state.ts";
 import { loadOrInitDefault, SessionStore } from "../../src/store/session.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { buildTestServer, stubFetchCandles } from "../routes/helpers.ts";
@@ -261,6 +261,81 @@ describe("SessionStore.persist", () => {
           orders: onDisk?.orders.length,
           nextOrderSeq: onDisk?.nextOrderSeq,
         }).toEqual({ trial, orders: ORDERS, nextOrderSeq: ORDERS + 1 });
+        expect(onDisk).toEqual(memory);
+      } finally {
+        await close();
+      }
+    }
+  });
+
+  // 発注だけの並行より経路が広い（取消は cancelOrder、部分約定は control 経由の fillOrder）。
+  // どれも store.replace() → store.persist() の順に走るので、直列化が崩れると
+  // 約定済みの注文が UNFILLED のままのファイルに巻き戻る。1 回では取りこぼすので複数回試す。
+  it("発注・取消・部分約定を混ぜた同時実行の後でファイルがメモリと一致する", async () => {
+    const TRIALS = 5;
+    for (let trial = 0; trial < TRIALS; trial += 1) {
+      const path = join(dir, `mixed-${trial}`, "state.json");
+      const { fastify, store, close } = await buildTestServer(
+        buildState({ balances: { jpy: 1_000_000_000 } }),
+        {},
+        { path, fillMode: "manual", controlEnabled: true },
+      );
+      try {
+        const place = () =>
+          fastify.inject({
+            method: "POST",
+            url: "/v1/user/spot/order",
+            payload: {
+              pair: "btc_jpy",
+              side: "buy",
+              type: "limit",
+              price: 5_000_000,
+              amount: 0.002,
+            },
+          });
+        // 種の注文を直列に 30 本（id 1..30）置いてから、同時実行を始める。
+        for (let i = 0; i < 30; i += 1) expect((await place()).json().success).toBe(1);
+
+        const jobs: Promise<unknown>[] = [];
+        for (let i = 0; i < 10; i += 1) jobs.push(place()); // 新規発注（id 31..40）
+        for (let i = 1; i <= 10; i += 1) {
+          jobs.push(
+            fastify.inject({
+              method: "POST",
+              url: "/v1/user/spot/cancel_order",
+              payload: { pair: "btc_jpy", order_id: i },
+            }),
+          );
+        }
+        for (let i = 11; i <= 20; i += 1) {
+          // 0.002 のうち 0.001 だけ約定させて PARTIALLY_FILLED にする。
+          jobs.push(
+            fastify.inject({
+              method: "POST",
+              url: `/_control/orders/${i}/fill`,
+              payload: { amount: 0.001 },
+            }),
+          );
+        }
+        for (let i = 21; i <= 30; i += 1) {
+          jobs.push(fastify.inject({ method: "POST", url: `/_control/orders/${i}/fill` }));
+        }
+        const responses = (await Promise.all(jobs)) as Array<{ statusCode: number }>;
+        expect(responses.filter((r) => r.statusCode >= 400)).toEqual([]);
+
+        const memory = store.state();
+        expect(memory.orders).toHaveLength(40);
+
+        // 状態ファイルを読み直して、全注文の status / 約定量 / trade を突き合わせる。
+        const onDisk = await readFileState(path);
+        const shape = (s: PaperState) => ({
+          nextOrderSeq: s.nextOrderSeq,
+          nextTradeSeq: s.nextTradeSeq,
+          balances: s.balances,
+          orders: s.orders.map((o) => [o.id, o.status, o.executedAmount, o.executedNotional]),
+          trades: s.trades.map((t) => [t.tradeId, t.orderId, t.amount]),
+        });
+        expect({ trial, ...shape(onDisk!) }).toEqual({ trial, ...shape(memory) });
         expect(onDisk).toEqual(memory);
       } finally {
         await close();

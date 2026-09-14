@@ -202,12 +202,19 @@ export function migrateToLatest(parsed: z.infer<typeof PaperStateAnySchema>): Pa
 
 // env を引数で受け取るのは src/server/config.ts の env 読み取りに合わせるため。
 // 既定は process.env なので呼び出し側は変えなくてよい。
+//
+// 空文字は「未設定」として扱う（`??` ではなく真偽で見る）。src/server/config.ts の
+// `controlToken()` / `listenHost()` / `fillMode()` と、すぐ上の `BITBANK_MOCK_STATE_PATH` が
+// どれも空文字を未設定として落とすので、ここだけ空文字を値として受けると読み取りがずれる。
+// `BITBANK_MOCK_HOME=""` を値として受けると `join("", ...)` が相対パス
+// `sessions/<id>/state.json` になり、同じ env でも起動した作業ディレクトリごとに
+// 別の状態ファイルを掴む（README が既定として書く `~/.bitbank-mock` からも黙って外れる）。
 export function defaultStatePath(
   sessionId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (env.BITBANK_MOCK_STATE_PATH) return env.BITBANK_MOCK_STATE_PATH;
-  const root = env.BITBANK_MOCK_HOME ?? join(homedir(), ".bitbank-mock");
+  const root = env.BITBANK_MOCK_HOME || join(homedir(), ".bitbank-mock");
   return join(root, "sessions", sessionId, "state.json");
 }
 

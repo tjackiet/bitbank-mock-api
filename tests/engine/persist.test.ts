@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invariantViolations, preconditionViolations } from "../../src/engine/invariants.ts";
 import { defaultStatePath, loadState, saveState } from "../../src/engine/persist.ts";
@@ -643,6 +643,27 @@ describe("defaultStatePath", () => {
     expect(defaultStatePath("s1", { BITBANK_MOCK_HOME: "/tmp/y" })).toBe(
       "/tmp/y/sessions/s1/state.json",
     );
+  });
+
+  // 空文字の env は「未設定」。`BITBANK_MOCK_HOME` をここで値として受けると
+  // join("", ...) が相対パスになり、起動した作業ディレクトリごとに別の状態ファイルを掴む。
+  it("空文字の BITBANK_MOCK_HOME は未設定として既定のホームへ落ちる", () => {
+    const path = defaultStatePath("default", { BITBANK_MOCK_HOME: "" });
+    expect(isAbsolute(path)).toBe(true);
+    expect(path).toBe(join(homedir(), ".bitbank-mock", "sessions", "default", "state.json"));
+  });
+
+  it("空文字の BITBANK_MOCK_STATE_PATH は未設定として BITBANK_MOCK_HOME へ落ちる", () => {
+    expect(defaultStatePath("s1", { BITBANK_MOCK_STATE_PATH: "", BITBANK_MOCK_HOME: "/tmp/y" })).toBe(
+      "/tmp/y/sessions/s1/state.json",
+    );
+  });
+
+  // 相対パスはどちらの env でも通す（明示的に渡した値を黙って書き換えない）。
+  // docs/fidelity.md の「状態ファイルのパス解決」行がこの形を正とする。
+  it("相対パスは STATE_PATH でも HOME でもそのまま相対パスとして解決する", () => {
+    expect(defaultStatePath("s1", { BITBANK_MOCK_STATE_PATH: "rel.json" })).toBe("rel.json");
+    expect(defaultStatePath("s1", { BITBANK_MOCK_HOME: "rel" })).toBe("rel/sessions/s1/state.json");
   });
 
   it("env 未指定なら process.env を読む", () => {
