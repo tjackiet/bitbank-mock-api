@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { TradeRecord } from "../engine/state.ts";
 import { TradeHistoryQuerySchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
+import { queryParamErrorCode } from "./params.ts";
 import { formatTrade } from "./format.ts";
 
 const TRADE_HISTORY_MAX = 1000;
@@ -39,7 +40,9 @@ export const tradeHistoryRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = TradeHistoryQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       reply.code(400);
-      return err(ErrorCode.INVALID_PARAMETER);
+      // 絞り込みパラメータは実 API が専用コードを返すので、名前で引き当てる。
+      const code = queryParamErrorCode(parsed.error.issues.map((i) => i.path[0]));
+      return err(code ?? ErrorCode.INVALID_PARAMETER);
     }
     await fastify.store.tick();
     const trades = filterTrades(fastify.store.state().trades, parsed.data);

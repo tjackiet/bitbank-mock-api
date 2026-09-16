@@ -78,3 +78,112 @@ describe("GET /v1/user/spot/active_orders official field set", () => {
     expect(orders[0]!).not.toHaveProperty("canceled_at");
   });
 });
+
+/**
+ * 絞り込みパラメータの不正値。実 API を実測して固定した（2026-09-16、`btc_jpy`）。
+ *
+ * - `?count=` -> 40006 `"Invalid count."`
+ * - `?end=`   -> 40007 `"Invalid end param."`
+ *
+ * 旧実装は `z.coerce.number()` が `""` を `0` にするため、`?end=` が
+ * **`success: 1` のまま常に空配列**を返し、`?count=` は汎用の `20003` を返していた。
+ */
+describe("絞り込みパラメータの不正値（実 API 実測）", () => {
+  const build = setupBuildTestServer();
+
+  const stateWithTwoOrders = () =>
+    buildState({ orders: [buildOrder({ id: "1" }), buildOrder({ id: "2" })] });
+
+  it("空文字は「未指定」ではなくパラメータ固有のコードで断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const cases: Array<[string, number]> = [
+      ["count=", 40006],
+      ["end=", 40007],
+      ["end_id=", 40008],
+      ["from_id=", 40009],
+      ["since=", 40022],
+    ];
+    for (const [query, code] of cases) {
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/v1/user/spot/active_orders?${query}`,
+      });
+      expect(res.statusCode, query).toBe(400);
+      expect(res.json(), query).toEqual({ success: 0, data: { code } });
+    }
+  });
+
+  /**
+   * 空白だけの値も空文字と同じ扱いにする。`Number()` は前後の空白を読み飛ばすので
+   * `" "` / `"\t"` / `"\n"` / `"\u00a0"` はいずれも `0` になり、空文字と同じ抜け方をする。
+   * 旧実装では `?end=%20` が **`success: 1` のまま 0 件**を返していた
+   * （`count` だけは `0` が `positive()` に落ちて偶然 `40006` になっていた）。
+   */
+  it("空白だけの値も空文字と同じコードで断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const cases: Array<[string, number]> = [
+      ["end=%20", 40007],
+      ["end=%09", 40007],
+      ["end=%0a", 40007],
+      ["end=%C2%A0", 40007],
+      ["since=%20", 40022],
+      ["from_id=%20", 40009],
+      ["end_id=%20", 40008],
+      ["count=%20", 40006],
+    ];
+    for (const [query, code] of cases) {
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/v1/user/spot/active_orders?${query}`,
+      });
+      expect(res.statusCode, query).toBe(400);
+      expect(res.json(), query).toEqual({ success: 0, data: { code } });
+    }
+  });
+
+  // 同名クエリが 2 本来ると値は配列になる。要素数を数えずに数値へ強制しない。
+  it("同名クエリが 2 本来たら数値へ強制せず断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?end=1&end=2",
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ success: 0, data: { code: 40007 } });
+  });
+
+  it("数値として読めない値も同じコードで断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?count=abc",
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 40006 } });
+  });
+
+  it("指定が無いときは今までどおり全件を返す", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({ method: "GET", url: "/v1/user/spot/active_orders" });
+    const body = res.json() as { success: number; data: { orders: unknown[] } };
+    expect(body.success).toBe(1);
+    expect(body.data.orders).toHaveLength(2);
+  });
+
+  it("複数が不正なときは count / from_id / end_id / since / end の順で先に当たったもの", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?end=&count=",
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 40006 } });
+  });
+
+  it("絞り込み以外の不正値は従来どおり 20003", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?pair=a&pair=b",
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 20003 } });
+  });
+});

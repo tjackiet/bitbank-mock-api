@@ -23,6 +23,13 @@ export const ErrorCode = {
   MISSING_PRICE: 30012,
   MISSING_SIDE: 30013,
   MISSING_TYPE: 30015,
+  // 絞り込みパラメータごとの不正値コード。実 API が汎用コードではなくこれらを返すことを
+  // 実測した（docs/fidelity.md の「絞り込みパラメータの不正値」）。
+  INVALID_COUNT: 40006,
+  INVALID_END: 40007,
+  INVALID_END_ID: 40008,
+  INVALID_FROM_ID: 40009,
+  INVALID_SINCE: 40022,
   ORDER_NOT_FOUND: 50009,
   ALREADY_CANCELED: 50026,
   ALREADY_EXECUTED: 50027,
