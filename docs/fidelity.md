@@ -46,7 +46,11 @@
 | 成行注文の価格上限 | 成行に価格上限は設けない | Nyx 提案書 14.1 | 指値だけに価格制約を適用する | はい | 価格上限が必要な実験は指値で行う |
 | 認証 | Plan A は認証ヘッダを検証しない | REST API は private API に認証を要求 | 意図的に未実装 | はい | DCL の HMAC 送信は通過するが認証の検証対象にはしない |
 | レート制限 | 実装しない | REST API: QUERY 10/s、UPDATE 6/s、超過時 429 | 意図的に未実装 | いいえ | 負荷・429 復旧の実験には使えない |
-| 封筒に包まれない応答 | 互換ルート（`/v1/user/...`）のうち、**Fastify が route ハンドラへ入る前に返す応答は bitbank 封筒ではない**。(a) `content-type: application/json` で本文が壊れた JSON（`__proto__` キーを含む本文も同じ扱い）は `{"statusCode":400,"code":"FST_ERR_CTP_INVALID_JSON_BODY",...}`、(b) 未登録のパス・メソッドは `{"message":"Route ... not found","error":"Not Found","statusCode":404}`、(c) ハンドラ内の未捕捉例外は `{"statusCode":500,...}` で例外メッセージが出る。ハンドラへ入った後の欠落・不正値は封筒（400 + `err()`）で返す | 本モック固有（Fastify の既定ハンドラ） | 本物は URL 不明を `10000`（SYSTEM_ERROR「Url not found.」）の封筒で返す。壊れた本文・内部エラーに対する本物の応答は確認できていない | はい | **未確定。** 本物が壊れた JSON 本文へ返すコードが errors.md から決められないので、封筒へ包み直す変更は入れていない（推測でコードを選ばない）。Nyx のパーサは、実装済みエンドポイントであっても `success` キーを持たない応答が返り得ることを前提にする（`success` の有無で分岐し、無ければ HTTP ステータスで扱う） |
+| 封筒に包まれない応答 | 互換ルート（`/v1/user/...`）のうち、**Fastify が route ハンドラへ入る前に返す応答は bitbank 封筒ではない**。(a) `content-type: application/json` で本文が壊れた JSON（`__proto__` キーを含む本文も同じ扱い）は `{"statusCode":400,"code":"FST_ERR_CTP_INVALID_JSON_BODY",...}`、(b) 未登録のパス・メソッドは `{"message":"Route ... not found","error":"Not Found","statusCode":404}`、(c) ハンドラ内の未捕捉例外は `{"statusCode":500,...}` で例外メッセージが出る（**現状、互換ルートのハンドラから出る未捕捉例外は無い**。`applyFill()` の throw を `Result` へ変えて、state ファイル由来の 2 経路——採番の飽和と `startAmount == 0`——を塞いだ）。ハンドラへ入った後の欠落・不正値は封筒で返すが、**HTTP ステータスは一律ではない**。ルート層で弾いた欠落・不正値は 400、engine 層まで進んでから返る業務エラー（不正なペア `10000`、数量の桁溢れ `60004`、残高不足 `60001`、`50009` などの照会エラー）は 200 で、どちらも本文は `{"success":0,...}` である | 本モック固有（Fastify の既定ハンドラ） | 本物は URL 不明を `10000`（SYSTEM_ERROR「Url not found.」）の封筒で返す。壊れた本文・内部エラーに対する本物の応答は確認できていない | はい | **未確定。** 本物が壊れた JSON 本文へ返すコードが errors.md から決められないので、封筒へ包み直す変更は入れていない（推測でコードを選ばない）。Nyx のパーサは、実装済みエンドポイントであっても `success` キーを持たない応答が返り得ることを前提にする（`success` の有無で分岐し、無ければ HTTP ステータスで扱う） |
+| パラメータの型強制 | 数値パラメータは JSON の型を見ずに数値へ強制する。互換ルートは `z.coerce.number()`（`src/schemas/requests.ts` の `numStr`）、`/_control/` は素の `Number()`。したがって **`true` は `1`、要素 1 つの配列 `[0.001]` は `0.001` として通り、`success: 1` が返る**（実測: `POST /v1/user/spot/order` に `{"amount":[0.001]}` → `start_amount: "0.0010"` の注文が成立、`{"price":true}` → `price: "1"` の指値。`POST /_control/orders/:id/fill` に `{"price":true}` → 価格 1 で約定）。`{}` や複数要素の配列は `NaN` になり `20003` / 400 で落ちる | 本モック固有（zod の `coerce` と JS の `Number()` の規則） | 公式ドキュメントは各パラメータを数値・文字列として定義するだけで、boolean や配列を送ったときの応答を定めていない。実 API の挙動は未確認 | はい | **未確定。挙動は変えていない。** モックは「数値へ強制できれば受ける」側を選んでいる。Nyx は、型の誤りが `success: 0` で弾かれることを前提に認可層を組んではならない（送る側で JSON の型を保証する） |
+| 空文字のクエリ値 | `active_orders` / `trade_history` の数値クエリに空文字を渡すと「未指定」ではなく `0` として扱う。`?count=` は `0` が `positive()` に落ちて `20003`、`?since=` / `?from_id=` は `0` で実質素通り、**`?end=` / `?end_id=` は `0` 以下だけを残すので結果が常に空になる**（実測: active な注文が 4 件ある状態で `GET /v1/user/spot/active_orders?since=&end=` → `{"orders":[]}`） | 本モック固有（`z.coerce.number()` は `""` を `0` にする） | 公式ドキュメントは空文字のクエリ値の扱いを定めていない | はい | **未確定。挙動は変えていない。** モックは「空文字は `0`」側を選んでいる。Nyx は絞り込みパラメータを省略するとき、空文字ではなくキーごと落とす |
+| 解釈できない時刻を持つ state | `orderedAt` / `executedAt` / `canceledAt` は `PaperStateSchema` が `z.string()` としか見ないので、日付として解釈できない文字列がそのまま読み込まれる。応答では `Date.parse()` が `NaN` を返し、**`JSON.stringify` が `NaN` を `null` に落とすため、数値と宣言しているフィールドに `null` が出る**（実測: `orderedAt: "not-a-date"` の state で `GET /v1/user/spot/order` → `"ordered_at":null`）。本モック自身は ISO 文字列しか書かないので、入口は手書き・別実装・旧版の state ファイルに限られる | 本モック固有 | 公式の `ordered_at` / `executed_at` / `canceled_at` は数値（ミリ秒）で、`null` は取らない | はい | **未確定。挙動は変えていない。** 直すなら読み込み時の検査（`loadState()`）に「時刻文字列が解釈できること」を足して fail-closed にする案になるが、不変量の前提を 1 つ増やす判断なのでここでは決めていない。Nyx は `ordered_at` を数値と決め打ちせず、`null` を stale として扱う |
+| ログに出す利用者由来の値 | 状態ファイル・環境変数・リクエスト由来の文字列は、warn / info に出すとき JSON で包む（`src/store/session.ts` の `tick()`、`src/engine/persist.ts` の `saveState()`、`src/engine/match.ts` の `runTick()`）。包まないと改行で行を割って偽のログ行を差し込める。`Date.parse()` は `"Jan 1 2020 (\n...)"` のような改行入りの表記も解釈するので、`lastTickAt` のように「日付として妥当」でも制御文字を含み得る値がある | 本モック固有 | 本物には対応する概念がない | いいえ | 実験のログを証跡に使うとき、行の境界がリクエスト側から動かせない |
 | `/_control/` | `BITBANK_MOCK_CONTROL=1` のときだけ登録する。素の JSON（bitbank 封筒ではない）。`POST /_control/orders/:id/fill`、`POST /_control/tick`、`POST /_control/clock`、`POST /_control/reset`、`GET /_control/state`（`PaperState` に、状態ファイルへの書き出しの状況 `persist` を添えて返す。`persist` は `PaperState` の一部ではないが、`PaperStateSchema` は不明なキーを落とすので、この応答をそのまま状態ファイルへ書き戻しても読み込みは通る）。無効時はルート自体を登録しないので、メソッド・パスによらず Fastify の既定 404（本文も他の未登録パスと同じ）。有効時は、非ループバックから見ると登録済みの（メソッド, パス）が 403、未登録が 404 になるので、どの口が在るかは区別できる。状態ファイルへの書き出しに失敗した後は、状態を変える口（`fill` / `tick` / `clock` / `reset`）が **503 `{"error":"PERSIST_DEGRADED"}`** になる（`GET /state` は通る。同じ表の「状態の永続化」） | 本モック固有 | bitbank API に存在しない | はい | DCL / 本番 API の仕様に control の存在を混入させない |
 | control のアクセス境界 | control 有効時の listen 既定は `127.0.0.1`（`BITBANK_MOCK_HOST` で上書き可）。非ループバックは `X-Control-Token` が `BITBANK_MOCK_CONTROL_TOKEN` と一致しない限り 403。トークン未設定なら非ループバックは常に 403。**ループバックからはトークン無しで全操作を通す**ので、同一ホスト上の別プロセス・別ユーザからの誤操作は防げない。判定に使う接続元は **TCP の対向アドレス（`request.socket.remoteAddress`）だけ**で、`X-Forwarded-For` 等のヘッダは見ない。そのため `buildServer()` の `trustProxy` の有無で境界は変わらない。**許可判定を `request.ip` に戻してはいけない**（`request.ip` は `trustProxy` を有効にすると `X-Forwarded-For` を返すので、その瞬間にヘッダ詐称で境界が消える）。トークンは `X-Control-Token` の**ヘッダ行がちょうど 1 本のときだけ**受け、0 本・2 本以上は 403（Node は同名ヘッダを `", "` 繋ぎの 1 本の文字列にするため、行数は生ヘッダで数える）。一致は `timingSafeEqual` で見る（長さの違いは隠れないので固定長で運用する） | 本モック固有 | 本物の取引所には無い | はい | 同一ネットワークからの誤操作を防ぐ。DCL は control を叩かない |
 | control 時の自動約定 | control 有効時の既定は `BITBANK_MOCK_FILL_MODE=manual`。`store.tick()` は足を取らず約定しない。明示で `market` にすると REST 経路は現行どおり市場連動 | 計画書 9 節の決定 | 本物の取引所には対応する切替がない | はい | 同一シナリオを市場価格に依存せず再現できる |
@@ -104,7 +108,8 @@ v2 が書いた state が不変量 6 を破ることはない（境界の実測�
 
 **注文 id の重複だけは warn に回さず、移行が衝突しない id を振り直す**
 （`src/engine/persist.ts` の `makeOrderIdAssigner()`）。重複を残したまま起動させると
-`POST /_control/tick` が 500 になり、拘束だけ残して取消も約定もできない注文が残るので、warn を
+`POST /_control/tick` がその tick を丸ごと断るようになり、拘束だけ残して取消も約定もできない
+注文が残るので、warn を
 読んでも利用者にできることが無い。かといって落とすと旧 state の利用者が詰む。**これは壊れた v3 を
 自動修復するのとは別である。** 移行はもともと `openOrders` と `history` という別々の配列を 1 本の
 `orders` へ積み直す変換で、積む順序も id も決めるのは移行の側だから、衝突しない id を振ることは
@@ -126,8 +131,9 @@ zod スキーマにも `invariantViolations()` にも混ぜなかった理由は
   `replaceOrder()` が id 一致の全件を置き換えるので不変量 4 が破れる。`UNFILLED` と `REJECTED` が
   同じ id で並ぶ v3 の state は `invariantViolations()` を無違反で通り、その注文へ約定を 1 件適用すると
   `REJECTED` のレコードが `FULLY_FILLED` に書き換わっていた。`runTick()` は同じ id を 2 回
-  `applyFill()` へ渡すので 2 件目が `ORDER_NOT_ACTIVE` で throw し、`POST /_control/tick` は 500、
-  market モードでは `SessionStore.tick()` を通る互換ルートも 500 になる。id が先頭の終端レコードと
+  `applyFill()` へ渡すので 2 件目が `ORDER_NOT_ACTIVE` で失敗し、その tick は 1 件も約定しないまま
+  断られる（`POST /_control/tick` は 400、market モードでは `SessionStore.tick()` が warn して
+  そのペアを飛ばす）。id が先頭の終端レコードと
   重なった新しい注文は、`cancel_order` も `POST /_control/orders/:id/fill` も先頭の終端レコードに
   当たるため、拘束だけ残して取消も約定もできない。trade id の重複は
   `GET /v1/user/spot/trade_history` に同じ `trade_id` の 2 行として出る。メッセージは
@@ -158,7 +164,10 @@ zod スキーマにも `invariantViolations()` にも混ぜなかった理由は
   そのとき書き出される採番は `9007199254740992` になる）。不変量 5 の許容差で起きたのと同じ型の
   不具合なので、同じ轍は踏まない。比較にも影響しない（`issuedSeqOf()` が安全整数でない id を
   除くので、比較対象の id はすべて飽和した採番より小さい）。移行が飽和した採番を出した state も、
-  履歴は読めて新しい発注だけが断られる。
+  履歴は読めて新しい発注だけが断られる。**約定も断られる**（`fillOrder` が
+  `TRADE_SEQ_EXHAUSTED` を返し、`runTick()` がその tick を丸ごと断る。
+  `POST /_control/tick` は 400 `applyFill: TRADE_SEQ_EXHAUSTED`、market モードでは
+  `SessionStore.tick()` が warn してそのペアを飛ばす。互換ルートの応答は封筒のまま）。
 
   なお移行が決める採番も「配り得る id の最大 + 1」なので、数値 id が `2^53` に届く v1 / v2 の
   state からは飽和した採番が出る**理屈**だが、実際の桁では届かない。v2 の id は
@@ -169,7 +178,8 @@ zod スキーマにも `invariantViolations()` にも混ぜなかった理由は
   である。したがって v2 由来の飽和は現実には到達しない。
 - **`startAmount > 0`** → 検査する（`start-amount`）。不変量 3 が条件に含む前提。`startAmount == 0` の
   `UNFILLED` 注文は残量 0 のまま永遠に active で、`fillOrder` が非正の量を断るので約定させる手段が
-  無い。`placeOrder` は `amount <= 0` を断るので本モックの経路では作れないが、state ファイルと
+  無い（market モードや `POST /_control/tick` で足が当たると `runTick()` がその tick を丸ごと断る。
+  400 `applyFill: INVALID_AMOUNT`）。`placeOrder` は `amount <= 0` を断るので本モックの経路では作れないが、state ファイルと
   v1 / v2 の `history` からは入る。メッセージは `start-amount: order 1 startAmount=0`。判定は
   `> 0` の否定なので、`0`・負・`NaN` をまとめて拾う（負は不変量 1 も捕まえる）。移行では直さない。
   数量を書き換えるのは変換ではなく修復だからで、v1 / v2 から入った場合は warn で起動する。

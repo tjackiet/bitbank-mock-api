@@ -16,12 +16,19 @@ function tickOk(state: PaperState, opts: RunTickOptions) {
   return r.data;
 }
 
+function fillOk(...args: Parameters<typeof applyFill>) {
+  const r = applyFill(...args);
+  expect(r.success).toBe(true);
+  if (!r.success) throw new Error(r.error);
+  return r.data;
+}
+
 describe("applyFill", () => {
   it("buy: decreases quote (incl fee), increases base", () => {
     const order = buildOrder({ side: "buy", price: 100_000, startAmount: 1 });
     const state = buildState({ balances: { jpy: 1_000_000 }, orders: [order] });
     const c = candle(T0, 100_000, 100_000, 100_000, 100_000);
-    const r = applyFill(state, order.id, c, 0.001);
+    const r = fillOk(state, order.id, c, 0.001);
     expect(r.state.balances.jpy).toBeCloseTo(1_000_000 - 100_000 - 100, 6);
     expect(r.state.balances.btc).toBeCloseTo(1, 6);
     expect(r.trade.feeQuote).toBeCloseTo(100, 6);
@@ -33,7 +40,7 @@ describe("applyFill", () => {
     const order = buildOrder({ side: "sell", price: 100_000, startAmount: 1 });
     const state = buildState({ balances: { jpy: 0, btc: 1 }, orders: [order] });
     const c = candle(T0, 100_000, 100_000, 100_000, 100_000);
-    const r = applyFill(state, order.id, c, 0.001);
+    const r = fillOk(state, order.id, c, 0.001);
     expect(r.state.balances.btc).toBeCloseTo(0, 6);
     expect(r.state.balances.jpy).toBeCloseTo(100_000 - 100, 6);
   });
@@ -41,8 +48,41 @@ describe("applyFill", () => {
   it("filledAt = candle.timestamp + 1min (close of bar)", () => {
     const order = buildOrder();
     const c = candle(T0, 1, 1, 1, 1);
-    const r = applyFill(buildState({ orders: [order] }), order.id, c, 0);
+    const r = fillOk(buildState({ orders: [order] }), order.id, c, 0);
     expect(r.trade.executedAt).toBe(new Date(T0 + MIN).toISOString());
+  });
+
+  // 以下 3 本は「throw せず Result を返す」こと自体の固定。throw に戻ると
+  // `SessionStore.tick()` 経由で互換ルートが封筒でない 500 を返すようになる。
+  it("不在の注文は throw せず失敗を返す", () => {
+    const r = applyFill(buildState({ orders: [] }), "nope", candle(T0, 1, 1, 1, 1), 0);
+    expect(r).toEqual({ success: false, error: 'applyFill: order "nope" not found' });
+  });
+
+  it("採番を使い切っていたら throw せず失敗を返す", () => {
+    const order = buildOrder({ side: "buy", price: 100_000, startAmount: 1 });
+    const state = buildState({
+      balances: { jpy: 1_000_000 },
+      orders: [order],
+      nextTradeSeq: Number.MAX_SAFE_INTEGER + 1,
+    });
+    const r = applyFill(state, order.id, candle(T0, 100_000, 100_000, 100_000, 100_000), 0);
+    expect(r).toEqual({ success: false, error: "applyFill: TRADE_SEQ_EXHAUSTED" });
+  });
+
+  it("残量 0 の active な注文は throw せず失敗を返す（startAmount == 0）", () => {
+    const order = buildOrder({ side: "buy", price: 100_000, startAmount: 0 });
+    const state = buildState({ balances: { jpy: 1_000_000 }, orders: [order] });
+    const r = applyFill(state, order.id, candle(T0, 100_000, 100_000, 100_000, 100_000), 0);
+    expect(r).toEqual({ success: false, error: "applyFill: INVALID_AMOUNT" });
+  });
+
+  it("注文 id は JSON で包んでメッセージに載せる（ログの行を割らせない）", () => {
+    const r = applyFill(buildState({ orders: [] }), "a\nb", candle(T0, 1, 1, 1, 1), 0);
+    expect(r.success).toBe(false);
+    if (r.success) return;
+    expect(r.error).not.toContain("\n");
+    expect(r.error).toContain('"a\\nb"');
   });
 });
 

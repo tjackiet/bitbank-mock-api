@@ -320,7 +320,8 @@ describe("読み込み時の前提の検査", () => {
 
   // 同じ id が 2 件あると replaceOrder が id 一致の全件を置き換えるので、active な方への
   // 約定が終端レコードまで書き換える（不変量 4 が破れる）。runTick は同じ id を 2 回
-  // applyFill へ渡して 500 になる。読み込みで落として、起動させない。
+  // applyFill へ渡すので、2 件目が失敗してその tick が丸ごと断られる。
+  // 読み込みで落として、起動させない。
   it("注文 id が重複する v3 の state では fail-closed になる", async () => {
     const content = `${JSON.stringify(
       buildState({ orders: [buildOrder(), buildOrder({ status: "REJECTED" })] }),

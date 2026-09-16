@@ -191,8 +191,9 @@ function seqViolations(kind: "order" | "trade", seq: number, ids: string[]): str
  * - **注文 id / trade id の一意性。** 同じ id のレコードが 2 件あると `replaceOrder()`
  *   （`src/engine/transitions.ts`）が id 一致の全件を置き換えるので、active な方への約定が
  *   終端レコードまで書き換えて不変量 4 が破れる。`runTick()` は同じ id を 2 回 `applyFill()` へ
- *   渡すので 2 件目が `ORDER_NOT_ACTIVE` で throw して 500 になり、先頭が終端レコードなら
- *   取消も約定もできない注文が残る。trade id の重複は `trade_history` に同じ行を 2 つ出す。
+ *   渡すので 2 件目が `ORDER_NOT_ACTIVE` で失敗し、その tick は 1 件も約定しないまま断られる
+ *   （`POST /_control/tick` は 400）。先頭が終端レコードなら取消も約定もできない注文が残る。
+ *   trade id の重複は `trade_history` に同じ行を 2 つ出す。
  * - **採番と既存 id の整合。** 一意性は「これから配る id が既存 id と重ならない」ことに
  *   依存する。判定は上の `seqViolations()` にある。採番が安全整数を使い切った状態は違反に
  *   しない（配る側が止めるので重複しない。同じく `seqViolations()` の項）。
