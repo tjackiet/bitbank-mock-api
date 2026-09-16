@@ -1,5 +1,18 @@
 import { ErrorCode, type ErrorCodeValue } from "./envelope.ts";
 
+/**
+ * 値が「欠落」か。`undefined` / `null` に加えて**空文字も欠落として扱う**。
+ *
+ * 必須パラメータを持つ互換ルート（`order` の GET / POST、`cancel_order`、
+ * `cancel_orders`、`orders_info`）は zod の検査より**先に**これを通し、欠落を
+ * パラメータごとの `3000x`（`MISSING_AMOUNT` など。`pair` だけは `20003`）で断る。
+ * 空文字をここで拾うので、本文側のスキーマ（`src/schemas/requests.ts` の `numStr`）
+ * へ空文字は届かない。
+ *
+ * 絞り込みパラメータは全て任意なのでこの関数を通らない。そちらの空文字は
+ * `src/schemas/requests.ts` の `queryNum` が弾き、下の `QUERY_PARAM_CODES` が
+ * 引く `4000x` になる。
+ */
 export function isMissing(v: unknown): boolean {
   return v === undefined || v === null || v === "";
 }
