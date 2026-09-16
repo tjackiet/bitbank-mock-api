@@ -83,8 +83,9 @@ function migrateToV2(parsed: z.infer<typeof PaperStateSchemaV1>): PaperStateV2 {
  * それぞれ別の配列で、移行は両者を 1 本の `orders` へ積み直す。積み方を決めるのは移行であり、
  * 衝突しない id を振ることはその一部にあたる（v3 の壊れた state ファイルは修復せず落とす。
  * `loadState()` の項を参照）。重複を残したまま起動させると、`replaceOrder()` が id 一致の
- * 全件を置き換えるせいで不変量 4 が破れ、`runTick()` は 500 になり、先頭が終端レコードなら
- * 取消も約定もできない注文が残る。warn で知らせても利用者にできることが無い。
+ * 全件を置き換えるせいで不変量 4 が破れ、`runTick()` はその tick を丸ごと断るようになり
+ * （`POST /_control/tick` は 400）、先頭が終端レコードなら取消も約定もできない注文が残る。
+ * warn で知らせても利用者にできることが無い。
  *
  * id を保つのは先に積まれる方、すなわち `openOrders` 側である。まだ生きている注文の id は
  * 取消に使えなければならないので、履歴側より優先する。
@@ -252,7 +253,9 @@ export type LoadStateOptions = {
  *
  * 移行の側は id の重複を作らない（`makeOrderIdAssigner()`）ので、重複を抱えた状態はここを
  * 必ず fail-closed で通る。移行の warn に残る前提の破れは、`startAmount == 0` のように
- * 移行の入力そのものが持っていたものだけで、どれも起動後に 500 や書き換えを起こさない。
+ * 移行の入力そのものが持っていたものだけで、どれも起動後に既存のレコードを書き換えない。
+ * 約定させようとした tick は失敗を返して断られる（かつては `applyFill` が throw して
+ * 500 になっていた。`src/engine/match.ts` の `applyFill()`）。
  */
 export async function loadState(
   path: string,

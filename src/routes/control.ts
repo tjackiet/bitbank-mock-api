@@ -165,7 +165,8 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
     const body = asRecord(request.body);
     // 互換ルート（POST /v1/user/spot/order）と同じ pairAssets で弾く。ここは外向きに
     // 出ない口だが、状態ファイル由来の文字種が不正なペアを runTick へ渡すと、
-    // fillOrder が INVALID_PAIR を返して applyFill が throw し 500 になる。
+    // fillOrder が INVALID_PAIR を返して runTick ごと失敗する。先に落とせば、利用者は
+    // `applyFill: INVALID_PAIR` ではなく `INVALID_PAIR` を受け取れる。
     if (!body || typeof body.pair !== "string" || !pairAssets(body.pair)) {
       return reply.code(400).send({ error: "INVALID_PAIR" });
     }

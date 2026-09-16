@@ -131,7 +131,8 @@ export class SessionStore {
       }
       // 状態ファイルから読んだ注文のペアは検証を通っていない（PaperStateSchema は文字種を
       // 見ない）。文字種が不正なペアは外向きに問い合わせても意味が無く、足が返ってくると
-      // fillOrder が INVALID_PAIR を返して applyFill が throw する。ここで落とす。
+      // fillOrder が INVALID_PAIR を返して runTick ごと失敗する（約定が 1 件も進まない）。
+      // ここで落として、無駄な問い合わせと空振りの tick をどちらも避ける。
       // ログには生の pair を出さない（改行・制御文字で行を割られないよう JSON で包む）。
       if (!pairAssets(pair)) {
         this.logger.warn(`tick: skipping malformed pair ${JSON.stringify(pair)}`);

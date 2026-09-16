@@ -292,7 +292,7 @@ describe("/_control routes", () => {
   });
 
   // 互換ルートと同じ pairAssets で弾く。状態ファイル由来の文字種が不正なペアを
-  // runTick へ渡すと applyFill が throw して 500 になるので、ここで 400 にする。
+  // runTick へ渡すと applyFill が失敗して tick ごと断られるので、ここで 400 にする。
   it.each([["../../admin_jpy"], ["btc?a=1_jpy"], ["btc#frag_jpy"], ["btc_jpy_x"], [""]])(
     "rejects a malformed pair without filling: %s",
     async (pair) => {
@@ -662,5 +662,74 @@ describe("/_control routes", () => {
     expect(body.orders).toEqual([]);
     expect(body.balances).toEqual({ jpy: 50_000, btc: 1 });
     expect(body.initialJpy).toBe(50_000);
+  });
+});
+
+/**
+ * `applyFill` が失敗しても 500 にしない。かつては throw していたので、`runTick` を通る
+ * 経路（`POST /_control/tick` と market モードの `SessionStore.tick()`）が
+ * 封筒でない 500 を返していた。`/_control/` は 400、互換ルートは封筒を保つ。
+ */
+describe("runTick が約定を適用できないとき", () => {
+  const SATURATED = Number.MAX_SAFE_INTEGER + 1;
+
+  const stateWithSaturatedTradeSeq = () =>
+    buildState({
+      balances: { jpy: 10_000_000 },
+      orders: [buildOrder({ id: "1", price: 5_000_000, startAmount: 0.001 })],
+      nextTradeSeq: SATURATED,
+    });
+
+  it("POST /_control/tick は 500 ではなく 400 で断り、状態を変えない", async () => {
+    const { fastify, store } = await buildControl(stateWithSaturatedTradeSeq());
+    const before = store.state();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/tick",
+      payload: { pair: "btc_jpy", price: 4_000_000 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "applyFill: TRADE_SEQ_EXHAUSTED" });
+    expect(store.state()).toBe(before);
+    await fastify.close();
+  });
+
+  it("market モードの互換ルートは封筒を保つ（読み取りは通る）", async () => {
+    const candles = {
+      btc_jpy: [
+        {
+          open: 4_000_000,
+          high: 4_000_000,
+          low: 4_000_000,
+          close: 4_000_000,
+          vol: 0,
+          timestamp: Date.now() - 60_000,
+        },
+      ],
+    };
+    const store = new SessionStore(stateWithSaturatedTradeSeq(), {
+      path: null,
+      fillMode: "market",
+      fetchCandles: async (pair) => ({ success: true, data: pair === "btc_jpy" ? candles.btc_jpy : [] }),
+    });
+    const fastify = await buildServer({ store, logger: false, controlEnabled: false });
+
+    const get = await fastify.inject({ method: "GET", url: "/v1/user/spot/order?pair=btc_jpy&order_id=1" });
+    expect(get.statusCode).toBe(200);
+    expect(get.json()).toMatchObject({ success: 1 });
+
+    // 劣化中も通す読み取り経路（Nyx のリコンサイルの主経路）も落ちない。
+    const info = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/orders_info",
+      payload: { pair: "btc_jpy", order_ids: [1] },
+    });
+    expect(info.statusCode).toBe(200);
+    expect(info.json()).toMatchObject({ success: 1 });
+
+    const assets = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
+    expect(assets.statusCode).toBe(200);
+    expect(assets.json()).toMatchObject({ success: 1 });
+    await fastify.close();
   });
 });
