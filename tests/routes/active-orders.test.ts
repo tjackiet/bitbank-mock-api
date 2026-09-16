@@ -78,3 +78,73 @@ describe("GET /v1/user/spot/active_orders official field set", () => {
     expect(orders[0]!).not.toHaveProperty("canceled_at");
   });
 });
+
+/**
+ * 絞り込みパラメータの不正値。実 API を実測して固定した（2026-09-16、`btc_jpy`）。
+ *
+ * - `?count=` -> 40006 `"Invalid count."`
+ * - `?end=`   -> 40007 `"Invalid end param."`
+ *
+ * 旧実装は `z.coerce.number()` が `""` を `0` にするため、`?end=` が
+ * **`success: 1` のまま常に空配列**を返し、`?count=` は汎用の `20003` を返していた。
+ */
+describe("絞り込みパラメータの不正値（実 API 実測）", () => {
+  const build = setupBuildTestServer();
+
+  const stateWithTwoOrders = () =>
+    buildState({ orders: [buildOrder({ id: "1" }), buildOrder({ id: "2" })] });
+
+  it("空文字は「未指定」ではなくパラメータ固有のコードで断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const cases: Array<[string, number]> = [
+      ["count=", 40006],
+      ["end=", 40007],
+      ["end_id=", 40008],
+      ["from_id=", 40009],
+      ["since=", 40022],
+    ];
+    for (const [query, code] of cases) {
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/v1/user/spot/active_orders?${query}`,
+      });
+      expect(res.statusCode, query).toBe(400);
+      expect(res.json(), query).toEqual({ success: 0, data: { code } });
+    }
+  });
+
+  it("数値として読めない値も同じコードで断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?count=abc",
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 40006 } });
+  });
+
+  it("指定が無いときは今までどおり全件を返す", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({ method: "GET", url: "/v1/user/spot/active_orders" });
+    const body = res.json() as { success: number; data: { orders: unknown[] } };
+    expect(body.success).toBe(1);
+    expect(body.data.orders).toHaveLength(2);
+  });
+
+  it("複数が不正なときは count / from_id / end_id / since / end の順で先に当たったもの", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?end=&count=",
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 40006 } });
+  });
+
+  it("絞り込み以外の不正値は従来どおり 20003", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?pair=a&pair=b",
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 20003 } });
+  });
+});

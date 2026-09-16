@@ -135,3 +135,38 @@ describe("GET /v1/user/spot/trade_history official field set", () => {
     );
   });
 });
+
+/**
+ * 絞り込みパラメータの不正値。`trade_history?since=` が 40022
+ * `"Invalid trading start time."` を返すことを実 API で実測した（2026-09-16、`btc_jpy`）。
+ * 旧実装は `""` を `0` として素通しし、`success: 1` を返していた。
+ */
+describe("絞り込みパラメータの不正値（実 API 実測）", () => {
+  const build = setupBuildTestServer();
+
+  it("空文字はパラメータ固有のコードで断る", async () => {
+    const { fastify } = await build(buildState({ trades: [buildTrade({ tradeId: "1" })] }));
+    const cases: Array<[string, number]> = [
+      ["since=", 40022],
+      ["end=", 40007],
+      ["count=", 40006],
+    ];
+    for (const [query, code] of cases) {
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/v1/user/spot/trade_history?${query}`,
+      });
+      expect(res.statusCode, query).toBe(400);
+      expect(res.json(), query).toEqual({ success: 0, data: { code } });
+    }
+  });
+
+  it("order の不正値は絞り込みの表に無いので従来どおり 20003", async () => {
+    const { fastify } = await build(buildState({ trades: [buildTrade({ tradeId: "1" })] }));
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/trade_history?order=sideways",
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 20003 } });
+  });
+});
