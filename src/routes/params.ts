@@ -1,3 +1,5 @@
+import { ErrorCode, type ErrorCodeValue } from "./envelope.ts";
+
 export function isMissing(v: unknown): boolean {
   return v === undefined || v === null || v === "";
 }
@@ -10,17 +12,22 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
 /**
  * 絞り込みパラメータの名前 → 不正値のときに返す error code。
  *
- * 出典: bitbank-api-docs の errors.md（コミット 0badd680）。`"Invalid count."`（40006）、
- * `"Invalid end param."`（40007）、`"Invalid end_id."`（40008）、`"Invalid from_id."`（40009）、
- * `"Invalid trading start time."`（40022）。**汎用の 20003 ではなくこれらを返すことを
- * 実 API で実測している**（docs/fidelity.md の「絞り込みパラメータの不正値」）。
+ * **番号は `ErrorCode`（src/routes/envelope.ts）を唯一の出典とする。ここに数値を書かない。**
+ * 書き写すと error code の定義元が 2 つになり、`ErrorCode` の側だけを直した変更が
+ * 型にもテストにも引っかからないまま wire に出る値だけ元のまま残る。CLAUDE.md が
+ * 「エラーは `envelope.ts` の `ErrorCode` にある error code を返す」と定めているので、
+ * その規約が実際に成り立つようにする。値を `ErrorCodeValue` で締めてあるため、
+ * `ErrorCode` に無い数値を書けば typecheck が落ちる。
+ *
+ * 番号そのものの出典（errors.md のメッセージ名）と実 API の実測は `ErrorCode` の側に
+ * 置いてある。この地図が持つのは「どのパラメータがどのコードか」の対応だけである。
  */
-const QUERY_PARAM_CODES: Record<string, number> = {
-  count: 40006,
-  end: 40007,
-  end_id: 40008,
-  from_id: 40009,
-  since: 40022,
+const QUERY_PARAM_CODES: Record<string, ErrorCodeValue> = {
+  count: ErrorCode.INVALID_COUNT,
+  end: ErrorCode.INVALID_END,
+  end_id: ErrorCode.INVALID_END_ID,
+  from_id: ErrorCode.INVALID_FROM_ID,
+  since: ErrorCode.INVALID_SINCE,
 };
 
 /**
@@ -36,7 +43,9 @@ const QUERY_PARAM_ORDER = ["count", "from_id", "end_id", "since", "end"] as cons
  * パラメータ名は zod のスキーマ由来（未知のキーは落ちる）だが、地図は自分のキーだけを見る
  * （`Object.hasOwn`。docs/fidelity.md の「資産キー・ペア名で引く地図」と同じ扱い）。
  */
-export function queryParamErrorCode(paths: Array<PropertyKey | undefined>): number | null {
+export function queryParamErrorCode(
+  paths: Array<PropertyKey | undefined>,
+): ErrorCodeValue | null {
   const bad = new Set(paths.filter((p): p is string => typeof p === "string"));
   for (const name of QUERY_PARAM_ORDER) {
     if (bad.has(name) && Object.hasOwn(QUERY_PARAM_CODES, name)) return QUERY_PARAM_CODES[name]!;
