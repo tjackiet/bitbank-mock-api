@@ -16,10 +16,26 @@ const idValue = z.union([z.number(), z.string().min(1)]);
  * | `active_orders?end=` | `40007` | `success: 1` で 0 件 |
  * | `trade_history?since=` | `40022` | `success: 1` で素通り |
  *
- * coerce の前に空文字を `NaN` へ落として `finite()` で弾く。本文側の `numStr` は
- * 変えない（欠落は `isMissing()` が先に `3000x` で拾うため、空文字はここへ来ない）。
+ * 実 API で実測したのは空文字だが、空白だけの値も同じ扱いにする（`Number()` から見て
+ * 空文字と区別が付かないため。実 API 側の実測はしていない）。
+ *
+ * coerce の前に落として `finite()` で弾く。落とすのは**空文字だけでは足りない**。
+ * `Number()` は前後の空白を読み飛ばすので `" "` / `"\t"` / `"\n"` / `"\u00a0"` も `0` になり、
+ * 空文字と同じ抜け方をする（`?end=%20` が `success: 1` で 0 件を返していた）。
+ * `String#trim()` が落とす文字の集合は `Number()` が読み飛ばす集合と同じなので、
+ * `trim()` の結果が空なら弾けば過不足なく閉じる。
+ *
+ * 文字列以外も落とす。同名クエリが 2 本来ると値は配列になり、`Number(["1","2"])` は
+ * `NaN` なので結果は変わらないが、**要素数を数えずに数値へ強制しない**という
+ * 姿勢を型で示す（docs/fidelity.md の「同じ名前で複数来る値」）。
+ *
+ * 本文側の `numStr` は変えない（欠落は `isMissing()` が先に `3000x` で拾うため、
+ * 空文字はここへ来ない）。
  */
-const queryNum = z.preprocess((v) => (v === "" ? Number.NaN : v), z.coerce.number().finite());
+const queryNum = z.preprocess(
+  (v) => (typeof v !== "string" || v.trim() === "" ? Number.NaN : v),
+  z.coerce.number().finite(),
+);
 const queryCount = queryNum.pipe(z.number().int().positive());
 
 export const CreateOrderRequestSchema = z.object({

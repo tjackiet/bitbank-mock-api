@@ -113,6 +113,45 @@ describe("絞り込みパラメータの不正値（実 API 実測）", () => {
     }
   });
 
+  /**
+   * 空白だけの値も空文字と同じ扱いにする。`Number()` は前後の空白を読み飛ばすので
+   * `" "` / `"\t"` / `"\n"` / `"\u00a0"` はいずれも `0` になり、空文字と同じ抜け方をする。
+   * 旧実装では `?end=%20` が **`success: 1` のまま 0 件**を返していた
+   * （`count` だけは `0` が `positive()` に落ちて偶然 `40006` になっていた）。
+   */
+  it("空白だけの値も空文字と同じコードで断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const cases: Array<[string, number]> = [
+      ["end=%20", 40007],
+      ["end=%09", 40007],
+      ["end=%0a", 40007],
+      ["end=%C2%A0", 40007],
+      ["since=%20", 40022],
+      ["from_id=%20", 40009],
+      ["end_id=%20", 40008],
+      ["count=%20", 40006],
+    ];
+    for (const [query, code] of cases) {
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/v1/user/spot/active_orders?${query}`,
+      });
+      expect(res.statusCode, query).toBe(400);
+      expect(res.json(), query).toEqual({ success: 0, data: { code } });
+    }
+  });
+
+  // 同名クエリが 2 本来ると値は配列になる。要素数を数えずに数値へ強制しない。
+  it("同名クエリが 2 本来たら数値へ強制せず断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?end=1&end=2",
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ success: 0, data: { code: 40007 } });
+  });
+
   it("数値として読めない値も同じコードで断る", async () => {
     const { fastify } = await build(stateWithTwoOrders());
     const res = await fastify.inject({
