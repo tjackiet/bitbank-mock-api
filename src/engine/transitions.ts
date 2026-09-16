@@ -75,6 +75,23 @@ function replaceOrder(state: PaperState, order: OrderRecord): PaperState {
   };
 }
 
+/**
+ * 新しい注文を板に載せる。**指値は `UNFILLED` で載せて終わり、成行はその場で全量約定させる**
+ * （成行は種となる注文を積んでから `fillOrder` へ渡すので、返るのは約定済みのレコード）。
+ *
+ * 検査はこの順で、どれか 1 つでも落ちたら**状態を変えずに**失敗を返す。
+ *
+ * 1. ペアの文字種（`pairAssets`）— `INVALID_PAIR`
+ * 2. `amount` が有限かつ正 — `INVALID_AMOUNT`
+ * 3. 採番が飽和していないこと（`canIssue`）— `ORDER_SEQ_EXHAUSTED`
+ * 4. 基準価格が有限かつ正 — 指値は `price` が要る（`LIMIT_PRICE_REQUIRED`）、
+ *    成行は `marketPrice` が要る（`MARKET_PRICE_REQUIRED`）
+ * 5. 残高 — `INSUFFICIENT_FUNDS`
+ *
+ * 残高の判定は `availableOf`（残高 − 拘束）に対して行い、買いは基準価格 × 数量 ×
+ * `(1 + feeRate)` を quote に、売りは数量を base に要求する。手数料込みにするのは
+ * `computeLocked` の拘束式と同じ基準で見るためで、ここがずれると不変量 6 が破れる。
+ */
 export function placeOrder(
   state: PaperState,
   input: PlaceOrderInput,
@@ -245,6 +262,15 @@ export function fillOrder(
   });
 }
 
+/**
+ * active な注文を取り消す。部分約定済みなら `CANCELED_PARTIALLY_FILLED`、
+ * 未約定なら `CANCELED_UNFILLED` にし、`canceledAt` と `updatedAt` を `at` で埋める。
+ * 約定量・約定代金・残高は動かさない（取消は既に約定した分を取り消さない）。
+ *
+ * ガードが 2 段あるのは拾う範囲が違うため。`isTerminal` が終端の 4 状態を、続く
+ * `!isActive` が残る `INACTIVE` を落とす。どちらも `ORDER_NOT_ACTIVE` を返す。
+ * 不在は `ORDER_NOT_FOUND`。いずれも状態は変えない。
+ */
 export function cancelOrder(
   state: PaperState,
   orderId: string,
@@ -264,6 +290,16 @@ export function cancelOrder(
   return ok({ state: replaceOrder(state, order), order });
 }
 
+/**
+ * 注文を `REJECTED` にする。受け付けるのは `UNFILLED` と `INACTIVE` だけで、
+ * それ以外は `ORDER_NOT_ACTIVE`、不在は `ORDER_NOT_FOUND`（状態は変えない）。
+ * 約定済みの注文を拒否できないのは不変量 2（`REJECTED` の約定量は 0）を保つため。
+ *
+ * **互換ルートからも `/_control/` からも呼んでいない。** 現状の呼び出し元はテストだけで、
+ * 応答経路で `REJECTED` に出会うのは状態ファイルが最初からその状態を持っていた場合に限る
+ * （`PaperStateSchema` は status を enum で受けるので読み込みは通る）。
+ * `src/routes/cancel-order.ts` が `REJECTED` を `ORDER_NOT_FOUND` に落とすのはその経路のため。
+ */
 export function rejectOrder(
   state: PaperState,
   orderId: string,
