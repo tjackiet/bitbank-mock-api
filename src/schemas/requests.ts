@@ -46,8 +46,6 @@ export const CreateOrderRequestSchema = z.object({
   type: z.enum(["market", "limit"]),
 });
 
-export type CreateOrderRequest = z.infer<typeof CreateOrderRequestSchema>;
-
 export const CancelOrderRequestSchema = z.object({
   pair: z.string().min(1),
   order_id: idValue,
