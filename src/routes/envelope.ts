@@ -23,13 +23,15 @@ export const ErrorCode = {
   MISSING_PRICE: 30012,
   MISSING_SIDE: 30013,
   MISSING_TYPE: 30015,
-  // 絞り込みパラメータごとの不正値コード。実 API が汎用コードではなくこれらを返すことを
-  // 実測した（docs/fidelity.md の「絞り込みパラメータの不正値」）。
-  INVALID_COUNT: 40006,
-  INVALID_END: 40007,
-  INVALID_END_ID: 40008,
-  INVALID_FROM_ID: 40009,
-  INVALID_SINCE: 40022,
+  // 絞り込みパラメータごとの不正値コード。**汎用の 20003 ではなくこれらを返すことを
+  // 実 API で実測した**（docs/fidelity.md の「絞り込みパラメータの不正値」）。
+  // 括弧内は errors.md の該当メッセージで、番号を同定した根拠。
+  // パラメータ名との対応は src/routes/params.ts の QUERY_PARAM_CODES が持つ。
+  INVALID_COUNT: 40006, // "Invalid count."
+  INVALID_END: 40007, // "Invalid end param."
+  INVALID_END_ID: 40008, // "Invalid end_id."
+  INVALID_FROM_ID: 40009, // "Invalid from_id."
+  INVALID_SINCE: 40022, // "Invalid trading start time."
   ORDER_NOT_FOUND: 50009,
   ALREADY_CANCELED: 50026,
   ALREADY_EXECUTED: 50027,
@@ -37,3 +39,13 @@ export const ErrorCode = {
   AMOUNT_PRECISION: 60004,
   INTERNAL: 70001,
 } as const;
+
+/**
+ * 封筒に出る error code の型。`ErrorCode` のメンバの値だけを受ける。
+ *
+ * error code の定義元をこのファイルに 1 つだけ保つための型。番号を別の場所へ書き写すと
+ * 定義元が 2 つになり、片方だけ直した変更が型にもテストにも引っかからないまま
+ * wire に出る値だけを変える。番号を持つ地図はこの型で締めて、`ErrorCode` に無い数値を
+ * 書いたら typecheck が落ちるようにする（`src/routes/params.ts` の `QUERY_PARAM_CODES`）。
+ */
+export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
