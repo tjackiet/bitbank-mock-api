@@ -4,7 +4,6 @@ import {
   DEFAULT_TAKER_FEE_RATE,
   isActive,
   isTerminal,
-  lockedAssetOf,
   pairAssets,
   remainingOf,
   type OrderRecord,
@@ -58,7 +57,6 @@ export type TransitionOk = {
   state: PaperState;
   order: OrderRecord;
   trade?: TradeRecord;
-  touchedAssets: string[];
 };
 
 function ok(data: TransitionOk): Result<TransitionOk> {
@@ -126,7 +124,6 @@ export function placeOrder(
         updatedAt: now,
       },
       order,
-      touchedAssets: [input.side === "buy" ? quote : base],
     });
   }
 
@@ -245,7 +242,6 @@ export function fillOrder(
     },
     order,
     trade,
-    touchedAssets: [base, quote],
   });
 }
 
@@ -265,12 +261,7 @@ export function cancelOrder(
     canceledAt: at,
     updatedAt: at,
   };
-  const locked = lockedAssetOf(current.side, current.pair);
-  return ok({
-    state: replaceOrder(state, order),
-    order,
-    touchedAssets: locked ? [locked] : [],
-  });
+  return ok({ state: replaceOrder(state, order), order });
 }
 
 export function rejectOrder(
@@ -289,10 +280,5 @@ export function rejectOrder(
     status: "REJECTED",
     updatedAt: at,
   };
-  const locked = lockedAssetOf(current.side, current.pair);
-  return ok({
-    state: replaceOrder(state, order),
-    order,
-    touchedAssets: locked ? [locked] : [],
-  });
+  return ok({ state: replaceOrder(state, order), order });
 }

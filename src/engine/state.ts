@@ -19,8 +19,6 @@ export const TERMINAL_STATUSES = [
   "REJECTED",
 ] as const;
 
-export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
-
 export const OrderRecordSchema = z.object({
   id: z.string(),
   pair: z.string(),
@@ -93,10 +91,6 @@ export function remainingOf(o: OrderRecord): number {
   return o.startAmount - o.executedAmount;
 }
 
-export function averagePriceOf(o: OrderRecord): number {
-  return o.executedAmount === 0 ? 0 : o.executedNotional / o.executedAmount;
-}
-
 /**
  * ペアの 1 セグメントに許す文字種。英小文字と数字だけで、記号は許さない。
  *
@@ -121,13 +115,6 @@ export function pairAssets(pair: string): [string, string] | null {
   if (!base || !quote || base === quote) return null;
   if (!PAIR_SEGMENT_RE.test(base) || !PAIR_SEGMENT_RE.test(quote)) return null;
   return [base, quote];
-}
-
-export function lockedAssetOf(side: "buy" | "sell", pair: string): string | null {
-  const assets = pairAssets(pair);
-  if (!assets) return null;
-  const [base, quote] = assets;
-  return side === "buy" ? quote : base;
 }
 
 export function parseNumericId(id: string): number | null {
