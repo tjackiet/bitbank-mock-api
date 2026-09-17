@@ -127,6 +127,71 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     expect(open[0]?.id).toBe("3");
   });
 
+  /**
+   * 同じ id を 2 回以上入れたとき、その注文は 1 回だけ取り消され `orders` にも 1 件しか載る。
+   *
+   * `order_ids` の重複は落とさないので同じ id が並び、2 件目以降は直前の取消で終端になった
+   * 注文に当たって `cancelOrder` が `ORDER_NOT_ACTIVE` を返す。ルートはそれを読み飛ばす。
+   *
+   * 応答の `orders` が `order_ids` より短くなる 3 経路のうちの 1 つ（他の 2 つは存在しない id と
+   * 別のペアの id。次のテストで見る）。docs/fidelity.md の「取消済み・約定済みの取消」行が
+   * 「取消が一部だけ成立する意味での部分成功は起きない」と書いているのと両立する
+   * （同じ注文を 1 回取り消しただけで、取り逃した注文は無い）。
+   */
+  it("cancels a duplicated id once and returns it once", async () => {
+    const state = buildState({
+      balances: { jpy: 10_000_000 },
+      orders: [buildOrder({ id: "1" }), buildOrder({ id: "2", price: 5_100_000 })],
+    });
+    const { fastify, store } = await build(state);
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: [1, 1] },
+    });
+    const body = res.json() as { success: number; data: { orders: Array<{ order_id: number }> } };
+    expect(body.success).toBe(1);
+    // 要求は 2 件だが応答は 1 件。件数の一致で成否を判定できない。
+    expect(body.data.orders).toHaveLength(1);
+    expect(body.data.orders[0]?.order_id).toBe(1);
+    // 巻き込みは起きない（2 は active のまま）。
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+  });
+
+  /**
+   * そのペアの注文に解決しない id は黙って飛ばす。エラーにはせず、解決した分だけ取り消す。
+   *
+   * 飛ぶのは 2 通り。(a) 存在しない id、(b) 別のペアの注文の id。`working.orders.find` が
+   * id と pair の両方で照合するので、どちらも `undefined` になって `continue` へ落ちる。
+   *
+   * 重複 id と併せて、応答の `orders` が `order_ids` より短くなる経路はこの 3 つである
+   * （docs/fidelity.md の「取消済み・約定済みの取消」行）。Nyx が件数の一致で成否を
+   * 判定できないのはこのため。
+   */
+  it("skips ids that do not resolve to an order of the requested pair", async () => {
+    const state = buildState({
+      balances: { jpy: 10_000_000 },
+      orders: [
+        buildOrder({ id: "1" }),
+        buildOrder({ id: "2", pair: "eth_jpy", price: 300_000 }),
+      ],
+    });
+    const { fastify, store } = await build(state);
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      // 999 は存在しない id、2 は別のペア（eth_jpy）の注文。
+      payload: { pair: "btc_jpy", order_ids: [1, 999, 2] },
+    });
+    const body = res.json() as { success: number; data: { orders: Array<{ order_id: number }> } };
+    // 3 件要求して 1 件。エラーにはならない。
+    expect(body.success).toBe(1);
+    expect(body.data.orders).toHaveLength(1);
+    expect(body.data.orders[0]?.order_id).toBe(1);
+    // 別のペアの注文は active のまま残る。
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+  });
+
   it("does not cancel remaining ids when a terminal order is in the batch", async () => {
     const state = buildState({
       orders: [

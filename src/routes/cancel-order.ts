@@ -67,6 +67,8 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     const toCancel: string[] = [];
     for (const id of wantIds) {
       const target = working.orders.find((o) => o.id === id && o.pair === parsed.data.pair);
+      // そのペアの注文に解決しない id（存在しない / 別のペア）は黙って飛ばす。
+      // エラーにはせず、解決した分だけ取り消す（docs/fidelity.md の同行）。
       if (!target) continue;
       const terminal = terminalCancelCode(target);
       if (terminal !== null) return err(terminal);
@@ -79,6 +81,13 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     const canceled = [];
     for (const id of toCancel) {
       const r = cancelOrder(next, id, now);
+      // 失敗を読み飛ばす経路は**同じ id が order_ids に 2 回以上来たとき**に踏む。
+      // `toCancel` は重複を落とさないので同じ id が並び、2 件目以降は直前の取消で
+      // 終端になった注文に当たって `ORDER_NOT_ACTIVE` で失敗する。防御的な保険ではなく
+      // 到達するので、消さないこと。
+      // 応答の `orders` が `order_ids` より短くなる理由はこれだけではない。上の
+      // `if (!target) continue;` が、存在しない id と別のペアの id も飛ばす
+      // （3 つとも docs/fidelity.md の「取消済み・約定済みの取消」行に記録した）。
       if (!r.success) continue;
       next = r.data.state;
       canceled.push(r.data.order);
