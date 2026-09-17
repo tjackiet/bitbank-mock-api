@@ -109,57 +109,29 @@ export function placeOrder(
   if (!canIssue(state.nextOrderSeq)) return fail(TransitionError.ORDER_SEQ_EXHAUSTED);
 
   const [base, quote] = assets;
-  if (input.type === "limit") {
-    if (input.price === undefined || !Number.isFinite(input.price) || input.price <= 0) {
-      return fail(TransitionError.LIMIT_PRICE_REQUIRED);
-    }
-    if (input.side === "buy") {
-      const need = input.price * input.amount * (1 + feeRate);
-      if (availableOf(state, quote, feeRate) < need) return fail(TransitionError.INSUFFICIENT_FUNDS);
-    } else if (availableOf(state, base, feeRate) < input.amount) {
-      return fail(TransitionError.INSUFFICIENT_FUNDS);
-    }
-    const order: OrderRecord = {
-      id: String(state.nextOrderSeq),
-      pair: input.pair,
-      side: input.side,
-      type: "limit",
-      price: input.price,
-      startAmount: input.amount,
-      executedAmount: 0,
-      executedNotional: 0,
-      status: "UNFILLED",
-      orderedAt: now,
-      canceledAt: null,
-      updatedAt: now,
-    };
-    return ok({
-      state: {
-        ...state,
-        orders: [...state.orders, order],
-        nextOrderSeq: state.nextOrderSeq + 1,
-        updatedAt: now,
-      },
-      order,
-    });
+  const isLimit = input.type === "limit";
+  // 残高ガードの基準価格。指値は注文価格を、成行は約定に使う市場価格を見る。
+  // 「有限かつ正」という条件は両者で同じで、欠けたときに返すコードだけが種別で変わる。
+  const refPrice = isLimit ? input.price : marketPrice;
+  if (refPrice === undefined || !Number.isFinite(refPrice) || refPrice <= 0) {
+    return fail(
+      isLimit ? TransitionError.LIMIT_PRICE_REQUIRED : TransitionError.MARKET_PRICE_REQUIRED,
+    );
   }
-
-  if (marketPrice === undefined || !Number.isFinite(marketPrice) || marketPrice <= 0) {
-    return fail(TransitionError.MARKET_PRICE_REQUIRED);
-  }
-  if (input.side === "buy") {
-    const need = marketPrice * input.amount * (1 + feeRate);
-    if (availableOf(state, quote, feeRate) < need) return fail(TransitionError.INSUFFICIENT_FUNDS);
-  } else if (availableOf(state, base, feeRate) < input.amount) {
+  // 買いは quote を手数料込みの代金で、売りは base を数量で拘束する（`computeLocked` と同じ式）。
+  const lockedAsset = input.side === "buy" ? quote : base;
+  const need = input.side === "buy" ? refPrice * input.amount * (1 + feeRate) : input.amount;
+  if (availableOf(state, lockedAsset, feeRate) < need) {
     return fail(TransitionError.INSUFFICIENT_FUNDS);
   }
 
-  const seed: OrderRecord = {
+  const order: OrderRecord = {
     id: String(state.nextOrderSeq),
     pair: input.pair,
     side: input.side,
-    type: "market",
-    price: null,
+    type: input.type,
+    // 成行は約定価格を持たない（`price` は指値の注文価格を表すフィールド）。
+    price: isLimit ? refPrice : null,
     startAmount: input.amount,
     executedAmount: 0,
     executedNotional: 0,
@@ -170,11 +142,13 @@ export function placeOrder(
   };
   const placed: PaperState = {
     ...state,
-    orders: [...state.orders, seed],
+    orders: [...state.orders, order],
     nextOrderSeq: state.nextOrderSeq + 1,
     updatedAt: now,
   };
-  return fillOrder(placed, seed.id, marketPrice, input.amount, now, feeRate);
+  // 指値は板に載せて終わり。成行はその場で全量約定させる（`fillOrder` が trade と残高を作る）。
+  if (isLimit) return ok({ state: placed, order });
+  return fillOrder(placed, order.id, refPrice, input.amount, now, feeRate);
 }
 
 /**
