@@ -235,12 +235,35 @@ function assetAmounts(
 const DECIMAL_PARTS = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
 
 /**
- * 有限の number を最小単位の整数へ四捨五入する。倍精度の乗算を挟まず
+ * 有限の number を最小単位の整数へ**切り捨てる**。倍精度の乗算を挟まず
  * 10 進表記を bigint で桁合わせするので、`Number.MAX_SAFE_INTEGER` を超える
- * 桁でも指数表記に落ちない。端数は `Math.round` と同じく +∞ 方向へ寄せる。
+ * 桁でも指数表記に落ちない。
+ *
+ * **四捨五入から切り捨てへ変えたのは実測による**（2026-09-17）。実 API に約定しない
+ * 指値買いを 1 本置いて `locked_amount` の増分を測ったところ、厳密値
+ * `1001.19088908` に対し `1001.1908` が返った。四捨五入なら `1001.1909` になる。
+ * `docs/fidelity.md` の「残高の桁」行に未確定として残していた論点である。
+ *
+ * **区別できていないこと**: 「合計を切り捨てる」のか「手数料を切り捨ててから足す」のかは、
+ * この 1 点ではどちらも同じ値になるため決まっていない。**負値の扱いも未実測**で、
+ * ここでは 0 方向への切り捨て（絶対値を小さくする向き）にしている。`free_amount` は
+ * 負になり得るので（同じ行）、実 API がそこで -∞ 方向へ倒すなら差が出る。
+ *
+ * **切り捨ては倍精度の塵に弱いので、先に落とす。** 四捨五入なら塵は吸収されていたが、
+ * 切り捨てでは表示桁を 1 つ下げてしまう。例: `computeLocked` の `50 × 0.575 × 1.0012` は
+ * 数学的には `28.7845` ちょうどだが倍精度では `28.784499999999998` になり、
+ * そのまま切り捨てると `28.7844` になる。`toPrecision(15)` で意図した 10 進値へ寄せてから
+ * 桁を合わせる（倍精度が往復で保証するのは 15 桁）。
+ *
+ * ただし `1e15` 以上には当てない。有効桁が削れて整数部が変わるうえ、その大きさでは
+ * ulp が `0.125` 以上あって表示桁（`1e-4`）より粗く、塵が表示に届かないためである。
  */
+/** `toPrecision(15)` で塵を落とす上限。これ以上は ulp が表示桁より粗い（docstring）。 */
+const DUST_SNAP_LIMIT = 1e15;
+
 function toMinimumUnits(n: number, digits: number): bigint {
-  const parts = DECIMAL_PARTS.exec(n.toString());
+  const text = Math.abs(n) < DUST_SNAP_LIMIT ? n.toPrecision(15) : n.toString();
+  const parts = DECIMAL_PARTS.exec(text);
   if (!parts) return 0n;
   const [, sign, int, frac = "", exp = "0"] = parts;
   const mantissa = BigInt(int + frac);
@@ -251,10 +274,10 @@ function toMinimumUnits(n: number, digits: number): bigint {
     return sign === "-" ? -scaled : scaled;
   }
   const divisor = 10n ** BigInt(-shift);
+  // bigint の除算は 0 方向へ切り捨てる。mantissa は数字列から作るので非負で、
+  // 符号は最後に付け直す。
   const quotient = mantissa / divisor;
-  const remainder = mantissa % divisor;
-  if (sign === "-") return remainder * 2n > divisor ? -(quotient + 1n) : -quotient;
-  return remainder * 2n >= divisor ? quotient + 1n : quotient;
+  return sign === "-" ? -quotient : quotient;
 }
 
 /**
