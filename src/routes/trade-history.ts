@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { TradeRecord } from "../engine/state.ts";
+import { isKnownPair } from "../engine/pairs.ts";
 import { TradeHistoryQuerySchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
 import { queryParamErrorCode } from "./params.ts";
@@ -42,6 +43,10 @@ export const tradeHistoryRoutes: FastifyPluginAsync = async (fastify) => {
       // 絞り込みパラメータは実 API が専用コードを返すので、名前で引き当てる。
       const code = queryParamErrorCode(parsed.error.issues.map((i) => i.path[0]));
       return err(code ?? ErrorCode.INVALID_PARAMETER);
+    }
+    // `pair` は任意。渡されていて公式一覧に無ければ `40017`（`active_orders` と同じ）。
+    if (parsed.data.pair !== undefined && !isKnownPair(parsed.data.pair)) {
+      return err(ErrorCode.INVALID_ASSET);
     }
     await fastify.store.tick();
     const trades = filterTrades(fastify.store.state().trades, parsed.data);

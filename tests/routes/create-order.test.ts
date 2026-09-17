@@ -41,9 +41,16 @@ describe("POST /v1/user/spot/order", () => {
     expect(body.data.code).toBe(60001);
   });
 
-  // `constructor` を base に持つペアでは availableOf が NaN を返し、`NaN < amount` が
-  // false になるため残高ゼロの売りが受理されていた。通常ペアと同じく 60001 で断る。
-  it("rejects a sell with no balance even when the base asset shadows Object.prototype", async () => {
+  // `constructor_jpy` は公式一覧に無いので、残高を見る前にペアの検査で 40017 になる。
+  //
+  // かつてここは 60001（残高不足）を期待していた。`constructor` を base に持つペアでは
+  // availableOf が NaN を返し、`NaN < amount` が false になるため残高ゼロの売りが受理されて
+  // いた、という回帰の番人だったためである。**その回帰自体は engine 側で押さえている**
+  // （`tests/engine/state.test.ts` の computeLocked / availableOf、`invariants.test.ts`、
+  // `persist.test.ts`、`transitions.test.ts`）。いずれも state を直接組むのでこの経路の
+  // 検査を通らず、状態ファイル由来の `constructor_jpy` という本来の侵入口を塞ぎ続ける。
+  // ここで見るのは「ペアの検査が残高の検査より先に効くこと」だけにする。
+  it("rejects a pair outside the official list before checking the balance", async () => {
     const { fastify, store } = await build(buildState({ balances: { jpy: 1_000_000 } }));
     const res = await fastify.inject({
       method: "POST",
@@ -52,7 +59,7 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(60001);
+    expect(body.data.code).toBe(40017);
     expect(activeOrders(store.state())).toHaveLength(0);
   });
 
@@ -207,18 +214,40 @@ describe("POST /v1/user/spot/order", () => {
     },
   );
 
-  // ホワイトリストにしていないことの証明。公式一覧に無い形の正しいペアは通す。
-  it("accepts a well-formed pair that is not in the official pair list", async () => {
+  // ホワイトリストにしたことの証明。文字種は正しいが公式一覧に無いペアは 40017 で断り、
+  // 注文を作らない。**この経路の 40017 は実測ではなく外挿**（照会 4 経路で `xxx_yyy` が
+  // 40017 だったことから。発注は実弾になるので実 API では測れない）。
+  // 根拠と留保は `docs/fidelity.md` の「ペア」節にある。
+  it("rejects a well-formed pair that is not in the official pair list", async () => {
     const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }));
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",
       payload: { pair: "foo_jpy", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
     });
-    const body = res.json() as { success: number; data: { pair: string; order_id: number } };
-    expect(body.success).toBe(1);
-    expect(body.data.pair).toBe("foo_jpy");
-    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual(["foo_jpy"]);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(40017);
+    expect(activeOrders(store.state())).toHaveLength(0);
+  });
+
+  // 一覧にあるペアは通る（上の拒否が「全部断っている」わけではないことの対照）。
+  // 発注停止フラグが立っているペア（`xrp_btc` など）も、現時点では発注できる。
+  // 停止中のペアへ発注したとき実 API が何を返すか実測していないため、フラグは
+  // 表に持つだけで使っていない（`src/engine/pairs.ts` の `PairSpec.orderSuspended`）。
+  it("accepts a pair in the official list, including one flagged order-suspended", async () => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000, btc: 100 } }));
+    for (const pair of ["xrp_jpy", "xrp_btc"]) {
+      // 価格は既定桁（btc_jpy の 0 桁）に合わせる。未登録ペアの桁を仮置きする決定は
+      // 今回変えていないので、`xrp_btc` の価格も整数でないと 20003 で弾かれる。
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/order",
+        payload: { pair, amount: "1", price: "1", side: "buy", type: "limit" },
+      });
+      expect((res.json() as { success: number }).success).toBe(1);
+    }
+    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual(["xrp_jpy", "xrp_btc"]);
   });
 
   it("rejects a malformed pair on market before looking up a price", async () => {

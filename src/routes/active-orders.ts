@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { activeOrders, parseNumericId, type OrderRecord } from "../engine/state.ts";
+import { isKnownPair } from "../engine/pairs.ts";
 import { ActiveOrdersQuerySchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
 import { queryParamErrorCode } from "./params.ts";
@@ -47,6 +48,11 @@ export const activeOrdersRoutes: FastifyPluginAsync = async (fastify) => {
       // 絞り込みパラメータは実 API が専用コードを返すので、名前で引き当てる。
       const code = queryParamErrorCode(parsed.error.issues.map((i) => i.path[0]));
       return err(code ?? ErrorCode.INVALID_PARAMETER);
+    }
+    // `pair` は任意。渡されていて公式一覧に無ければ `40017`（実測済み。`docs/fidelity.md` の
+    // 「ペア」節）。省略時は今までどおり全ペアを返す。
+    if (parsed.data.pair !== undefined && !isKnownPair(parsed.data.pair)) {
+      return err(ErrorCode.INVALID_ASSET);
     }
     await fastify.store.tick();
     const filtered = filterActiveOrders(activeOrders(fastify.store.state()), parsed.data);
