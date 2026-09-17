@@ -89,7 +89,7 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(10000);
+    expect(body.data.code).toBe(40017);
   });
 
   it("does not tick existing orders when the pair is malformed", async () => {
@@ -110,13 +110,13 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(10000);
+    expect(body.data.code).toBe(40017);
     expect(store.state()).toEqual(before);
     expect(activeOrders(store.state())).toHaveLength(1);
   });
 
   // 記号入りのペアは pairAssets が弾く。既存の分岐（create-order.ts の
-  // `if (!pairAssets(pair)) return err(ErrorCode.INVALID_PAIR)`）がそのまま 10000 を返す。
+  // `if (!pairAssets(pair)) return err(ErrorCode.INVALID_ASSET)`）がそのまま 40017 を返す。
   it.each([["../../admin_jpy"], ["btc?a=1_jpy"], ["btc#frag_jpy"]])(
     "rejects a pair with URL metacharacters: %s",
     async (pair) => {
@@ -128,7 +128,7 @@ describe("POST /v1/user/spot/order", () => {
       });
       const body = res.json() as { success: number; data: { code: number } };
       expect(body.success).toBe(0);
-      expect(body.data.code).toBe(10000);
+      expect(body.data.code).toBe(40017);
     },
   );
 
@@ -162,7 +162,7 @@ describe("POST /v1/user/spot/order", () => {
             },
           });
           const body = res.json() as { success: number; data: { code: number } };
-          expect(body.data.code).toBe(10000);
+          expect(body.data.code).toBe(40017);
         }
         expect(pairs).toEqual([]);
       } finally {
@@ -194,7 +194,7 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(10000);
+    expect(body.data.code).toBe(40017);
   });
 
   it("rejects bad payload", async () => {

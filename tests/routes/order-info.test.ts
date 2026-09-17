@@ -393,3 +393,32 @@ describe("post_only の出現条件", () => {
     expect(body.data.post_only).toBe(false);
   });
 });
+
+// 実 API の実測（2026-09-17、認証済みの口座）で決めたコード。`?pair=` を落とすと
+// 30009（"Missing asset."）。不正なペアの 40017 は**この PR では扱わない** —
+// 実 API は登録外のペア（`xxx_yyy`）にも 40017 を返すが、それはホワイトリストを
+// 持つという意味で、本モックは文字種しか見ない設計を明示的に選んでいる
+// （create-order.test.ts の「ホワイトリストにしていないことの証明」）。
+// docs/fidelity.md に未確定として記録した。
+describe("ペアのコード", () => {
+  const build = setupBuildTestServer();
+
+  it("GET order: pair を落とすと 30009", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({ method: "GET", url: "/v1/user/spot/order?order_id=1" });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(30009);
+  });
+
+  it("orders_info: pair を落とすと 30009", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/orders_info",
+      payload: { order_ids: [1] },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.data.code).toBe(30009);
+  });
+});

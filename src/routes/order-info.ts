@@ -13,7 +13,7 @@ export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
     }
     if (isMissing(query.pair)) {
       reply.code(400);
-      return err(ErrorCode.INVALID_PARAMETER);
+      return err(ErrorCode.MISSING_ASSET);
     }
     const parsed = GetOrderQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -41,7 +41,7 @@ export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
     }
     if (isMissing(body.pair)) {
       reply.code(400);
-      return err(ErrorCode.INVALID_PARAMETER);
+      return err(ErrorCode.MISSING_ASSET);
     }
     const parsed = OrdersInfoRequestSchema.safeParse(request.body);
     if (!parsed.success) {

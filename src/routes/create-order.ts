@@ -27,7 +27,7 @@ function mapPlaceError(error: string) {
     case TransitionError.INVALID_AMOUNT:
       return err(ErrorCode.INVALID_PARAMETER);
     case TransitionError.INVALID_PAIR:
-      return err(ErrorCode.INVALID_PAIR);
+      return err(ErrorCode.INVALID_ASSET);
     case TransitionError.MARKET_PRICE_REQUIRED:
       return err(ErrorCode.INTERNAL);
     default:
@@ -48,7 +48,7 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
       return err(ErrorCode.INVALID_PARAMETER);
     }
     const { pair, side, type, amount, price } = parsed.data;
-    if (!pairAssets(pair)) return err(ErrorCode.INVALID_PAIR);
+    if (!pairAssets(pair)) return err(ErrorCode.INVALID_ASSET);
 
     const digits = precisionOf(pair);
     if (!fitsDigits(amount, digits.amountDigits)) return err(ErrorCode.AMOUNT_PRECISION);
