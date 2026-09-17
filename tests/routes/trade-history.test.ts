@@ -170,3 +170,49 @@ describe("絞り込みパラメータの不正値（実 API 実測）", () => {
     expect(res.json()).toEqual({ success: 0, data: { code: 20003 } });
   });
 });
+
+/**
+ * `trade_history` は `from_id` / `end_id` を持たない。**公式ドキュメントと実 API が
+ * 食い違っている論点**で、挙動を決め切れないので公式どおりにしている。
+ *
+ * - rest-api.md の Fetch trade history のパラメータ表は `pair` / `count` / `order_id` /
+ *   `since` / `end` / `order` の 6 つだけ（Fetch active orders の表には両方ある）
+ * - ところが実 API は `?end_id=` に `40008`、`?from_id=` に `40009` を返し、**絞り込みにも
+ *   使っている**（2026-09-17 実測）
+ *
+ * 詳細は docs/fidelity.md の「絞り込みパラメータの不正値」行。**この差はモックの
+ * 都合ではなく未確定の記録なので、テストで固定して黙って変わらないようにする。**
+ */
+describe("trade_history は from_id / end_id を持たない（未確定。公式どおり）", () => {
+  const build = setupBuildTestServer();
+
+  it.each([["from_id="], ["end_id="], ["from_id=1"], ["end_id=1"]])(
+    "%s は無視され success: 1 が返る（active_orders なら断る値）",
+    async (query) => {
+      const { fastify } = await build(buildState({ trades: [buildTrade({ tradeId: "1" })] }));
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/v1/user/spot/trade_history?pair=btc_jpy&${query}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { success: number; data: { trades: unknown[] } };
+      expect(body.success).toBe(1);
+      // 絞り込まないので、渡しても件数が変わらない。
+      expect(body.data.trades).toHaveLength(1);
+    },
+  );
+
+  it("対照: active_orders は同じ値を 40009 / 40008 で断る", async () => {
+    const { fastify } = await build();
+    const from = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?pair=btc_jpy&from_id=",
+    });
+    expect(from.json()).toEqual({ success: 0, data: { code: 40009 } });
+    const end = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?pair=btc_jpy&end_id=",
+    });
+    expect(end.json()).toEqual({ success: 0, data: { code: 40008 } });
+  });
+});

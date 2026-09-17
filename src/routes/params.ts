@@ -51,6 +51,19 @@ const QUERY_PARAM_CODES: Record<string, ErrorCodeValue> = {
  * 不正値のパラメータを見る優先順。複数が同時に不正なとき実 API がどれを返すかは
  * 実測できていないので、モックはこの順で先に当たったものを返す（docs/fidelity.md の同行）。
  */
+/**
+ * 複数のパラメータが同時に不正なとき、どれのコードを返すかの優先順。
+ *
+ * **決めているのはこの配列で、zod のスキーマ定義順ではない**（`queryParamErrorCode` が
+ * zod の issue を集合にしてからこの順で引くため）。スキーマの並びを逆にしても応答は
+ * 変わらないことを実測した。今はたまたま `ActiveOrdersQuerySchema` の並びと一致して
+ * いるが、片方だけ並べ替えても挙動は変わらない。
+ *
+ * **実 API で裏が取れているのは `count` が `end` / `since` より先であることだけ**
+ * （2026-09-17、`count=&end=` / `end=&count=` / `since=&count=` の 3 本がすべて `40006`）。
+ * `from_id` / `end_id` を含む組み合わせの相対順は未実測なので、この並びは推測を含む。
+ * Nyx は複数不正時のコード選択に依存しないこと（docs/fidelity.md の同行）。
+ */
 const QUERY_PARAM_ORDER = ["count", "from_id", "end_id", "since", "end"] as const;
 
 /**
