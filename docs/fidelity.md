@@ -93,8 +93,20 @@
 桁だけで決まり大きさに依らない）。engine の計算はその保証に依存していないので、engine 側へ
 桁検査を足す変更は入れていない。
 
-Nyx への含意: 桁の違反は必ず routes で `60004` として返る。engine を直接呼ぶ経路（このモックには
-無いが、将来 `/_control/` に足す場合）では桁が検査されない。
+Nyx への含意: **桁の違反が返すコードは一律ではない**（実測）。
+
+| 経路 | 対象 | 応答 |
+| --- | --- | --- |
+| `POST /v1/user/spot/order` | 数量 | HTTP 200・封筒 `60004`（`AMOUNT_PRECISION`） |
+| `POST /v1/user/spot/order` | 価格（指値） | HTTP 400・封筒 `20003`（`INVALID_PARAMETER`） |
+| `POST /_control/orders/:id/fill` | 数量 | HTTP 400・素の JSON `{"error":"INVALID_AMOUNT","remaining":…}` |
+| `POST /_control/orders/:id/fill` | 価格 | HTTP 400・素の JSON `{"error":"INVALID_PRICE"}` |
+
+桁の違反を 1 つのコードで判定せず、コードと HTTP ステータスの組で扱うこと。`/_control/` は
+そもそも封筒に包まない（対応表の「`/_control/`」行）。
+
+engine の関数を直接呼ぶ経路では桁が検査されない。**現状そのような経路は無い**（`/_control/` も
+`fitsDigits` を routes 側で通す）ので、これは engine を別の口から使うときの注意である。
 
 ### 不変量をどこで担保するか
 
