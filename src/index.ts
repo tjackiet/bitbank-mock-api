@@ -60,13 +60,20 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`${signal} を受け取ったので停止します`);
+    // 停止の経路から例外を出さない。ハンドラは `void shutdown(signal)` で呼ぶので、
+    // ここで投げると unhandled rejection になり、**`process.exit()` に到達しないまま**
+    // ランタイム任せで落ちる（スタックトレース付きの終了コード 1 になることを実測した）。
+    let exitCode = 0;
     try {
       await fastify.close();
+    } catch (e) {
+      exitCode = 1;
+      console.error(`サーバを停止できませんでした: ${e}`);
     } finally {
       // 解放の失敗で停止を止めない。残ったロックは次の起動が stale として奪う。
       await lock.release().catch((e: unknown) => console.warn(`ロックを解放できませんでした: ${e}`));
+      process.exit(exitCode);
     }
-    process.exit(0);
   };
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
