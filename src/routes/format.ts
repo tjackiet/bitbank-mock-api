@@ -248,9 +248,22 @@ const DECIMAL_PARTS = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
  * この 1 点ではどちらも同じ値になるため決まっていない。**負値の扱いも未実測**で、
  * ここでは 0 方向への切り捨て（絶対値を小さくする向き）にしている。`free_amount` は
  * 負になり得るので（同じ行）、実 API がそこで -∞ 方向へ倒すなら差が出る。
+ *
+ * **切り捨ては倍精度の塵に弱いので、先に落とす。** 四捨五入なら塵は吸収されていたが、
+ * 切り捨てでは表示桁を 1 つ下げてしまう。例: `computeLocked` の `50 × 0.575 × 1.0012` は
+ * 数学的には `28.7845` ちょうどだが倍精度では `28.784499999999998` になり、
+ * そのまま切り捨てると `28.7844` になる。`toPrecision(15)` で意図した 10 進値へ寄せてから
+ * 桁を合わせる（倍精度が往復で保証するのは 15 桁）。
+ *
+ * ただし `1e15` 以上には当てない。有効桁が削れて整数部が変わるうえ、その大きさでは
+ * ulp が `0.125` 以上あって表示桁（`1e-4`）より粗く、塵が表示に届かないためである。
  */
+/** `toPrecision(15)` で塵を落とす上限。これ以上は ulp が表示桁より粗い（docstring）。 */
+const DUST_SNAP_LIMIT = 1e15;
+
 function toMinimumUnits(n: number, digits: number): bigint {
-  const parts = DECIMAL_PARTS.exec(n.toString());
+  const text = Math.abs(n) < DUST_SNAP_LIMIT ? n.toPrecision(15) : n.toString();
+  const parts = DECIMAL_PARTS.exec(text);
   if (!parts) return 0n;
   const [, sign, int, frac = "", exp = "0"] = parts;
   const mantissa = BigInt(int + frac);
