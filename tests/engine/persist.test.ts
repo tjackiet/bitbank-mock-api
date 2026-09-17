@@ -913,6 +913,15 @@ describe("sweepOrphanTempFiles", () => {
     expect(existsSync(tmp!)).toBe(false);
   });
 
+  it("pid の段がゼロ詰め・ゼロのものは消さない", async () => {
+    // `${process.pid}` は正の整数をそのまま文字列にしたもので、`0` もゼロ詰めも作らない。
+    // 状態ディレクトリは利用者が指す場所なので、自分が作れない形は残す。
+    const keep = ["state.json.00123.a.tmp", "state.json.0.a.tmp"];
+    for (const name of keep) await writeFile(join(dir, name), "x", "utf8");
+    expect(await sweepOrphanTempFiles(statePath)).toBe(0);
+    for (const name of keep) expect(existsSync(join(dir, name))).toBe(true);
+  });
+
   it("乱数の段が 9 文字以上のものは消さない", async () => {
     // `tempFilePath()` は slice(2, 10) で 8 文字までしか作らない。それより長いものは
     // 自分の残骸ではないので、利用者が置いたファイルとして残す。

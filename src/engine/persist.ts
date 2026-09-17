@@ -380,11 +380,15 @@ function tempFilePath(path: string): string {
  * 乱数の段は **1〜8 文字**に限る。`tempFilePath()` は `slice(2, 10)` で 8 文字までしか
  * 作らないので、それより長いものは自分の残骸ではない。`+` のままだと、利用者が置いた
  * `<状態ファイル>.<数字>.<9 文字以上>.tmp` を消しうる。
+ *
+ * pid の段は **先頭が 0 でない 10 進数**に限る。`${process.pid}` は正の整数をそのまま
+ * 文字列にしたものなので、`0` も `00123` のようなゼロ詰めも作らない。`\d+` のままだと、
+ * 利用者が置いた `<状態ファイル>.00123.<乱数>.tmp` を消しうる。
  */
 function orphanTempPattern(path: string): RegExp {
   // basename をそのまま正規表現へ入れない。`state.json` の `.` すら任意の 1 文字になる。
   const escaped = basename(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped}\\.\\d+\\.[a-z0-9]{1,8}\\.tmp$`);
+  return new RegExp(`^${escaped}\\.[1-9]\\d*\\.[a-z0-9]{1,8}\\.tmp$`);
 }
 
 /**
