@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { fitsDigits, precisionOf } from "../engine/precision.ts";
+import { isKnownPair } from "../engine/pairs.ts";
 import { pairAssets } from "../engine/state.ts";
 import { placeOrder, TransitionError } from "../engine/transitions.ts";
 import { CreateOrderRequestSchema } from "../schemas/requests.ts";
@@ -63,7 +64,13 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
       return err(ErrorCode.INVALID_PARAMETER);
     }
     const { pair, side, type, amount, price } = parsed.data;
-    if (!pairAssets(pair)) return err(ErrorCode.INVALID_ASSET);
+    // 2 段で弾く。文字種（`..` や `?` を外向きの足取得 URL へ入れない）と、公式一覧にあること。
+    // どちらも `40017` を返す。文字種は `pair: "   "` で実測済み（上の docstring）。
+    // **一覧に無いペアがこの経路で `40017` になることは実測していない**（発注は実弾になるため
+    // 測れない）。照会 4 経路で `xxx_yyy` が `40017` だったことからの**外挿**である。
+    // ここを素通しにすると、照会できない注文を作れてしまう（`GET order` は `40017` を返す）。
+    // 詳しくは `docs/fidelity.md` の「ペア」節。
+    if (!pairAssets(pair) || !isKnownPair(pair)) return err(ErrorCode.INVALID_ASSET);
 
     const digits = precisionOf(pair);
     if (!fitsDigits(amount, digits.amountDigits)) return err(ErrorCode.AMOUNT_PRECISION);
