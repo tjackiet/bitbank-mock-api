@@ -127,6 +127,36 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     expect(open[0]?.id).toBe("3");
   });
 
+  /**
+   * 同じ id を 2 回以上入れたとき、その注文は 1 回だけ取り消され `orders` にも 1 件しか載る。
+   *
+   * `order_ids` の重複は落とさないので同じ id が並び、2 件目以降は直前の取消で終端になった
+   * 注文に当たって `cancelOrder` が `ORDER_NOT_ACTIVE` を返す。ルートはそれを読み飛ばす。
+   *
+   * **要求した件数より `orders` が短くなる唯一の経路**なので固定する。docs/fidelity.md の
+   * 「取消済み・約定済みの取消」行が「取消が一部だけ成立する意味での部分成功は起きない」と
+   * 書いているのと両立する（同じ注文を 1 回取り消しただけで、取り逃した注文は無い）。
+   */
+  it("cancels a duplicated id once and returns it once", async () => {
+    const state = buildState({
+      balances: { jpy: 10_000_000 },
+      orders: [buildOrder({ id: "1" }), buildOrder({ id: "2", price: 5_100_000 })],
+    });
+    const { fastify, store } = await build(state);
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: [1, 1] },
+    });
+    const body = res.json() as { success: number; data: { orders: Array<{ order_id: number }> } };
+    expect(body.success).toBe(1);
+    // 要求は 2 件だが応答は 1 件。件数の一致で成否を判定できない。
+    expect(body.data.orders).toHaveLength(1);
+    expect(body.data.orders[0]?.order_id).toBe(1);
+    // 巻き込みは起きない（2 は active のまま）。
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+  });
+
   it("does not cancel remaining ids when a terminal order is in the batch", async () => {
     const state = buildState({
       orders: [

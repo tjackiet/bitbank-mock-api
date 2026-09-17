@@ -79,6 +79,12 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     const canceled = [];
     for (const id of toCancel) {
       const r = cancelOrder(next, id, now);
+      // 失敗を読み飛ばす経路は**同じ id が order_ids に 2 回以上来たとき**に踏む。
+      // `toCancel` は重複を落とさないので同じ id が並び、2 件目以降は直前の取消で
+      // 終端になった注文に当たって `ORDER_NOT_ACTIVE` で失敗する。結果として応答の
+      // `orders` には 1 件だけ載る（要求した件数より少なくなる唯一の経路。
+      // docs/fidelity.md の「取消済み・約定済みの取消」行に記録した）。
+      // 防御的な保険ではなく到達するので、消さないこと。
       if (!r.success) continue;
       next = r.data.state;
       canceled.push(r.data.order);
