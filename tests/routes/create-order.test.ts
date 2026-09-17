@@ -80,6 +80,29 @@ describe("POST /v1/user/spot/order", () => {
     expect(store.state().trades).toHaveLength(1);
   });
 
+  // pair の欠落は 30009（"Missing asset."）。GET order / orders_info と揃える。
+  // ただしこの経路自体は実測していない（発注 API は実弾になるため。詳細は
+  // src/routes/create-order.ts の missingCreateOrderCode の docstring）。
+  // 空白だけの値（`"   "`）はここに入れない。isMissing が trim しないので 40017 に
+  // 落ちるが、実 API がどちらを返すかを測っていないため固定しない。
+  it.each([[undefined], [""]])("returns 30009 when pair is missing: %p", async (pair) => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: {
+        ...(pair === undefined ? {} : { pair }),
+        amount: "0.001",
+        price: "5000000",
+        side: "buy",
+        type: "limit",
+      },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(30009);
+  });
+
   it("rejects invalid pair", async () => {
     const { fastify } = await build();
     const res = await fastify.inject({
@@ -89,7 +112,7 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(10000);
+    expect(body.data.code).toBe(40017);
   });
 
   it("does not tick existing orders when the pair is malformed", async () => {
@@ -110,13 +133,13 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(10000);
+    expect(body.data.code).toBe(40017);
     expect(store.state()).toEqual(before);
     expect(activeOrders(store.state())).toHaveLength(1);
   });
 
   // 記号入りのペアは pairAssets が弾く。既存の分岐（create-order.ts の
-  // `if (!pairAssets(pair)) return err(ErrorCode.INVALID_PAIR)`）がそのまま 10000 を返す。
+  // `if (!pairAssets(pair)) return err(ErrorCode.INVALID_ASSET)`）がそのまま 40017 を返す。
   it.each([["../../admin_jpy"], ["btc?a=1_jpy"], ["btc#frag_jpy"]])(
     "rejects a pair with URL metacharacters: %s",
     async (pair) => {
@@ -128,7 +151,7 @@ describe("POST /v1/user/spot/order", () => {
       });
       const body = res.json() as { success: number; data: { code: number } };
       expect(body.success).toBe(0);
-      expect(body.data.code).toBe(10000);
+      expect(body.data.code).toBe(40017);
     },
   );
 
@@ -162,7 +185,7 @@ describe("POST /v1/user/spot/order", () => {
             },
           });
           const body = res.json() as { success: number; data: { code: number } };
-          expect(body.data.code).toBe(10000);
+          expect(body.data.code).toBe(40017);
         }
         expect(pairs).toEqual([]);
       } finally {
@@ -194,7 +217,7 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(10000);
+    expect(body.data.code).toBe(40017);
   });
 
   it("rejects bad payload", async () => {
