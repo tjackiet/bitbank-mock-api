@@ -1,5 +1,7 @@
 import { buildServer } from "./server/http.ts";
 import { fillMode, isControlEnabled, listenHost, persistFailureMode } from "./server/config.ts";
+import { defaultStatePath } from "./engine/persist.ts";
+import { acquireStateLock, StateLockedError } from "./store/lock.ts";
 import { loadOrInitDefault } from "./store/session.ts";
 
 const DEFAULT_PORT = 14000;
@@ -32,7 +34,16 @@ async function main() {
   const mode = fillMode();
   const persistMode = persistFailureMode();
   const host = listenHost();
+
+  // 状態ファイルを読む前に排他を取る。取れなければ起動しない。
+  // 2 プロセスが同じ状態ファイルを使うと、両方が成功を返しながら片方の注文が丸ごと消える。
+  const statePath = defaultStatePath("default");
+  const lock = await acquireStateLock(statePath);
+
+  // ロックと同じ statePath を渡す。導出を 2 か所に持つと、片方だけ変わったときに
+  // 「ロックしたファイルとは別のファイルを読む」形になる。
   const store = await loadOrInitDefault(DEFAULT_INITIAL_JPY, {
+    path: statePath,
     logger: { warn: (m) => console.warn(m), info: (m) => console.log(m) },
     fillMode: mode,
   });
@@ -42,7 +53,41 @@ async function main() {
     controlEnabled: control,
     controlToken: process.env.BITBANK_MOCK_CONTROL_TOKEN,
   });
-  await fastify.listen({ port, host });
+
+  // 落とすときにロックを置いていかない。SIGKILL で残った分は次の起動が stale として奪う。
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} を受け取ったので停止します`);
+    // 停止の経路から例外を出さない。ハンドラは `void shutdown(signal)` で呼ぶので、
+    // ここで投げると unhandled rejection になり、**`process.exit()` に到達しないまま**
+    // ランタイム任せで落ちる（スタックトレース付きの終了コード 1 になることを実測した）。
+    let exitCode = 0;
+    try {
+      await fastify.close();
+    } catch (e) {
+      exitCode = 1;
+      console.error(`サーバを停止できませんでした: ${e}`);
+    } finally {
+      // 解放の失敗で停止を止めない。残ったロックは次の起動が stale として奪う。
+      await lock.release().catch((e: unknown) => console.warn(`ロックを解放できませんでした: ${e}`));
+      process.exit(exitCode);
+    }
+  };
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      void shutdown(signal);
+    });
+  }
+
+  try {
+    await fastify.listen({ port, host });
+  } catch (e) {
+    // 解放に失敗しても、投げ直すのは listen の失敗のほう。原因を後片付けで隠さない。
+    await lock.release().catch((re: unknown) => console.warn(`ロックを解放できませんでした: ${re}`));
+    throw e;
+  }
   // persistFailure は既定が degrade（v0.1.0 からの変更）なので、起動時に見えるようにしておく。
   console.log(
     `bitbank-lab-mock listening on http://${host}:${port} fillMode=${mode} ` +
@@ -51,6 +96,8 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error(e);
+  // 排他で弾かれたときは、スタックではなく何をすればよいかだけを出す。
+  if (e instanceof StateLockedError) console.error(e.message);
+  else console.error(e);
   process.exit(1);
 });
