@@ -10,12 +10,17 @@ import { asRecord, isMissing } from "./params.ts";
 /**
  * 欠落しているパラメータに対応するコード。無ければ `null`。
  *
- * **`pair` の欠落がこの経路で `30009` になることは実測していない。** 実 API で確かめたのは
- * `GET /v1/user/spot/order` と `POST /v1/user/spot/orders_info` の 2 つで、どちらも `30009`
- * を返した（2026-09-17）。発注 API は実弾になるので測っていない。errors.md の `30009` が
- * "Missing asset." という汎用の文言であることと、上の 2 経路に揃えることを根拠にしている。
+ * **`pair` の欠落が `30009` になることはこの経路でも実測済み**（2026-09-17）。`pair` を
+ * 省いた `POST /v1/user/spot/order` は取引できる先が無いので注文が成立せず、実 API でも
+ * 安全に測れた。`GET /v1/user/spot/order` と `POST /v1/user/spot/orders_info` と同じ
+ * `30009`（"Missing asset."）が返る。
  *
- * **並び順（どれが先に返るか）も実測していない。** `pair` を先頭に置いたのは rest-api.md の
+ * **`pair` が空白だけ（`"   "`）のときは `40017`（"Invalid asset."）** で、これも実測済み。
+ * `isMissing()` は trim しないので「欠落」ではなく「不正な値」の側へ落ち、`pairAssets()` が
+ * 弾く。**この流れが実 API と一致していることを確かめた**（`src/routes/params.ts` の
+ * `isMissing` の docstring も参照）。
+ *
+ * **並び順（どれが先に返るか）は実測していない。** `pair` を先頭に置いたのは rest-api.md の
  * パラメータ表の並びに合わせたもので、実 API の優先順の再現ではない。
  */
 function missingCreateOrderCode(body: unknown): number | null {

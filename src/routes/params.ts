@@ -3,9 +3,10 @@ import { ErrorCode, type ErrorCodeValue } from "./envelope.ts";
 /**
  * 値が「欠落」か。`undefined` / `null` に加えて**空文字も欠落として扱う**。
  * **trim はしない**ので、空白だけの値（`"   "`）は欠落ではなく「不正な値」の側へ落ちる
- * （`pair` なら `pairAssets` が弾いて `40017`）。実 API がこれをどう扱うかは未実測
- * （docs/fidelity.md のエラーコード行）。絞り込みパラメータの空白は別経路で、
- * そちらは実 API が空文字と同じコードを返すことを実測済み。
+ * （`pair` なら `pairAssets` が弾いて `40017`）。**実 API も `POST /v1/user/spot/order` に
+ * `pair: "   "` を送ると `40017` を返すことを実測した**（2026-09-17）ので、この流れは
+ * 本物と一致している。絞り込みパラメータの空白は別経路で、そちらも実 API が空文字と
+ * 同じコードを返すことを実測済み。
  *
  * 必須パラメータを持つ互換ルート（`order` の GET / POST、`cancel_order`、
  * `cancel_orders`、`orders_info`）は zod の検査より**先に**これを通し、欠落を
