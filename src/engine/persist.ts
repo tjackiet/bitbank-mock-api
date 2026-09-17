@@ -1,6 +1,6 @@
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { invariantViolations, preconditionViolations } from "./invariants.ts";
 import {
@@ -356,6 +356,42 @@ async function syncDirectory(dir: string): Promise<Result<true>> {
 }
 
 /**
+ * `saveState()` が使う一時ファイルのパス。`<状態ファイル>.<pid>.<乱数>.tmp`。
+ *
+ * **`orphanTempPattern()` と対になっている。** 片方だけ変えると、掃除が自分の残骸を
+ * 拾えなくなる（掃除は「見つからない」を失敗として報告しないので、黙って効かなくなる）。
+ *
+ * 乱数の段が空にならないようにしている。`Math.random()` は `0` を返しうる仕様で、
+ * そのとき `(0).toString(36).slice(2, 10)` は空文字になり、名前が `<状態ファイル>.<pid>..tmp`
+ * という**掃除が拾えない形**になる（実測で確認）。確率は 2^-53 だが、外れたときの壊れ方が
+ * 「黙って効かなくなる」なので潰しておく。
+ */
+function tempFilePath(path: string): string {
+  const rand = Math.random().toString(36).slice(2, 10) || "0";
+  return `${path}.${process.pid}.${rand}.tmp`;
+}
+
+/**
+ * 掃除の対象にする一時ファイル名。`tempFilePath()` が作りうる形だけに絞る。
+ *
+ * 状態ディレクトリは利用者が `BITBANK_MOCK_STATE_PATH` で指す場所なので、`.tmp` で
+ * 終わるというだけで消さない。pid と乱数の段まで一致するものだけを自分の残骸と見なす。
+ *
+ * 乱数の段は **1〜8 文字**に限る。`tempFilePath()` は `slice(2, 10)` で 8 文字までしか
+ * 作らないので、それより長いものは自分の残骸ではない。`+` のままだと、利用者が置いた
+ * `<状態ファイル>.<数字>.<9 文字以上>.tmp` を消しうる。
+ *
+ * pid の段は **先頭が 0 でない 10 進数**に限る。`${process.pid}` は正の整数をそのまま
+ * 文字列にしたものなので、`0` も `00123` のようなゼロ詰めも作らない。`\d+` のままだと、
+ * 利用者が置いた `<状態ファイル>.00123.<乱数>.tmp` を消しうる。
+ */
+function orphanTempPattern(path: string): RegExp {
+  // basename をそのまま正規表現へ入れない。`state.json` の `.` すら任意の 1 文字になる。
+  const escaped = basename(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped}\\.[1-9]\\d*\\.[a-z0-9]{1,8}\\.tmp$`);
+}
+
+/**
  * `PaperState` 全体を状態ファイルへ原子的に書き出す。
  *
  * 一時ファイルを `wx`（既存を開かない）で `0o600` で作り、書いて `fsync` してから `rename`、
@@ -373,7 +409,7 @@ export async function saveState(
   opts: SaveStateOptions = {},
 ): Promise<Result<true>> {
   const data = `${JSON.stringify(state, null, 2)}\n`;
-  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
+  const tmp = tempFilePath(path);
   // ディレクトリの fsync の失敗は書き込みの成否と別に持つ。warn は try を出てから呼ぶ
   // （logger が投げても、成立した書き込みを失敗として報告しないため。この戻り値は
   // 呼び出し側が状態の扱いを決める根拠になる）。
@@ -429,6 +465,77 @@ export async function saveState(
     }
   }
   return { success: true, data: true };
+}
+
+/**
+ * 状態ディレクトリに残った孤児の一時ファイルを掃除する。戻り値は消せた数。
+ *
+ * `rename` の前に落ちたプロセスの一時ファイルは、起動でも以後の書き込みでも片付かない
+ * （2026-09-17 に実測。起動・発注・停止を通しても残る）。読むのは `state.json` だけなので
+ * 無害だが、状態ディレクトリに溜まり続ける。
+ *
+ * **呼ぶ側が状態ファイルの排他を持っていること。** ロックが無いと、他プロセスが今まさに
+ * 書いている最中の一時ファイルを消しかねない（計画 10.3 が PR 5 を PR 4 の後に置いた理由）。
+ * そのため `loadOrInitDefault()` ではなく `src/index.ts` の起動経路から呼ぶ。
+ *
+ * **失敗しても起動を止めない。** 掃除は見た目の問題で、消せなくても動作に影響しない。
+ */
+export async function sweepOrphanTempFiles(
+  path: string,
+  opts: SaveStateOptions = {},
+): Promise<number> {
+  const dir = dirname(path);
+  const pattern = orphanTempPattern(path);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (e) {
+    // 初回起動ではまだディレクトリが無い。掃除するものも無いので黙って終わる。
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    // それ以外（権限が無い、ディレクトリでない等）は運用者が知るべき事情なので出す。
+    // ここでも掃除の失敗で起動は止めない。
+    warnQuietly(
+      opts.logger,
+      `failed to list ${JSON.stringify(dir)} for orphan temp files: ` +
+        `${JSON.stringify(e instanceof Error ? e.message : String(e))}`,
+    );
+    return 0;
+  }
+
+  let removed = 0;
+  const failures: string[] = [];
+  for (const name of entries) {
+    if (!pattern.test(name)) continue;
+    try {
+      await unlink(join(dir, name));
+      removed++;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
+      failures.push(name);
+    }
+  }
+
+  if (failures.length > 0) {
+    warnQuietly(
+      opts.logger,
+      `failed to remove ${failures.length} orphan temp file(s) in ${JSON.stringify(dir)}`,
+    );
+  }
+  return removed;
+}
+
+/**
+ * warn を出すが、logger が投げても握り潰す。
+ *
+ * `npm run dev | head` のように標準出力が閉じた後の `console.warn` は `EPIPE` で投げる。
+ * 掃除は best effort なので、ログに出せなかったことで起動を止めてはならない。
+ */
+function warnQuietly(logger: Logger | undefined, message: string): void {
+  try {
+    (logger ?? noopLogger).warn(message);
+  } catch {
+    /* ログに出せなくても続ける */
+  }
 }
 
 export async function deleteState(path: string): Promise<Result<true>> {

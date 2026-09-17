@@ -1,6 +1,6 @@
 import { buildServer } from "./server/http.ts";
 import { fillMode, isControlEnabled, listenHost, persistFailureMode } from "./server/config.ts";
-import { defaultStatePath } from "./engine/persist.ts";
+import { defaultStatePath, sweepOrphanTempFiles } from "./engine/persist.ts";
 import { acquireStateLock, StateLockedError } from "./store/lock.ts";
 import { loadOrInitDefault } from "./store/session.ts";
 
@@ -39,6 +39,13 @@ async function main() {
   // 2 プロセスが同じ状態ファイルを使うと、両方が成功を返しながら片方の注文が丸ごと消える。
   const statePath = defaultStatePath("default");
   const lock = await acquireStateLock(statePath);
+
+  // 排他を取ったあとで掃除する。ロックが無いと、他プロセスが書いている最中の
+  // 一時ファイルを消しかねない（計画 10.3 が PR 5 を PR 4 の後に置いた理由）。
+  const swept = await sweepOrphanTempFiles(statePath, {
+    logger: { warn: (m) => console.warn(m), info: (m) => console.log(m) },
+  });
+  if (swept > 0) console.log(`孤児の一時ファイルを ${swept} 件片付けました`);
 
   // ロックと同じ statePath を渡す。導出を 2 か所に持つと、片方だけ変わったときに
   // 「ロックしたファイルとは別のファイルを読む」形になる。
