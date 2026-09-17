@@ -156,8 +156,7 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
       }
       next = { ...next, balances };
     }
-    fastify.store.replace(next);
-    await fastify.store.persist();
+    await fastify.store.commit(next);
     return next;
   });
 
@@ -222,8 +221,7 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
       feeRate: store.feeRate,
     });
     if (!r.success) return reply.code(400).send({ error: r.error });
-    store.replace(r.data.state);
-    await store.persist();
+    await store.commit(r.data.state);
     return { filled: r.data.filled.map(formatTrade), lastTickAt: r.data.lastTickAt };
   });
 
@@ -265,12 +263,11 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
     const store = fastify.store;
     const previousLastTickAt = store.state().lastTickAt;
     const lastTickAt = new Date(Math.trunc(ms)).toISOString();
-    store.replace({
+    await store.commit({
       ...store.state(),
       lastTickAt,
       updatedAt: new Date(realNowMs).toISOString(),
     });
-    await store.persist();
     return { lastTickAt, previousLastTickAt };
   });
 
@@ -317,8 +314,7 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
       }
       return reply.code(400).send({ error: r.error });
     }
-    store.replace(r.data.state);
-    await store.persist();
+    await store.commit(r.data.state);
     return {
       order: formatOrder(r.data.order),
       trade: r.data.trade ? formatTrade(r.data.trade) : null,

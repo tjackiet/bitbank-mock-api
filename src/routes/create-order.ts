@@ -66,8 +66,7 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
       if (fillPrice === null) return err(ErrorCode.INTERNAL);
       const r = placeOrder(store.state(), { pair, side, type, amount }, now, fillPrice, store.feeRate);
       if (!r.success) return mapPlaceError(r.error);
-      store.replace(r.data.state);
-      await store.persist();
+      await store.commit(r.data.state);
       return ok(formatOrder(r.data.order));
     }
 
@@ -79,8 +78,7 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
       store.feeRate,
     );
     if (!r.success) return mapPlaceError(r.error);
-    store.replace(r.data.state);
-    await store.persist();
+    await store.commit(r.data.state);
     return ok(formatOrder(r.data.order));
   });
 };
