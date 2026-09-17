@@ -536,3 +536,76 @@ PR 1 のマージ直後に CodeRabbit から「diff の外」の指摘が 2 件�
 
 - `loadState()` の失敗メッセージの接頭辞（JSON のパース失敗も `failed to read paper state:` になり、読み取り自体は成功しているのに「read に失敗」と読める）。実害が無く、既存の PR に相乗りさせると範囲が広がる。やるなら単独の極小 PR で、優先度は最下位。
 - `deleteState()` の未使用 export（参照はゼロ）。将来 `/_control/` に hard delete を足すかで決まるので、今は触らない。
+
+## 11. v0.1.0 以後の改訂: 構造診断の残件（2026-09-17）
+
+2026-09-17 に、コードが構造的に破綻していないか（循環依存・責務の境界・重複・dead code など）を
+診断した。修正できるものは第 1 波（#33〜#35）と第 2 波（#36〜#38）で片付き、残った 3 つはどれも
+判断が要るものだった。本節はその決定を固定する。10 節と同じく**決めてから書く**。
+
+### 11.1 診断で確かめたこと（根拠として残す）
+
+| 観点 | 結果 |
+|---|---|
+| 規模 | src 24 ファイル / 3,280 行、tests 23 ファイル / 6,162 行（テスト比 1.9:1） |
+| 循環依存 | **実行時はゼロ。** 型のみの循環が 1 件（`engine/candles.ts` ↔ `engine/types.ts`、双方 `import type`）。`import type` を除いた import グラフで実測 |
+| 層の逆流 | **実行時の逆流は無い。** `store/session.ts` から `routes/*` へ実行時に到達する経路はゼロ。型のみなら `session.ts` → `server/degraded.ts` → `routes/envelope.ts` の 1 本がある（`PersistFailureMode` の `import type`）。当初「store が routes に依存している」と報告したが、これは型を辺に数えたグラフによる**誤りだった** |
+| ネストの深さ | 最大 3。4 段以上はゼロ |
+| 関数の長さ | 50 行以上は 182 個中 11 個。ハンドラ単位では 14 個中 2 個。`placeOrder` は #35 で 84 行 → 58 行 |
+| dead code | `touchedAssets`（4 生成点・0 読み手）と参照 0 の export 4 個を #34 で削除。`deleteState` は 10.6 の保留に従い残す |
+| error code の定義元 | `ErrorCode` と `params.ts` に二重定義されており、片方だけ直しても typecheck とテストを素通りすることを実測。#33 で一元化し型で締めた |
+| 許容差 | 不変量 6 の `1e-9` に根拠の記録が無く、残高が約 `8.39e6` を超えると 1 ulp を下回ることを実測。誤判定の具体例は作れなかったので値は変えず、`docs/fidelity.md` に未確定として記録（#36） |
+
+### 11.2 要判断事項（10.5 の続き。2026-09-17 に決定）
+
+**9.** ~~責務の逆流をどこまで直すか~~ → **決定: `freshState` を `engine/state.ts` へ移すだけ。**
+
+当初は `FillMode` / `PersistFailureMode` の型の置き場まで含めて整理する案だったが、11.1 のとおり
+**実行時の逆流は存在しない**。残りは実行時に何も変わらない整形で、十数箇所の import 書き換えに
+見合わない（Plan A の開始まで 2 週間）。`freshState` だけは参照が 3 箇所（定義側 `store/session.ts`、
+利用側 `routes/control.ts`）で、`PaperState` を作る関数が engine にある形が明らかに正しいので移す。
+
+`server/degraded.ts` が bitbank 封筒を作るために `routes/envelope.ts` を読む向きの歪みは**残す**。
+型のみの循環（`candles.ts` ↔ `types.ts`）も残す。どちらも記録で足りる。
+
+**10.** ~~検証をどこに置くか~~ → **決定: 規則を明文化し、実装は変えない。**
+
+規則は `docs/fidelity.md` の「検証をどこに置くか」に書いた。**engine は自分の計算と不変量が
+成り立つために要る検証だけを持ち、routes は wire 上の契約（桁・欠落・型）を持つ。**
+
+「engine は不変量のための検証だけ」という言い方は採らなかった。`price > 0`（`transitions.ts`）は
+6 本の不変量のどれでもなく `notional = price * fillAmount` の前提なので、その規則では次に検証を
+足す人がどちらに置くかを引けない。「計算と不変量のために要る」なら `price > 0` が engine に、
+桁が routes にあることを両方説明できる。
+
+engine 側に桁検査を足す案（挙動が変わる）は採らない。桁の検査はもともと量を格子へ載せる保証では
+なく（不変量 5 の節の末尾）、engine の計算はその保証に依存していない。
+
+**11.** ~~`await store.tick()` の 8 箇所~~ → **決定: テストで固定する。フックへは移さない。**
+
+`preHandler` フックへ移す案は採らない。`buildServer()` の劣化ガードと実行順が絡み、
+`create-order` の「tick → `getLatestPrice`」のようなルート固有の並びがフックに隠れる。
+
+テストは**ルートの一覧を手書きしない**。手書きすると、塞ごうとしている「新しいルートで足し忘れる」
+がテスト側で起きる。`src/server/degraded.ts` の `READ_ROUTES ∪ MUTATING_ROUTES` から導出する。
+`assertRouteClassified()` が `onRoute` で登録済みルートの網羅を起動時に保証しているので、
+ルートを足した人は `degraded.ts` に足さないとサーバが起動せず、このテストが自動で拾う。
+維持する場所は 1 つだけになる（#30 の発想の流用）。
+
+Fastify は列挙 API を持たない（`app.routes` / `getRoutes` / `router` はいずれも `undefined`、
+`printRoutes()` は接頭辞圧縮された木）ことを確認済み。
+
+### 11.3 出す順序
+
+| # | 内容 | 判断 | 主に触る所 |
+|---|---|---|---|
+| 7 | 決定の記録と検証の規則の明文化 | 11.2 の 3 件 | `docs/plan-lab-mock.md`・`docs/fidelity.md` |
+| 8 | 互換ルートが tick を通ることをテストで固定 | 11.2 の 11 | `tests/` |
+| 9 | `freshState` を `engine/state.ts` へ移す | 11.2 の 9 | `src/engine/state.ts`・`src/store/session.ts`・`src/routes/control.ts` |
+
+### 11.4 入れないもの
+
+- **型のみの循環**（`engine/candles.ts` ↔ `engine/types.ts`）。実行時に消えるので実害が無い。`Candle` を `types.ts` へ移せば解消するが、それだけのために import を書き換える価値は無い。
+- **`FillMode` / `PersistFailureMode` の型の置き場**（11.2 の 9）。実行時に何も変わらない。
+- **`server/degraded.ts` → `routes/envelope.ts` の向き**。層としては逆だが、劣化時の応答を 1 箇所に置くという `buildServer()` の設計（10.5 の骨子 4）から来ている。分けると劣化ガードが 2 箇所になる。
+

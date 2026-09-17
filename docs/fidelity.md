@@ -72,6 +72,30 @@
 
 6 本が成り立つための**前提**（注文 id / trade id の一意性など）は同じファイルの `preconditionViolations()` が別に定義する。前提は 7 本目の不変量ではないので関数を分けてある（下の「不変量の前提」）。
 
+### 検証をどこに置くか
+
+**engine は自分の計算と不変量が成り立つために要る検証だけを持つ。routes は wire 上の契約
+（桁・欠落・型）を持つ。**（2026-09-17 に決定。`docs/plan-lab-mock.md` 11.2 の 10）
+
+| 検証 | 置き場 | 理由 |
+| --- | --- | --- |
+| 数量・価格の桁（`fitsDigits`） | **routes**（`create-order.ts` / `control.ts`） | wire 上の契約。engine の計算はこれに依存していない |
+| `amount > 0` | **両方**（`schemas/requests.ts` と `transitions.ts`） | routes 側は wire の契約（`20003`）、engine 側は不変量 1・3 の前提。同じ条件を別の理由で持つ |
+| `price > 0` | **engine**（`transitions.ts`） | `notional = price * fillAmount` の前提。**6 本の不変量のどれでもない**が、計算が成り立つために要る |
+| ペアの文字種（`pairAssets`） | **両方** | routes 側は `10000` を返すため、engine 側は資産キーを決めるため |
+| 残高（`availableOf`） | **engine** | 不変量 6 の前提 |
+
+「engine は不変量のための検証だけ」という言い方は**採らなかった**。`price > 0` が 6 本のどれでもない
+ため、その規則では次に検証を足す人がどちらに置くかを引けない。「計算と不変量のために要る」なら
+`price > 0` が engine に、桁が routes にあることを両方説明できる。
+
+**桁の検査は量を格子へ載せる保証ではない**（下の不変量 5 の節の末尾。`fitsDigits()` が許す幅は
+桁だけで決まり大きさに依らない）。engine の計算はその保証に依存していないので、engine 側へ
+桁検査を足す変更は入れていない。
+
+Nyx への含意: 桁の違反は必ず routes で `60004` として返る。engine を直接呼ぶ経路（このモックには
+無いが、将来 `/_control/` に足す場合）では桁が検査されない。
+
 ### 不変量をどこで担保するか
 
 担保は 3 層ある。**成り立たせているのは遷移関数**（`src/engine/transitions.ts`）で、`invariantViolations()` は
