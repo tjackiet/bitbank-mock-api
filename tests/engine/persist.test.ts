@@ -4,7 +4,12 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invariantViolations, preconditionViolations } from "../../src/engine/invariants.ts";
-import { defaultStatePath, loadState, saveState } from "../../src/engine/persist.ts";
+import {
+  defaultStatePath,
+  loadState,
+  saveState,
+  sweepOrphanTempFiles,
+} from "../../src/engine/persist.ts";
 import { fillOrder, placeOrder } from "../../src/engine/transitions.ts";
 import type { Logger } from "../../src/engine/types.ts";
 import { loadOrInitDefault } from "../../src/store/session.ts";
@@ -13,6 +18,9 @@ import { buildOrder, buildState, buildTrade } from "./helpers.ts";
 // `rename` の後のディレクトリの fsync を観測する入れ物。既定は素通しで、
 // 失敗させるテストだけが dirFsync.fail を立てる。
 const dirFsync = vi.hoisted(() => ({ synced: [] as string[], fail: false, failOpen: false }));
+// `saveState` が実際に開いた一時ファイルのパス。掃除の正規表現が、生成側の名前と
+// 本当に対になっているかを見るために使う（名前を手で書くとその検査にならない）。
+const tempOpens = vi.hoisted(() => ({ paths: [] as string[] }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -40,6 +48,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         );
       }
       const fh = await actual.open(p, flags as never, mode as never);
+      if (flags === "wx") tempOpens.paths.push(String(p));
       if (flags !== "r") return fh;
       return new Proxy(fh, {
         get(target, prop) {
@@ -819,5 +828,60 @@ describe("defaultStatePath", () => {
       if (before === undefined) delete process.env.BITBANK_MOCK_STATE_PATH;
       else process.env.BITBANK_MOCK_STATE_PATH = before;
     }
+  });
+});
+
+describe("sweepOrphanTempFiles", () => {
+  let dir: string;
+  let statePath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "bitbank-mock-sweep-"));
+    statePath = join(dir, "state.json");
+    tempOpens.paths.length = 0;
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("自分が作りうる形の一時ファイルだけ消す", async () => {
+    // 状態ディレクトリは利用者が指す場所なので、`.tmp` で終わるだけのファイルは消さない。
+    const orphans = ["state.json.9999.ab12cd34.tmp", "state.json.8888.zz99yy88.tmp"];
+    const keep = [
+      "memo.txt",
+      "state.json",
+      "state.json.tmp", // pid も乱数も無い
+      "state.json.lock",
+      "other.json.1234.abcd.tmp", // 別の状態ファイルのもの
+      "state.json.abc.ab12cd34.tmp", // pid が数字でない
+    ];
+    for (const name of [...orphans, ...keep]) await writeFile(join(dir, name), "x", "utf8");
+
+    expect(await sweepOrphanTempFiles(statePath)).toBe(2);
+    for (const name of orphans) expect(existsSync(join(dir, name))).toBe(false);
+    for (const name of keep) expect(existsSync(join(dir, name))).toBe(true);
+  });
+
+  it("saveState が実際に使う名前に一致する", async () => {
+    // 名前を手で書くと、生成側と掃除側が食い違っても気づけない。実際に書かせて、
+    // そのとき開かれた一時ファイルのパスをそのまま使う。
+    const r = await saveState(statePath, buildState({ balances: { jpy: 1 } }));
+    expect(r.success).toBe(true);
+    const tmp = tempOpens.paths.at(-1);
+    expect(tmp).toBeDefined();
+    expect(existsSync(tmp!)).toBe(false); // rename で消えている
+
+    // rename の前に落ちた場合と同じ状態を作る。
+    await writeFile(tmp!, '{"partial":', "utf8");
+    expect(await sweepOrphanTempFiles(statePath)).toBe(1);
+    expect(existsSync(tmp!)).toBe(false);
+    expect(existsSync(statePath)).toBe(true);
+  });
+
+  it("状態ディレクトリがまだ無ければ 0 を返す", async () => {
+    // 初回起動。掃除するものも無い。
+    const nested = join(dir, "sessions", "default", "state.json");
+    expect(await sweepOrphanTempFiles(nested)).toBe(0);
   });
 });

@@ -1,6 +1,6 @@
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { invariantViolations, preconditionViolations } from "./invariants.ts";
 import {
@@ -356,6 +356,28 @@ async function syncDirectory(dir: string): Promise<Result<true>> {
 }
 
 /**
+ * `saveState()` が使う一時ファイルのパス。`<状態ファイル>.<pid>.<乱数>.tmp`。
+ *
+ * **`orphanTempPattern()` と対になっている。** 片方だけ変えると、掃除が自分の残骸を
+ * 拾えなくなる（掃除は「見つからない」を失敗として報告しないので、黙って効かなくなる）。
+ */
+function tempFilePath(path: string): string {
+  return `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
+}
+
+/**
+ * 掃除の対象にする一時ファイル名。`tempFilePath()` が作りうる形だけに絞る。
+ *
+ * 状態ディレクトリは利用者が `BITBANK_MOCK_STATE_PATH` で指す場所なので、`.tmp` で
+ * 終わるというだけで消さない。pid と乱数の段まで一致するものだけを自分の残骸と見なす。
+ */
+function orphanTempPattern(path: string): RegExp {
+  // basename をそのまま正規表現へ入れない。`state.json` の `.` すら任意の 1 文字になる。
+  const escaped = basename(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped}\\.\\d+\\.[a-z0-9]+\\.tmp$`);
+}
+
+/**
  * `PaperState` 全体を状態ファイルへ原子的に書き出す。
  *
  * 一時ファイルを `wx`（既存を開かない）で `0o600` で作り、書いて `fsync` してから `rename`、
@@ -373,7 +395,7 @@ export async function saveState(
   opts: SaveStateOptions = {},
 ): Promise<Result<true>> {
   const data = `${JSON.stringify(state, null, 2)}\n`;
-  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
+  const tmp = tempFilePath(path);
   // ディレクトリの fsync の失敗は書き込みの成否と別に持つ。warn は try を出てから呼ぶ
   // （logger が投げても、成立した書き込みを失敗として報告しないため。この戻り値は
   // 呼び出し側が状態の扱いを決める根拠になる）。
@@ -429,6 +451,59 @@ export async function saveState(
     }
   }
   return { success: true, data: true };
+}
+
+/**
+ * 状態ディレクトリに残った孤児の一時ファイルを掃除する。戻り値は消せた数。
+ *
+ * `rename` の前に落ちたプロセスの一時ファイルは、起動でも以後の書き込みでも片付かない
+ * （2026-09-17 に実測。起動・発注・停止を通しても残る）。読むのは `state.json` だけなので
+ * 無害だが、状態ディレクトリに溜まり続ける。
+ *
+ * **呼ぶ側が状態ファイルの排他を持っていること。** ロックが無いと、他プロセスが今まさに
+ * 書いている最中の一時ファイルを消しかねない（計画 10.3 が PR 5 を PR 4 の後に置いた理由）。
+ * そのため `loadOrInitDefault()` ではなく `src/index.ts` の起動経路から呼ぶ。
+ *
+ * **失敗しても起動を止めない。** 掃除は見た目の問題で、消せなくても動作に影響しない。
+ */
+export async function sweepOrphanTempFiles(
+  path: string,
+  opts: SaveStateOptions = {},
+): Promise<number> {
+  const dir = dirname(path);
+  const pattern = orphanTempPattern(path);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    // 初回起動ではまだディレクトリが無い。掃除するものも無い。
+    return 0;
+  }
+
+  let removed = 0;
+  const failures: string[] = [];
+  for (const name of entries) {
+    if (!pattern.test(name)) continue;
+    try {
+      await unlink(join(dir, name));
+      removed++;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
+      failures.push(name);
+    }
+  }
+
+  if (failures.length > 0) {
+    try {
+      // パスは利用者の入力なので JSON で包む（saveState の warn と同じ理由）。
+      (opts.logger ?? noopLogger).warn(
+        `failed to remove ${failures.length} orphan temp file(s) in ${JSON.stringify(dir)}`,
+      );
+    } catch {
+      // logger が投げても握り潰す。掃除の失敗で起動を止めない。
+    }
+  }
+  return removed;
 }
 
 export async function deleteState(path: string): Promise<Result<true>> {
