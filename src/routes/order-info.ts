@@ -3,7 +3,7 @@ import { isKnownPair } from "../engine/pairs.ts";
 import { GetOrderQuerySchema, OrdersInfoRequestSchema } from "../schemas/requests.ts";
 import { err, ErrorCode, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
-import { asRecord, isMissing } from "./params.ts";
+import { asRecord, isMissing, isOrderIdArray, isOrderIdValue } from "./params.ts";
 
 export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/v1/user/spot/order", async (request) => {
@@ -13,6 +13,13 @@ export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
     }
     if (isMissing(query.pair)) {
       return err(ErrorCode.MISSING_ASSET);
+    }
+    // 実 API は「読めない id」を `40013` で弾き、「読めたが存在しない id」の `50009` と
+    // 分けている（2026-09-17 実測。`order_id=true` / `1.5` / 同名 2 本はいずれも `40013`）。
+    // スキーマ検証より**前**に置く。同名 2 本は配列になってスキーマが `20003` で落とすが、
+    // 実 API はそれも `40013` を返すため。
+    if (!isOrderIdValue(query.order_id)) {
+      return err(ErrorCode.INVALID_ORDER_ID);
     }
     const parsed = GetOrderQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -43,12 +50,21 @@ export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
     if (isMissing(body.pair)) {
       return err(ErrorCode.MISSING_ASSET);
     }
+    // 実 API は `order_ids` が id の配列でなければ `40014`（2026-09-17 実測。`"1"` /
+    // `1` / `[1.5]` / `[]`）。**空配列も弾かれる**点がモックとの一番大きな差で、
+    // 以前は `success: 1` と空の一覧を返していた。DCL のリコンサイルの主経路である。
+    if (!isOrderIdArray(body.order_ids)) {
+      return err(ErrorCode.INVALID_ORDER_ID_ARRAY);
+    }
+    // `pair` が文字列ですらないときも実 API は `40017` を返す（`pair: true` で実測）。
+    // スキーマ検証に任せると `20003` になるので、ここで型ごと見る。
+    if (typeof body.pair !== "string" || !isKnownPair(body.pair)) {
+      return err(ErrorCode.INVALID_ASSET);
+    }
     const parsed = OrdersInfoRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return err(ErrorCode.INVALID_PARAMETER);
     }
-    // 一覧に無いペアは `40017`（`GET /v1/user/spot/order` と同じ。理由もそこと同じ）。
-    if (!isKnownPair(parsed.data.pair)) return err(ErrorCode.INVALID_ASSET);
     await fastify.store.tick();
     const byId = new Map(fastify.store.state().orders.map((o) => [o.id, o]));
     const orders = [];

@@ -435,3 +435,78 @@ describe("ペアのコード", () => {
     expect(body.data.code).toBe(30009);
   });
 });
+
+/**
+ * 実 API が「読めない id」と「読めたが存在しない id」を分けていることを固定する。
+ *
+ * **根拠はすべて 2026-09-17 の実測**（認証済みの口座、読み取り経路のみ）。それまで
+ * モックは前者を `50009` / `20003` に潰しており、`docs/fidelity.md` の
+ * 「パラメータの型強制」行に未確定として残していた論点である。
+ */
+describe("不正な id の error code（実測に合わせた）", () => {
+  const build = setupBuildTestServer();
+
+  type Env = { success: number; data: { code?: number } };
+  /** 封筒を 1 語にたたむ。成功なら `"success:1"`、失敗なら error code。 */
+  const verdict = (e: Env) => (e.success === 1 ? "success:1" : e.data.code);
+
+  /** `GET /v1/user/spot/order` を 1 本投げて、success か error code を返す。 */
+  const get = async (url: string) => {
+    const { fastify } = await build();
+    return verdict((await fastify.inject({ method: "GET", url })).json() as Env);
+  };
+
+  /** `POST /v1/user/spot/orders_info` を 1 本投げて、success か error code を返す。 */
+  const post = async (payload: Record<string, unknown>) => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/orders_info",
+      payload,
+    });
+    return verdict(res.json() as Env);
+  };
+
+  it("GET order: 読めない order_id は 40013（50009 ではない）", async () => {
+    expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=true")).toBe(40013);
+    expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=1.5")).toBe(40013);
+    // 同名クエリが 2 本来ると値は配列になる。実 API はこれも 40013 を返す。
+    expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=1&order_id=2")).toBe(
+      40013,
+    );
+  });
+
+  it("GET order: 読めたが存在しない order_id は今までどおり 50009", async () => {
+    expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=999999")).toBe(50009);
+  });
+
+  it("orders_info: order_ids が id の配列でなければ 40014", async () => {
+    expect(await post({ pair: "btc_jpy", order_ids: "1" })).toBe(40014);
+    expect(await post({ pair: "btc_jpy", order_ids: 1 })).toBe(40014);
+    expect(await post({ pair: "btc_jpy", order_ids: [1.5] })).toBe(40014);
+  });
+
+  // 一番大きな差。以前は success: 1 と空の一覧を返しており、DCL のリコンサイルの
+  // 主経路で実 API と成否が逆になっていた。
+  it("orders_info: 空配列は 40014（success: 1 ではない）", async () => {
+    expect(await post({ pair: "btc_jpy", order_ids: [] })).toBe(40014);
+  });
+
+  // **実 API は `[true]` に 10001（System error）を返す**（実測）。モックは内部エラーを
+  // 模す意味がないので 40014 に寄せる。docs/fidelity.md に差として記録してある。
+  it("orders_info: order_ids:[true] は 40014（実 API の 10001 は再現しない）", async () => {
+    expect(await post({ pair: "btc_jpy", order_ids: [true] })).toBe(40014);
+  });
+
+  it("orders_info: pair が文字列でなくても 40017（20003 ではない）", async () => {
+    expect(await post({ pair: true, order_ids: [1] })).toBe(40017);
+  });
+
+  // 欠落の 3000x を先に返す順序は実測済み。新しい検査で崩していないことを見る。
+  it("欠落は今までどおり 3000x が先に出る", async () => {
+    expect(await get("/v1/user/spot/order?pair=btc_jpy")).toBe(30006);
+    expect(await get("/v1/user/spot/order?order_id=1")).toBe(30009);
+    expect(await post({ pair: "btc_jpy" })).toBe(30007);
+    expect(await post({ order_ids: [1] })).toBe(30009);
+  });
+});

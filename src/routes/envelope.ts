@@ -57,6 +57,22 @@ export const ErrorCode = {
   INVALID_END: 40007, // "Invalid end param."
   INVALID_END_ID: 40008, // "Invalid end_id."
   INVALID_FROM_ID: 40009, // "Invalid from_id."
+  /**
+   * "Invalid order id." **`order_id` が id の形をしていないとき**に実 API が返す
+   * （2026-09-17 実測。`GET /v1/user/spot/order` に `order_id=true` / `1.5` / 同名 2 本）。
+   *
+   * **`50009`（"Order not found."）とは別物**で、実 API は「読めない id」と
+   * 「読めたが存在しない id」を分けている。モックは以前どちらも `50009` か `20003` に
+   * していた（`docs/fidelity.md` の「パラメータの型強制」）。
+   */
+  INVALID_ORDER_ID: 40013,
+  /**
+   * "Invalid order id array." **`order_ids` が id の配列になっていないとき**に実 API が
+   * 返す（2026-09-17 実測。`POST /v1/user/spot/orders_info` に `"1"` / `1` / `[1.5]` / `[]`）。
+   *
+   * **空配列も弾かれる**点に注意。モックは以前 `success: 1` と空の一覧を返していた。
+   */
+  INVALID_ORDER_ID_ARRAY: 40014,
   /** "Invalid asset." 実 API は不正なペアにこれを返す（2026-09-17 実測）。絞り込み群ではない。 */
   INVALID_ASSET: 40017,
   INVALID_SINCE: 40022, // "Invalid trading start time."

@@ -1,3 +1,4 @@
+import { parseNumericId } from "../engine/state.ts";
 import { ErrorCode, type ErrorCodeValue } from "./envelope.ts";
 
 /**
@@ -20,6 +21,30 @@ import { ErrorCode, type ErrorCodeValue } from "./envelope.ts";
  */
 export function isMissing(v: unknown): boolean {
   return v === undefined || v === null || v === "";
+}
+
+/**
+ * 注文 id として読める値か。実 API が `40013` で弾く境界に合わせる。
+ *
+ * 採番が配る id は `String(seq)` なので、判定は `parseNumericId()`（`src/engine/state.ts`）と
+ * 同じ「10 進の数字だけ」に揃える。したがって `true` / `1.5` / 配列 / `null` は読めない。
+ * **実測したのは「読めない id」と「読めたが存在しない id」を実 API が分けていること**で
+ * （前者 `40013`、後者 `50009`。2026-09-17）、`0` や極端に大きい整数をどちらへ倒すかは
+ * 測っていない。どちらもここを通り、存在しないので `50009` へ落ちる。
+ */
+export function isOrderIdValue(v: unknown): boolean {
+  if (typeof v !== "string" && typeof v !== "number") return false;
+  return parseNumericId(String(v)) !== null;
+}
+
+/**
+ * `order_ids` が id の配列になっているか。**空配列は偽**。
+ *
+ * 実 API は `[]` を `40014` で弾く（2026-09-17 実測）。モックは以前 `success: 1` と
+ * 空の一覧を返しており、**DCL のリコンサイルの主経路で成否が逆になっていた**。
+ */
+export function isOrderIdArray(v: unknown): boolean {
+  return Array.isArray(v) && v.length > 0 && v.every(isOrderIdValue);
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
