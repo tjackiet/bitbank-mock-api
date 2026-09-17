@@ -78,6 +78,7 @@ function waitUntilListening(child: ChildProcess): Promise<void> {
   });
 }
 
+/** 子プロセスが終わるまで待つ。既に終わっていれば即座に解決する。 */
 function waitForExit(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => child.once("exit", () => resolve()));

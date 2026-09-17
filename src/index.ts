@@ -63,7 +63,8 @@ async function main() {
     try {
       await fastify.close();
     } finally {
-      await lock.release();
+      // 解放の失敗で停止を止めない。残ったロックは次の起動が stale として奪う。
+      await lock.release().catch((e: unknown) => console.warn(`ロックを解放できませんでした: ${e}`));
     }
     process.exit(0);
   };
@@ -76,7 +77,8 @@ async function main() {
   try {
     await fastify.listen({ port, host });
   } catch (e) {
-    await lock.release();
+    // 解放に失敗しても、投げ直すのは listen の失敗のほう。原因を後片付けで隠さない。
+    await lock.release().catch((re: unknown) => console.warn(`ロックを解放できませんでした: ${re}`));
     throw e;
   }
   // persistFailure は既定が degrade（v0.1.0 からの変更）なので、起動時に見えるようにしておく。

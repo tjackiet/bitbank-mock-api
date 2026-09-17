@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, unlink, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
 import { unlinkSync } from "node:fs";
 
@@ -27,7 +27,12 @@ const MAX_ATTEMPTS = 3;
 export type StateLock = {
   /** ロックファイルのパス。 */
   readonly path: string;
-  /** ロックを手放す。既に手放していれば何もしない。 */
+  /**
+   * ロックを手放す。既に消せていれば何もしない。
+   *
+   * **消せなかったときは reject する**（`ENOENT` は消えているので成功扱い）。その場合は
+   * 解放済みと記録しないので、もう一度呼べばやり直し、プロセス終了時の保険も残る。
+   */
   release(): Promise<void>;
 };
 
@@ -36,6 +41,7 @@ export function stateLockPath(statePath: string): string {
   return `${statePath}.lock`;
 }
 
+/** `fs` などが投げるエラーの `code`。エラーでなければ `undefined`。 */
 function errorCode(e: unknown): string | undefined {
   return (e as NodeJS.ErrnoException | undefined)?.code;
 }
@@ -43,15 +49,17 @@ function errorCode(e: unknown): string | undefined {
 /**
  * pid が生きているか。シグナル 0 は存在確認だけで、プロセスには何も送らない。
  *
- * `EPERM` は「居るが自分に権限が無い」なので**生きている側に倒す**。奪って良い根拠が無い。
+ * **`ESRCH` だけが「居ない」の証拠**で、それ以外はすべて生きている側に倒す。`EPERM` は
+ * 「居るが自分に権限が無い」で、残りは判定できなかったということ。どちらも奪う根拠にならない。
+ * 倒す先を間違えると、生きているプロセスのロックを奪って二重起動を作る（起動を断るほうの
+ * 間違いは、メッセージを読んでロックファイルを消せば直る）。
  */
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch (e) {
-    if (errorCode(e) === "EPERM") return true;
-    return false;
+    return errorCode(e) !== "ESRCH";
   }
 }
 
@@ -74,7 +82,14 @@ async function readHolderPid(lockPath: string): Promise<number | null> {
   return pid;
 }
 
-/** `wx` でロックを作り、自分の pid を書く。既にあれば `false`。 */
+/**
+ * `wx` でロックを作り、自分の pid を書く。既にあれば `false`。
+ *
+ * **pid を書けなかったときは、作ったロックファイルを消してから投げる。** 残すと中身が
+ * 空のロックになり、`readHolderPid()` が `null` を返して以後どの起動も奪わない。つまり
+ * ディスクが一杯になった一度きりの失敗で、**手でファイルを消すまで二度と起動できなくなる**。
+ * 掃除は best effort で、消せなくても元の例外を返す（そちらが原因だから）。
+ */
 async function tryCreate(lockPath: string): Promise<boolean> {
   let fh;
   try {
@@ -85,10 +100,33 @@ async function tryCreate(lockPath: string): Promise<boolean> {
   }
   try {
     await fh.writeFile(`${process.pid}\n`, "utf8");
-  } finally {
+  } catch (e) {
+    await discard(fh, lockPath);
+    throw e;
+  }
+  try {
     await fh.close();
+  } catch (e) {
+    await discard(null, lockPath);
+    throw e;
   }
   return true;
+}
+
+/** 作りかけのロックを片付ける。どの失敗も握り潰す（呼び出し元が元の例外を返す）。 */
+async function discard(fh: FileHandle | null, lockPath: string): Promise<void> {
+  if (fh) {
+    try {
+      await fh.close();
+    } catch {
+      /* 閉じられなくても消しにいく */
+    }
+  }
+  try {
+    await unlink(lockPath);
+  } catch {
+    /* 消せなくても元の例外を返す */
+  }
 }
 
 export class StateLockedError extends Error {
@@ -149,14 +187,15 @@ export async function acquireStateLock(statePath: string): Promise<StateLock> {
   throw new StateLockedError(lockPath, await readHolderPid(lockPath));
 }
 
+/** 取得済みのロックに、手放す口と「落ちても置き去りにしない」保険を付ける。 */
 function makeLock(lockPath: string): StateLock {
-  let released = false;
+  let removed = false;
 
   // 例外で落ちる経路でも置き去りにしない。同期でしか動けないので unlinkSync を使う。
   // 残っても次の起動が stale として奪うので、ここは best effort でよい。
   const onExit = () => {
-    if (released) return;
-    released = true;
+    if (removed) return;
+    removed = true;
     try {
       unlinkSync(lockPath);
     } catch {
@@ -168,14 +207,16 @@ function makeLock(lockPath: string): StateLock {
   return {
     path: lockPath,
     async release() {
-      if (released) return;
-      released = true;
-      process.removeListener("exit", onExit);
+      if (removed) return;
       try {
         await unlink(lockPath);
       } catch (e) {
         if (errorCode(e) !== "ENOENT") throw e;
       }
+      // **消せてから**印を付け、exit の保険を外す。先に外すと、unlink が失敗した回に
+      // 保険まで無効になって、ロックが確実に残る。
+      removed = true;
+      process.removeListener("exit", onExit);
     },
   };
 }

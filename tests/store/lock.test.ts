@@ -3,7 +3,35 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// 書き込み・削除の失敗は実際には起こせない（ディスクを埋めるわけにいかず、root では
+// パーミッションも効かない）ので、この 2 つだけ差し替える。既定は素通し。
+const fsFail = vi.hoisted(() => ({ write: false, unlink: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const fh = await actual.open(...args);
+      if (!fsFail.write) return fh;
+      return new Proxy(fh, {
+        get(target, prop, receiver) {
+          if (prop === "writeFile") {
+            return async () => {
+              throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+    },
+    unlink: async (...args: Parameters<typeof actual.unlink>) => {
+      if (fsFail.unlink) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      return actual.unlink(...args);
+    },
+  };
+});
+
 import {
   acquireStateLock,
   StateLockedError,
@@ -37,6 +65,9 @@ describe("acquireStateLock", () => {
   });
 
   afterEach(async () => {
+    fsFail.write = false;
+    fsFail.unlink = false;
+    vi.restoreAllMocks();
     for (const lock of held.splice(0)) await lock.release();
     await rm(dir, { recursive: true, force: true });
   });
@@ -102,6 +133,48 @@ describe("acquireStateLock", () => {
       await writeFile(stateLockPath(statePath), content, "utf8");
       await expect(acquireStateLock(statePath)).rejects.toThrow(StateLockedError);
     }
+  });
+
+  it("生死を判定できないときは奪わない", async () => {
+    // `ESRCH` だけが「居ない」の証拠。EPERM やそれ以外の失敗で奪うと、生きている
+    // プロセスのロックを取り上げて二重起動を作る。
+    const pid = await deadPid();
+    await writeFile(stateLockPath(statePath), `${pid}\n`, "utf8");
+    for (const code of ["EPERM", "EACCES", undefined]) {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("判定できない"), code ? { code } : {});
+      });
+      await expect(acquireStateLock(statePath)).rejects.toThrow(StateLockedError);
+      vi.restoreAllMocks();
+    }
+    // 判定できる（死んでいる）ときだけ奪う。
+    const lock = await acquireStateLock(statePath);
+    held.push(lock);
+  });
+
+  it("pid を書けなかったら、作りかけのロックを残さない", async () => {
+    // 残すと中身が空のロックになり、以後どの起動も「奪わない」側に落ちる。
+    // つまり一度きりの書き込み失敗で、手でファイルを消すまで起動できなくなる。
+    fsFail.write = true;
+    await expect(acquireStateLock(statePath)).rejects.toThrow(/ENOSPC|no space/);
+    expect(existsSync(stateLockPath(statePath))).toBe(false);
+
+    fsFail.write = false;
+    const lock = await acquireStateLock(statePath);
+    held.push(lock);
+  });
+
+  it("消せなかった release は失敗として返り、次の release がやり直す", async () => {
+    const lock = await acquireStateLock(statePath);
+
+    fsFail.unlink = true;
+    await expect(lock.release()).rejects.toThrow(/EACCES|permission/);
+    expect(existsSync(lock.path)).toBe(true);
+
+    // 失敗を「解放済み」と記録してしまうと、ここが素通りしてロックが残り続ける。
+    fsFail.unlink = false;
+    await lock.release();
+    expect(existsSync(lock.path)).toBe(false);
   });
 
   it("弾くときは、状態ファイルを分ける手立てを示す", async () => {
