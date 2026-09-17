@@ -447,6 +447,7 @@ describe("不正な id の error code（実測に合わせた）", () => {
   const build = setupBuildTestServer();
 
   type Env = { success: number; data: { code?: number } };
+  /** 封筒を 1 語にたたむ。成功なら `"success:1"`、失敗なら error code。 */
   const verdict = (e: Env) => (e.success === 1 ? "success:1" : e.data.code);
 
   /** `GET /v1/user/spot/order` を 1 本投げて、success か error code を返す。 */
