@@ -45,13 +45,15 @@ BITBANK_MOCK_CONTROL=1 npm run dev
 
 既定は `http://127.0.0.1:14000`（control 有効時。無効時は `0.0.0.0:14000`）。ポートは `--port` または `BITBANK_MOCK_PORT`。
 
-再現シナリオ（発注 → control fill → 照会）:
+再現シナリオ（発注 → 拘束 → control fill → 残高減）:
 
 ```bash
 BITBANK_MOCK_CONTROL=1 npm run dev
 # 別端末
 ./examples/scenario-plan-a.sh
 ```
+
+`curl` だけで動きます（JSON の取り出しは `sed` / `grep`）。**何度流しても同じ値が出るよう、先頭で `POST /_control/reset` を叩いて状態を捨てます。** 取っておきたいシナリオがあるときは `BITBANK_MOCK_STATE_PATH` を分けてください。
 
 ## 環境変数
 
