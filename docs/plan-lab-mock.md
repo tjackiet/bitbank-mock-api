@@ -90,7 +90,7 @@ private-stream.md より（R4 に直結）:
 | 論点 6: 委譲元が発行する冪等キーを必須とする。bitbank API にはクライアント注文 ID の口が無い | 本編 4 章既定値、8.1-2 | 発注応答が届かなかった場合、DCL は `active_orders` から自分の注文を探すしかない。`active_orders` の `since` / `from_id` 対応を R1 の範囲に含める（3.2） |
 | 確認事項 1〜6（訂正なし・PubNub 順序非保証・INACTIVE の意味・レート制限・`CANCELED_PARTIALLY_FILLED` の `executed_amount`・成行の価格上限なし） | 本編 14.1 | **対応表の行として最初から載せる。** モックが公式 doc からどう決めたかを書けば、そのまま bitbank 側の回答の下書きになる（5 節） |
 | 手数料は損失に含める。プラン A は `loss_limit` 未設定で損失系の不変量は自明に成立 | 本編 4 章既定値、6.3 | プラン A の Exposure（累積約定代金）に手数料は乗らない。指値をテイカー 0.12% のまま維持しても DCL の判定に影響しない。9 節 3 の推奨を維持 |
-| DCL の `reserved` は `price × size`（手数料なし）。モックの `locked_amount` は `price × amount × (1 + fee)` | 本編 6.3、`state.ts` `computeLocked` | 委譲枠と口座残高が近いとき、DCL が許可した注文をモックが `60001`（残高不足）で拒否しうる。**2026-09-17 に再現を固定した**（`tests/scenarios/plan-a.test.ts`。残高 1,000,000 JPY で `price 5,000,000 × amount 0.2` が `60001`、通る上限は `0.1997`）。本物の bitbank が拘束額に手数料を含めるかは公式 doc に無く**実測もしていない**が、**決着させる観測は特定した**（約定しない指値を 1 本置いて `locked_amount` と `price × amount` を比べる。実弾にならない）。数値と観測手順は `docs/fidelity.md` の「拘束額」行 |
+| DCL の `reserved` は `price × size`（手数料なし）。モックの `locked_amount` は `price × amount × (1 + fee)` | 本編 6.3、`state.ts` `computeLocked` | 委譲枠と口座残高が近いとき、DCL が許可した注文をモックが `60001`（残高不足）で拒否しうる。**2026-09-17 に再現を固定した**（`tests/scenarios/plan-a.test.ts`。残高 1,000,000 JPY で `price 5,000,000 × amount 0.2` が `60001`、通る上限は `0.1997`）。**2026-09-17 に実測して決着した——実 API は拘束額に手数料を含み、しかも指値（maker）注文なのに taker 料率だった。** つまり**モックの `computeLocked()` が正しく、ずれているのは DCL の `reserved`（手数料なし）の方**である。この `60001` は**モックの作り物ではなく実 API でも起きる**ので、**委譲枠に手数料ぶんの余白を見込む必要がある**。数値と留保は `docs/fidelity.md` の「拘束額」行 |
 
 **提案書内の版ズレ（要件メモを優先した根拠）**
 
@@ -375,7 +375,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
   - v2→v3 移行データの `ordered_at` が約定時刻である点
   - `/_control/` は bitbank に存在しない（当然だが、DCL の仕様に control の存在が漏れないよう明記）
   - private stream を PubNub でなく WebSocket で提供する点（R4）
-  - 拘束額（`locked_amount`）に手数料を含めている点。DCL の `reserved` は手数料を含まない（1.4 節）。**「要確認」は残るが、2026-09-17 に中身を具体化した**——再現をテストで固定し、決着させる観測（約定しない指値 1 本で `locked_amount` を読む）を特定した。挙動は変えていない
+  - 拘束額（`locked_amount`）に手数料を含めている点。DCL の `reserved` は手数料を含まない（1.4 節）。**「要確認」は 2026-09-17 の実測で閉じた**——実 API も手数料を含み（taker 料率）、モックの向きが正しいと確定した。あわせて残高表示が**切り捨て**であることも分かり、モックを四捨五入から切り捨てへ直した。詳細は `docs/fidelity.md`
   - 数量・価格の桁数（btc_jpy の数量 4 桁・価格整数）の出典
   - 提案書 14.1 の確認事項 1〜6 に対応する行。注文訂正 API が無いこと、PubNub の順序非保証、`INACTIVE` は逆指値のトリガー待ちでモックでは到達しないこと、レート制限をモックが持たないこと、`CANCELED_PARTIALLY_FILLED` で `executed_amount` が残ること、成行に価格上限指定が無いこと。**この 6 行はそのまま bitbank 側から Nyx への回答の下書きになる**
 - **各 PR で更新する。** PR テンプレート（`.github/pull_request_template.md`、新設）に「公式 doc に無い挙動を推測で決めた場合、`docs/fidelity.md` に追記したか」のチェックボックスを置く

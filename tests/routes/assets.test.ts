@@ -181,3 +181,50 @@ function unitsToFixed(units: bigint, digits: number): string {
   const cut = padded.length - digits;
   return `${sign}${padded.slice(0, cut)}.${padded.slice(cut)}`;
 }
+
+/**
+ * 残高の表示が**切り捨て**であることを固定する。
+ *
+ * **根拠は 2026-09-17 の実測**。実 API に約定しない指値買い（`xrp_jpy`、price 101、
+ * amount 9.9009）を 1 本置いて `locked_amount` の増分を測ったところ、厳密値
+ * `999.9909 × 1.0012 = 1001.19088908` に対し **`1001.1908`** が返った。
+ * 四捨五入なら `1001.1909` になるので、切り捨てだと分かる。
+ *
+ * この観測は**同時に「拘束額が taker 料率の手数料を含む」ことも示している**
+ * （差 1.1999 JPY = 建玉額の 0.12%）。指値（maker）注文なのに taker 料率だった。
+ * 詳細は `docs/fidelity.md` の「拘束額」行と「残高の桁」行。
+ *
+ * 変更前は四捨五入だったが、**それを固定するテストは 1 つも無かった**
+ * （切り捨てへ変えても 385 件すべて通ってしまった）ので、ここで塞ぐ。
+ */
+describe("残高の桁は切り捨て", () => {
+  const build = setupBuildTestServer();
+
+  const lockedJpy = async (price: number, startAmount: number) => {
+    const state = buildState({
+      balances: { jpy: 10_000_000 },
+      orders: [buildOrder({ id: "1", side: "buy", price, startAmount })],
+    });
+    const { fastify } = await build(state);
+    const body = (await fastify.inject({ method: "GET", url: "/v1/user/assets" })).json() as {
+      data: { assets: Array<{ asset: string; locked_amount: string }> };
+    };
+    return body.data.assets.find((a) => a.asset === "jpy")?.locked_amount;
+  };
+
+  // 実測そのものの再現。厳密値 1001.19088908 → 切り捨てで 1001.1908。
+  it("実 API で観測した値を再現する（四捨五入なら 1001.1909 になる）", async () => {
+    expect(await lockedJpy(101, 9.9009)).toBe("1001.1908");
+  });
+
+  // 5 桁目が 5 以上でも切り上げないことを、大きさの違う 3 例で見る。
+  // どれも四捨五入なら最後の桁が 1 つ上がるので、丸め方を確実に区別できる。
+  it.each([
+    // price, amount, 厳密値, 切り捨て（四捨五入ならこうならない）
+    [101, 0.0007, "0.07078484", "0.0707"],
+    [137, 1.2345, "169.32945180", "169.3294"],
+    [137, 7.7777, "1066.82355388", "1066.8235"],
+  ])("price=%s amount=%s（厳密 %s）は切り捨てて %s", async (price, amount, _exact, want) => {
+    expect(await lockedJpy(price as number, amount as number)).toBe(want);
+  });
+});

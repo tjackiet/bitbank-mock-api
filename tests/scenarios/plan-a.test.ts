@@ -91,9 +91,14 @@ describe("plan A scenario: place then control fill", () => {
  * **委譲枠と口座残高が近いとき、DCL が許可した注文をモックが `60001` で断る**
  * （`docs/plan-lab-mock.md` 1.4 節の最終行）。
  *
- * **本物の bitbank が拘束額に手数料を含めるかは公式ドキュメントに無く、実測もしていない。**
- * したがってここは「正しい挙動」ではなく**現状**を固定するテストである。決着したら
- * このテストごと書き換える。何を測れば決着するかは `docs/fidelity.md` の「拘束額」行に書いた。
+ * **2026-09-17 に実測して決着した。** 実 API に約定しない指値買いを 1 本置いて
+ * `locked_amount` の増分を測ったところ、建玉額を **taker 料率ぶん（0.12%）上回った**。
+ * 指値（maker）注文なのに taker 料率で、maker 料率（リベート）ではなかった。
+ *
+ * **したがってモックの `computeLocked()` が正しく、ずれているのは DCL の `reserved` の方**で、
+ * ここで固定しているのは「現状」ではなく「実 API と一致する挙動」である。
+ * **この `60001` は実 API でも起きる**ので、委譲枠には手数料ぶんの余白が要る。
+ * 数値と留保は `docs/fidelity.md` の「拘束額」行。
  */
 describe("plan A scenario: DCL の reserved とモックの拘束額の境界", () => {
   const cleanups: Array<() => Promise<void>> = [];
