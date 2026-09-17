@@ -71,6 +71,32 @@ export function nowIso(): string {
   return new Date(Date.now()).toISOString();
 }
 
+/**
+ * 何も起きていない初期状態。状態ファイルが無いときと `POST /_control/reset` が使う。
+ *
+ * `PaperState` を組み立てる関数なので、スキーマと不変量を持つ engine 側に置く。
+ * `version` は `PaperStateSchema` が受ける版と揃える（上げるときは
+ * `migrateToV3()` と同じ場所を見る）。
+ *
+ * 採番は `nextOrderSeq` / `nextTradeSeq` とも 1 から。注文も約定も無いので、
+ * 「採番は既存 id より大きい」という前提（`preconditionViolations()`）は自明に成り立つ。
+ */
+export function freshState(initialJpy: number): PaperState {
+  const now = nowIso();
+  return {
+    version: 3,
+    createdAt: now,
+    updatedAt: now,
+    initialJpy,
+    balances: { jpy: initialJpy },
+    lastTickAt: now,
+    orders: [],
+    trades: [],
+    nextOrderSeq: 1,
+    nextTradeSeq: 1,
+  };
+}
+
 export function genId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
