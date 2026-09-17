@@ -634,3 +634,37 @@ Fastify は列挙 API を持たない（`app.routes` / `getRoutes` / `router` �
 - **`FillMode` / `PersistFailureMode` の型の置き場**（11.2 の 9）。実行時に何も変わらない。
 - **`server/degraded.ts` → `routes/envelope.ts` の向き**。層としては逆だが、劣化時の応答を 1 箇所に置くという `buildServer()` の設計（10.5 の骨子 4）から来ている。分けると劣化ガードが 2 箇所になる。
 
+### 11.5 診断で挙げて、9 本のどれにも入れなかったもの（記録のみ）
+
+10 節・11.4 に載らないまま残っていた 5 件。**どれも挙動を変えない整理で、実害が小さいか、
+分割すると却って読みにくくなる。** 次に同じものを見つけた人が、発見からやり直さずに済むよう
+ここへ書く。値も挙動も変えていない。
+
+| # | 内容 | 実測（2026-09-17、`d6200cd`） | 入れない理由 |
+|---|---|---|---|
+| 1 | `reply.code(400);` + `return err(ErrorCode.INVALID_PARAMETER);` の反復 | **11 箇所**。`cancel-order.ts:22,31,51,60`・`create-order.ts:47,56`・`order-info.ts:15,20,35,43,48` | 下記のとおり、**まとめると危ない**。同じ `reply.code(400)` でも 7 箇所は専用コードを返している |
+| 2 | `e instanceof Error ? e.message : String(e)` の反復 | **5 箇所**。`candles.ts:141`・`persist.ts:296,353,411,440` | 1 行の定型。関数へ括り出しても呼び出し側の行数は変わらず、`catch` の中で何を握っているかが 1 段遠くなる |
+| 3 | `cancel_orders` の畳み込みが routes にある | `cancel-order.ts:79-95`。engine の公開遷移は `placeOrder` / `fillOrder` / `cancelOrder` / `rejectOrder` の 4 つで、**複数取消の関数は無い** | engine へ移すと、飛ばす条件（存在しない id・別ペア・重複）が engine の関心事になる。これらは wire の契約であって計算の前提ではない（11.2 の決定 10 の規則） |
+| 4 | `match.ts:55` の到達しない分岐 | `if (!r.data.trade) return ...`。`fillOrder` の成功経路は 1 本だけで、必ず `trade` を詰める（`transitions.ts:234` の `return ok({... trade })`） | `TransitionOk.trade` が optional なので**型の都合で必要**。消すと型検査が通らない。optional を外すのは 4 つの遷移関数すべてに波及する |
+| 5 | 封筒に包むかを URL の前置きで判定している | `degraded.ts:84` の `url.startsWith("/_control/")`。**実行時にこの判定をしているのはこの 1 箇所だけ**（他の `/_control/` はコメントかルート鍵の文字列） | 判定を経路の属性へ持たせる案はあるが、`READ_ROUTES` / `MUTATING_ROUTES` に 3 つ目の軸が増える。1 箇所の文字列判定のほうが読み手の負担が小さい |
+
+**4 が「型の都合」である根拠**（隔離コピーで実測）。`match.ts:55` の
+`if (!r.data.trade) return ...` を消して `npx tsc --noEmit` を走らせると落ちる。
+
+```text
+src/engine/match.ts(55,56): error TS2322: Type '{ ... } | undefined' is not
+assignable to type '{ ... }'.
+  Type 'undefined' is not assignable to type '{ ... }'.
+```
+
+到達しない分岐だが、`TransitionOk.trade` が optional である限り消せない。
+
+**1 をまとめてはいけない理由**（これがこの節で一番残す価値のあること）。互換ルートで
+`reply.code(400)` を返す箇所は 18 あり（`/_control/` の 22 箇所は封筒を使わないので別勘定。
+`control.ts` の `err(ErrorCode...)` は 0 件）、うち 11 が汎用の `20003`、
+**7 は専用のコードを返している**
+（`MISSING_ORDER_ID` / `MISSING_ORDER_IDS` / `missingCreateOrderCode()` の戻り値 /
+`queryParamErrorCode()` が引き当てる `40006` 等）。後者は実 API の実測に基づく値で
+（`docs/fidelity.md` の「絞り込みパラメータの不正値」）、**モックが本物に寄せている中身そのもの**。
+「400 を返す箇所」を機械的に 1 つのヘルパへ寄せると、この 7 箇所が汎用コードへ潰れる経路が
+できる。まとめるなら汎用の 11 箇所だけを対象にし、専用コードの経路には触れないこと。
