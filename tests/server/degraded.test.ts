@@ -338,13 +338,21 @@ describe("劣化モード（persist に失敗した後）", () => {
 
   // --- 未登録のパスは劣化中も 404 のまま ---
 
-  it("劣化中でも未登録のパスは 404 のまま", async () => {
+  // 見ているのは「劣化が未登録パスの応答を変えないこと」。基準値そのものではない
+  // （基準値は src/server/http.ts の registerNotFoundHandler が持ち、実 API の実測で決まる）。
+  // 劣化前後を比べる形にしておくと、基準値が変わってもこの意図は壊れない。
+  it.each([
+    ["/v1/user/spot/nope", "互換ルートの配下"],
+    ["/v1/nope", "/v1/ 直下"],
+    ["/_control/nope", "/_control/ 配下"],
+  ])("劣化は未登録パスの応答を変えない: %s（%s）", async (url) => {
     const { fastify, store, close } = await buildDegradable();
     try {
+      const before = await fastify.inject({ method: "POST", url });
       await degrade(store);
-      const res = await fastify.inject({ method: "POST", url: "/v1/user/spot/nope" });
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).not.toHaveProperty("success");
+      const after = await fastify.inject({ method: "POST", url });
+      expect(after.statusCode).toBe(before.statusCode);
+      expect(after.json()).toEqual(before.json());
     } finally {
       await close();
     }
