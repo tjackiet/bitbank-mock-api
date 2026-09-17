@@ -41,10 +41,9 @@ function filterActiveOrders(
 }
 
 export const activeOrdersRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/v1/user/spot/active_orders", async (request, reply) => {
+  fastify.get("/v1/user/spot/active_orders", async (request) => {
     const parsed = ActiveOrdersQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      reply.code(400);
       // 絞り込みパラメータは実 API が専用コードを返すので、名前で引き当てる。
       const code = queryParamErrorCode(parsed.error.issues.map((i) => i.path[0]));
       return err(code ?? ErrorCode.INVALID_PARAMETER);

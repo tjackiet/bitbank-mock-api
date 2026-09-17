@@ -227,7 +227,7 @@ describe("POST /v1/user/spot/order", () => {
       url: "/v1/user/spot/order",
       payload: { pair: "btc_jpy", amount: "-1", side: "buy", type: "limit", price: "5000000" },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(20003);
@@ -240,7 +240,7 @@ describe("POST /v1/user/spot/order", () => {
       url: "/v1/user/spot/order",
       payload: { pair: "btc_jpy", price: "5000000", side: "buy", type: "limit" },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.data.code).toBe(30001);
   });
@@ -252,7 +252,7 @@ describe("POST /v1/user/spot/order", () => {
       url: "/v1/user/spot/order",
       payload: { pair: "btc_jpy", amount: "0.001", price: "5000000", type: "limit" },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.data.code).toBe(30013);
   });
@@ -264,7 +264,7 @@ describe("POST /v1/user/spot/order", () => {
       url: "/v1/user/spot/order",
       payload: { pair: "btc_jpy", amount: "0.001", price: "5000000", side: "buy" },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.data.code).toBe(30015);
   });
@@ -276,7 +276,7 @@ describe("POST /v1/user/spot/order", () => {
       url: "/v1/user/spot/order",
       payload: { pair: "btc_jpy", amount: "0.001", side: "buy", type: "limit" },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.data.code).toBe(30012);
   });

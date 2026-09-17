@@ -6,6 +6,21 @@ export function ok<T>(data: T): Envelope<T> {
   return { success: 1, data };
 }
 
+/**
+ * 失敗の封筒。**HTTP ステータスは触らない（互換ルートは常に 200）。**
+ *
+ * かつては「ルート層で弾いた欠落・不正値は 400、engine 層まで進んだ業務エラーは 200」と
+ * 分けていたが、**実 API は区別せず 200 を返す**ことを実測した（2026-09-17、17 経路。
+ * 欠落・数値でない値・不正なペア・注文が見つからない、のすべて）。失敗は封筒の
+ * `success: 0` だけが表す。
+ *
+ * そのため互換ルートのハンドラは `reply` を受け取っていない。ステータスを触りたく
+ * なったら、まず `docs/fidelity.md` の「エラーコード」行の実測を読むこと。
+ *
+ * 例外は経路が決まらない要求で、そこは 200 ではない（`/v1/` 直下の未知パスは
+ * 実 API も 404 + 封筒 `10000`）。`/_control/` は bitbank API に無い口なので、
+ * この規則の対象外（素の JSON + HTTP ステータス）。
+ */
 export function err(code: number): Envelope<never> {
   return { success: 0, data: { code } };
 }
