@@ -571,7 +571,7 @@ PR 1 のマージ直後に CodeRabbit から「diff の外」の指摘が 2 件�
 移動後に層をまたぐ import を数え直した。**`routes` から `store` を読む実行時の辺は 0 になった。**
 移動前は `routes/control.ts` の `freshState` 1 本だけだった。
 
-```
+```text
 === BEFORE (origin/main) routes -> store ===
 src/routes/control.ts:10:import { freshState } from "../store/session.ts";
 === AFTER routes -> store ===
