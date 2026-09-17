@@ -395,11 +395,13 @@ describe("post_only の出現条件", () => {
 });
 
 // 実 API の実測（2026-09-17、認証済みの口座）で決めたコード。`?pair=` を落とすと
-// 30009（"Missing asset."）。不正なペアの 40017 は**この PR では扱わない** —
-// 実 API は登録外のペア（`xxx_yyy`）にも 40017 を返すが、それはホワイトリストを
-// 持つという意味で、本モックは文字種しか見ない設計を明示的に選んでいる
-// （create-order.test.ts の「ホワイトリストにしていないことの証明」）。
-// docs/fidelity.md に未確定として記録した。
+// 30009（"Missing asset."）。
+//
+// **公式一覧に無いペアの 40017 も、いまは扱う。** かつてここには「本モックは文字種しか
+// 見ない設計を明示的に選んでいる」と書いていたが、**実 API が `xxx_yyy` に 40017 を
+// 返すという実測を受けて覆した**。一覧は `src/engine/pairs.ts` の `OFFICIAL_PAIRS` が
+// 持ち、route 層の `isKnownPair()` が見る（`tests/routes/pair-whitelist.test.ts` が
+// 4 経路まとめて検査する）。経緯は docs/fidelity.md の「ペア」節。
 describe("ペアのコード", () => {
   const build = setupBuildTestServer();
 

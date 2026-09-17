@@ -128,7 +128,10 @@ describe("pure helpers", () => {
     expect(pairAssets("btc\u0000_jpy")).toBeNull();
   });
 
-  // ホワイトリストにはしない。公式一覧（pairs.md）に無くても形が正しければ通す。
+  // **`pairAssets` 自体はホワイトリストではない。** 見るのは形（文字種と 2 セグメント）
+  // だけで、公式一覧（pairs.md）に無くても形が正しければ通す。実在性は route 層の
+  // `isKnownPair()`（`src/engine/pairs.ts`）が見るので、ここを通るペアでも
+  // `GET order` などは 40017 で断られる。**層が違うだけで、モックは一覧を持っている。**
   // 数字を許すのは、bitbank が数字入りのペアを足したときに弾かないための保守的な上限。
   it("pairAssets accepts well-formed pairs that are not in the official list", () => {
     expect(pairAssets("foo_jpy")).toEqual(["foo", "jpy"]);
