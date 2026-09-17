@@ -5,6 +5,7 @@ import { defaultStatePath, loadState, saveState } from "../engine/persist.ts";
 import {
   activeOrders,
   DEFAULT_TAKER_FEE_RATE,
+  freshState,
   nowIso,
   pairAssets,
   type PaperState,
@@ -290,20 +291,4 @@ export async function loadOrInitDefault(
     state = freshState(initialJpy);
   }
   return new SessionStore(state, opts);
-}
-
-export function freshState(initialJpy: number): PaperState {
-  const now = nowIso();
-  return {
-    version: 3,
-    createdAt: now,
-    updatedAt: now,
-    initialJpy,
-    balances: { jpy: initialJpy },
-    lastTickAt: now,
-    orders: [],
-    trades: [],
-    nextOrderSeq: 1,
-    nextTradeSeq: 1,
-  };
 }

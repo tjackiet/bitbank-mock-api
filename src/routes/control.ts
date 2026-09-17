@@ -3,11 +3,10 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { isValidCandle, isValidCandleTimestamp, type Candle } from "../engine/candles.ts";
 import { runTick } from "../engine/match.ts";
 import { fitsDigits, precisionOf } from "../engine/precision.ts";
-import { isActive, pairAssets, remainingOf } from "../engine/state.ts";
+import { freshState, isActive, pairAssets, remainingOf } from "../engine/state.ts";
 import { fillOrder } from "../engine/transitions.ts";
 import { formatOrder, formatTrade } from "./format.ts";
 import { asRecord } from "./params.ts";
-import { freshState } from "../store/session.ts";
 
 export type ControlRouteOptions = {
   token?: string;

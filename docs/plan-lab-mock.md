@@ -568,6 +568,21 @@ PR 1 のマージ直後に CodeRabbit から「diff の外」の指摘が 2 件�
 `server/degraded.ts` が bitbank 封筒を作るために `routes/envelope.ts` を読む向きの歪みは**残す**。
 型のみの循環（`candles.ts` ↔ `types.ts`）も残す。どちらも記録で足りる。
 
+移動後に層をまたぐ import を数え直した。**`routes` から `store` を読む実行時の辺は 0 になった。**
+移動前は `routes/control.ts` の `freshState` 1 本だけだった。
+
+```
+=== BEFORE (origin/main) routes -> store ===
+src/routes/control.ts:10:import { freshState } from "../store/session.ts";
+=== AFTER routes -> store ===
+  (なし)
+=== 参考: server -> store ===
+src/server/http.ts:11:import type { SessionStore } from "../store/session.ts";
+```
+
+残る `server → store` は `SessionStore` の `import type` 1 本で、実行時には消える。
+`store → routes` と `engine → store / routes` は移動前から 0 のまま。
+
 **10.** ~~検証をどこに置くか~~ → **決定: 規則を明文化し、実装は変えない。**
 
 規則は `docs/fidelity.md` の「検証をどこに置くか」に書いた。**engine は自分の計算と不変量が
