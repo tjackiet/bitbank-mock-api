@@ -80,6 +80,29 @@ describe("POST /v1/user/spot/order", () => {
     expect(store.state().trades).toHaveLength(1);
   });
 
+  // pair の欠落は 30009（"Missing asset."）。GET order / orders_info と揃える。
+  // ただしこの経路自体は実測していない（発注 API は実弾になるため。詳細は
+  // src/routes/create-order.ts の missingCreateOrderCode の docstring）。
+  // 空白だけの値（`"   "`）はここに入れない。isMissing が trim しないので 40017 に
+  // 落ちるが、実 API がどちらを返すかを測っていないため固定しない。
+  it.each([[undefined], [""]])("returns 30009 when pair is missing: %p", async (pair) => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: {
+        ...(pair === undefined ? {} : { pair }),
+        amount: "0.001",
+        price: "5000000",
+        side: "buy",
+        type: "limit",
+      },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(30009);
+  });
+
   it("rejects invalid pair", async () => {
     const { fastify } = await build();
     const res = await fastify.inject({

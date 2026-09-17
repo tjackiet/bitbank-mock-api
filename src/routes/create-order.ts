@@ -7,9 +7,21 @@ import { err, ErrorCode, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
 
+/**
+ * 欠落しているパラメータに対応するコード。無ければ `null`。
+ *
+ * **`pair` の欠落がこの経路で `30009` になることは実測していない。** 実 API で確かめたのは
+ * `GET /v1/user/spot/order` と `POST /v1/user/spot/orders_info` の 2 つで、どちらも `30009`
+ * を返した（2026-09-17）。発注 API は実弾になるので測っていない。errors.md の `30009` が
+ * "Missing asset." という汎用の文言であることと、上の 2 経路に揃えることを根拠にしている。
+ *
+ * **並び順（どれが先に返るか）も実測していない。** `pair` を先頭に置いたのは rest-api.md の
+ * パラメータ表の並びに合わせたもので、実 API の優先順の再現ではない。
+ */
 function missingCreateOrderCode(body: unknown): number | null {
   const b = asRecord(body);
   if (!b) return ErrorCode.INVALID_PARAMETER;
+  if (isMissing(b.pair)) return ErrorCode.MISSING_ASSET;
   if (isMissing(b.amount)) return ErrorCode.MISSING_AMOUNT;
   if (isMissing(b.side)) return ErrorCode.MISSING_SIDE;
   if (isMissing(b.type)) return ErrorCode.MISSING_TYPE;
