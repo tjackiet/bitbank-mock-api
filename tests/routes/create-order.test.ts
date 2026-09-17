@@ -81,10 +81,8 @@ describe("POST /v1/user/spot/order", () => {
   });
 
   // pair の欠落は 30009（"Missing asset."）。GET order / orders_info と揃える。
-  // ただしこの経路自体は実測していない（発注 API は実弾になるため。詳細は
-  // src/routes/create-order.ts の missingCreateOrderCode の docstring）。
-  // 空白だけの値（`"   "`）はここに入れない。isMissing が trim しないので 40017 に
-  // 落ちるが、実 API がどちらを返すかを測っていないため固定しない。
+  // この経路も 2026-09-17 に実 API で実測済み（pair が無いと取引できる先が無いので
+  // 注文は成立しない）。空白だけの値は下の別テストで 40017 を見る。
   it.each([[undefined], [""]])("returns 30009 when pair is missing: %p", async (pair) => {
     const { fastify } = await build();
     const res = await fastify.inject({
@@ -101,6 +99,21 @@ describe("POST /v1/user/spot/order", () => {
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(30009);
+  });
+
+  // 空白だけの `pair` は「欠落」ではなく「不正な値」。`isMissing()` が trim しないので
+  // `pairAssets()` まで進んで 40017 になる。**実 API も 40017 を返すことを実測した**
+  // （2026-09-17）。偶然そうなっていたのではなく一致している、という記録。
+  it("returns 40017 when pair is whitespace only", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "   ", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(40017);
   });
 
   it("rejects invalid pair", async () => {
