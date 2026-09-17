@@ -10,13 +10,19 @@ import { buildTestServer, stubFetchCandles } from "../routes/helpers.ts";
 
 // 重なった persist() が実際に 1 本にまとめられたかを見るため、saveState の
 // 呼び出し回数を数える。中身は実物をそのまま呼ぶ。
-const saveStateCalls = vi.hoisted(() => ({ count: 0 }));
+//
+// **数えるのは状態ファイルのパスごと**で、ひとつの共有カウンタにはしない。
+// 共有カウンタだと、タイムアウトなどで打ち切られたテストの非同期処理があとから
+// 書き込んだぶんまで数に入り、無関係なテストが落ちる（実際に CI で起きた）。
+// パスはテストごとに別なので、分けておけば取りこぼしが混ざらない。
+const saveStateCalls = vi.hoisted(() => ({ byPath: new Map<string, number>() }));
 vi.mock("../../src/engine/persist.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/engine/persist.ts")>();
   return {
     ...actual,
     saveState: (...args: Parameters<typeof actual.saveState>) => {
-      saveStateCalls.count += 1;
+      const [path] = args;
+      saveStateCalls.byPath.set(path, (saveStateCalls.byPath.get(path) ?? 0) + 1);
       return actual.saveState(...args);
     },
   };
@@ -341,7 +347,9 @@ describe("SessionStore.persist", () => {
         await close();
       }
     }
-  });
+    // 5 試行それぞれでサーバを立て、並行に発注・取消・約定させて実ファイルへ書く。
+    // 既定の 5000ms では負荷の高い runner で足りず、CI で落ちた。
+  }, 30_000);
 
   // 2xx だけでは書き込みの成否を判定できないので、失敗を store が覚える。
   // 状態ファイルのパスをディレクトリにすると rename が必ず EISDIR で落ちる。
@@ -468,7 +476,6 @@ describe("SessionStore.persist", () => {
       const path = join(dir, `coalesce-${trial}`, "state.json");
       const store = new SessionStore(buildState(), { path, fillMode: "manual" });
       const waits: Promise<void>[] = [];
-      saveStateCalls.count = 0;
       for (let i = 1; i <= 20; i += 1) {
         store.replace(
           buildState({
@@ -480,7 +487,7 @@ describe("SessionStore.persist", () => {
       }
       await Promise.all(waits);
       // 20 本の persist() が 1 本の書き込みにまとまる（途中の 19 本は捨てる）。
-      expect(saveStateCalls.count).toBe(1);
+      expect(saveStateCalls.byPath.get(path) ?? 0).toBe(1);
       expect(await readFileState(path)).toEqual(store.state());
     }
   });
