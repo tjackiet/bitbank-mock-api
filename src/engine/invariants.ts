@@ -7,7 +7,15 @@ import {
   type PaperState,
 } from "./state.ts";
 
-/** 不変量 5 の `amount` の合計に使う許容差の絶対項。大きさが 1 前後より小さい側の床。 */
+/**
+ * 不変量 5 の `amount` の合計に使う許容差の絶対項。大きさが 1 前後より小さい側の床。
+ *
+ * `src/engine/transitions.ts` の `AMOUNT_EPS` と**同じ値だが別物**。あちらは `fillOrder` が
+ * 全約定へクランプする閾値で、こちらは合計の一致を見る許容差の床である。**連動しない**:
+ * `AMOUNT_EPS` を `1e-6` へ緩めても不変量 5 の違反は 0 のままになる（実測）。クランプは
+ * trade の `amount` も残量ちょうどへ丸めるので、両辺が同じ値で動くためである。
+ * 片方を動かすときもう片方を追従させる必要は無い。
+ */
 const AMOUNT_ABS_TOL = 1e-12;
 
 /** 不変量 5 の `amount × price` の合計に使う許容差の絶対項。 */
@@ -24,6 +32,24 @@ const NOTIONAL_ABS_TOL = 1e-6;
  * 依らない。4 倍はその上界に対する余裕（実測の最大は `0.90 * Number.EPSILON`）。
  */
 const SUM_REL_TOL = 4 * Number.EPSILON;
+
+/**
+ * 不変量 6（残高が負でない・拘束が残高を超えない）の許容差。
+ *
+ * **この値の根拠は記録されていない。** v3 の遷移を入れた最初のコミット（`02fc047`）から
+ * 同じ値が使われており、導出も出典も残っていない。docs/fidelity.md は値そのものは
+ * 記録しているが（不変量 6 の行）、なぜ `1e-9` かは書いていない。
+ *
+ * **固定の絶対値なので、残高が大きいほど厳しい検査になる。** 実測では残高の大きさが
+ * 約 `8.39e6`（= `2^23`）を超えると `1e-9` が 1 ulp を下回る。これは不変量 5 で
+ * 実際に起きた破れ方と同じ形である（docs/fidelity.md の「不変量 5 と `fillOrder` の
+ * クランプ」。あちらは `startAmount > 8192` が閾値だった）。
+ *
+ * ただし**遷移関数だけを通って誤判定になる具体例は作れていない**ので、不変量 5 のように
+ * 大きさへ比例させる変更は入れていない（docs/fidelity.md に未確定として記録した）。
+ * 推測で許容差を動かすと、今度は本物の違反を見逃す側へ倒れる。
+ */
+const BALANCE_ABS_TOL = 1e-9;
 
 /**
  * 合計が `executedAmount` / `executedNotional` と一致していないか。
@@ -126,10 +152,10 @@ export function invariantViolations(
   for (const k of keys) {
     const total = amountOf(state.balances, k);
     const lockedAmount = amountOf(locked, k);
-    if (total < -1e-9) {
+    if (total < -BALANCE_ABS_TOL) {
       violations.push(`6: balance[${k}]=${total} is negative`);
     }
-    if (lockedAmount - total > 1e-9) {
+    if (lockedAmount - total > BALANCE_ABS_TOL) {
       violations.push(`6: locked[${k}]=${lockedAmount} exceeds balance=${total}`);
     }
   }

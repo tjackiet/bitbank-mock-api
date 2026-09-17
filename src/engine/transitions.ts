@@ -11,6 +11,14 @@ import {
   type TradeRecord,
 } from "./state.ts";
 
+/**
+ * `fillOrder` が全約定へクランプする閾値。残量との差がこれ以下なら残量ちょうどを約定させ、
+ * これを超える残量超過は `INVALID_AMOUNT` で断る。
+ *
+ * `src/engine/invariants.ts` の `AMOUNT_ABS_TOL` と**同じ値だが別物**（あちらは不変量 5 の
+ * 合計の一致を見る許容差の床）。**連動しない**ので、片方を動かすときもう片方を追従させる
+ * 必要は無い。理由は `AMOUNT_ABS_TOL` の項に実測付きで書いてある。
+ */
 const AMOUNT_EPS = 1e-12;
 import type { Result } from "./types.ts";
 
