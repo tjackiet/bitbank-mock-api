@@ -21,6 +21,8 @@ const dirFsync = vi.hoisted(() => ({ synced: [] as string[], fail: false, failOp
 // `saveState` が実際に開いた一時ファイルのパス。掃除の正規表現が、生成側の名前と
 // 本当に対になっているかを見るために使う（名前を手で書くとその検査にならない）。
 const tempOpens = vi.hoisted(() => ({ paths: [] as string[] }));
+// 状態ディレクトリが読めない場合。root ではパーミッションが効かないので差し替える。
+const readdirFail = vi.hoisted(() => ({ code: null as string | null }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -65,6 +67,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
+    },
+    readdir: async (...args: Parameters<typeof actual.readdir>) => {
+      if (readdirFail.code !== null) {
+        throw Object.assign(new Error(`${readdirFail.code}: cannot read dir`), {
+          code: readdirFail.code,
+        });
+      }
+      return actual.readdir(...args);
     },
   };
 });
@@ -839,6 +849,7 @@ describe("sweepOrphanTempFiles", () => {
     dir = await mkdtemp(join(tmpdir(), "bitbank-mock-sweep-"));
     statePath = join(dir, "state.json");
     tempOpens.paths.length = 0;
+    readdirFail.code = null;
   });
 
   afterEach(async () => {
@@ -883,5 +894,69 @@ describe("sweepOrphanTempFiles", () => {
     // 初回起動。掃除するものも無い。
     const nested = join(dir, "sessions", "default", "state.json");
     expect(await sweepOrphanTempFiles(nested)).toBe(0);
+  });
+
+  it("Math.random() が 0 でも掃除が拾える名前になる", async () => {
+    // `Math.random()` は 0 を返しうる仕様で、そのとき slice(2, 10) は空文字になる。
+    // 名前が `<状態ファイル>.<pid>..tmp` になると掃除が拾えず、**黙って効かなくなる**。
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const r = await saveState(statePath, buildState({ balances: { jpy: 1 } }));
+    expect(r.success).toBe(true);
+    vi.restoreAllMocks();
+
+    const tmp = tempOpens.paths.at(-1);
+    expect(tmp).toBeDefined();
+    expect(tmp).not.toMatch(/\.\.tmp$/); // 乱数の段が空になっていない
+
+    await writeFile(tmp!, '{"partial":', "utf8");
+    expect(await sweepOrphanTempFiles(statePath)).toBe(1);
+    expect(existsSync(tmp!)).toBe(false);
+  });
+
+  it("乱数の段が 9 文字以上のものは消さない", async () => {
+    // `tempFilePath()` は slice(2, 10) で 8 文字までしか作らない。それより長いものは
+    // 自分の残骸ではないので、利用者が置いたファイルとして残す。
+    const keep = join(dir, "state.json.123.abcdefghi.tmp");
+    await writeFile(keep, "x", "utf8");
+    expect(await sweepOrphanTempFiles(statePath)).toBe(0);
+    expect(existsSync(keep)).toBe(true);
+  });
+
+  it("ディレクトリが読めない理由が ENOENT 以外なら warn に出す", async () => {
+    // ENOENT は初回起動なので黙って終わるが、権限が無い等は運用者が知るべき事情。
+    const warnings: string[] = [];
+    readdirFail.code = "EACCES";
+    expect(
+      await sweepOrphanTempFiles(statePath, {
+        logger: { warn: (m) => warnings.push(m), info: () => {} },
+      }),
+    ).toBe(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(JSON.stringify(dir));
+
+    // ENOENT は黙って 0。
+    warnings.length = 0;
+    readdirFail.code = "ENOENT";
+    expect(
+      await sweepOrphanTempFiles(statePath, {
+        logger: { warn: (m) => warnings.push(m), info: () => {} },
+      }),
+    ).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it("logger が投げても掃除は止まらない", async () => {
+    // `npm run dev | head` のように標準出力が閉じた後の console.warn は EPIPE で投げる。
+    readdirFail.code = "EACCES";
+    await expect(
+      sweepOrphanTempFiles(statePath, {
+        logger: {
+          warn: () => {
+            throw Object.assign(new Error("EPIPE: broken pipe"), { code: "EPIPE" });
+          },
+          info: () => {},
+        },
+      }),
+    ).resolves.toBe(0);
   });
 });

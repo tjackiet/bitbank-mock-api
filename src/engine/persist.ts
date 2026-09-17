@@ -360,9 +360,15 @@ async function syncDirectory(dir: string): Promise<Result<true>> {
  *
  * **`orphanTempPattern()` と対になっている。** 片方だけ変えると、掃除が自分の残骸を
  * 拾えなくなる（掃除は「見つからない」を失敗として報告しないので、黙って効かなくなる）。
+ *
+ * 乱数の段が空にならないようにしている。`Math.random()` は `0` を返しうる仕様で、
+ * そのとき `(0).toString(36).slice(2, 10)` は空文字になり、名前が `<状態ファイル>.<pid>..tmp`
+ * という**掃除が拾えない形**になる（実測で確認）。確率は 2^-53 だが、外れたときの壊れ方が
+ * 「黙って効かなくなる」なので潰しておく。
  */
 function tempFilePath(path: string): string {
-  return `${path}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
+  const rand = Math.random().toString(36).slice(2, 10) || "0";
+  return `${path}.${process.pid}.${rand}.tmp`;
 }
 
 /**
@@ -370,11 +376,15 @@ function tempFilePath(path: string): string {
  *
  * 状態ディレクトリは利用者が `BITBANK_MOCK_STATE_PATH` で指す場所なので、`.tmp` で
  * 終わるというだけで消さない。pid と乱数の段まで一致するものだけを自分の残骸と見なす。
+ *
+ * 乱数の段は **1〜8 文字**に限る。`tempFilePath()` は `slice(2, 10)` で 8 文字までしか
+ * 作らないので、それより長いものは自分の残骸ではない。`+` のままだと、利用者が置いた
+ * `<状態ファイル>.<数字>.<9 文字以上>.tmp` を消しうる。
  */
 function orphanTempPattern(path: string): RegExp {
   // basename をそのまま正規表現へ入れない。`state.json` の `.` すら任意の 1 文字になる。
   const escaped = basename(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped}\\.\\d+\\.[a-z0-9]+\\.tmp$`);
+  return new RegExp(`^${escaped}\\.\\d+\\.[a-z0-9]{1,8}\\.tmp$`);
 }
 
 /**
@@ -475,8 +485,16 @@ export async function sweepOrphanTempFiles(
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch {
-    // 初回起動ではまだディレクトリが無い。掃除するものも無い。
+  } catch (e) {
+    // 初回起動ではまだディレクトリが無い。掃除するものも無いので黙って終わる。
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    // それ以外（権限が無い、ディレクトリでない等）は運用者が知るべき事情なので出す。
+    // ここでも掃除の失敗で起動は止めない。
+    warnQuietly(
+      opts.logger,
+      `failed to list ${JSON.stringify(dir)} for orphan temp files: ` +
+        `${JSON.stringify(e instanceof Error ? e.message : String(e))}`,
+    );
     return 0;
   }
 
@@ -494,16 +512,26 @@ export async function sweepOrphanTempFiles(
   }
 
   if (failures.length > 0) {
-    try {
-      // パスは利用者の入力なので JSON で包む（saveState の warn と同じ理由）。
-      (opts.logger ?? noopLogger).warn(
-        `failed to remove ${failures.length} orphan temp file(s) in ${JSON.stringify(dir)}`,
-      );
-    } catch {
-      // logger が投げても握り潰す。掃除の失敗で起動を止めない。
-    }
+    warnQuietly(
+      opts.logger,
+      `failed to remove ${failures.length} orphan temp file(s) in ${JSON.stringify(dir)}`,
+    );
   }
   return removed;
+}
+
+/**
+ * warn を出すが、logger が投げても握り潰す。
+ *
+ * `npm run dev | head` のように標準出力が閉じた後の `console.warn` は `EPIPE` で投げる。
+ * 掃除は best effort なので、ログに出せなかったことで起動を止めてはならない。
+ */
+function warnQuietly(logger: Logger | undefined, message: string): void {
+  try {
+    (logger ?? noopLogger).warn(message);
+  } catch {
+    /* ログに出せなくても続ける */
+  }
 }
 
 export async function deleteState(path: string): Promise<Result<true>> {
