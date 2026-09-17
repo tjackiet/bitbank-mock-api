@@ -16,19 +16,16 @@ function terminalCancelCode(order: OrderRecord): number | null {
 }
 
 export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/v1/user/spot/cancel_order", async (request, reply) => {
+  fastify.post("/v1/user/spot/cancel_order", async (request) => {
     const body = asRecord(request.body);
     if (!body) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     if (isMissing(body.order_id)) {
-      reply.code(400);
       return err(ErrorCode.MISSING_ORDER_ID);
     }
     const parsed = CancelOrderRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     const store = fastify.store;
@@ -45,19 +42,16 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     return ok(formatOrder(r.data.order));
   });
 
-  fastify.post("/v1/user/spot/cancel_orders", async (request, reply) => {
+  fastify.post("/v1/user/spot/cancel_orders", async (request) => {
     const body = asRecord(request.body);
     if (!body) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     if (isMissing(body.order_ids)) {
-      reply.code(400);
       return err(ErrorCode.MISSING_ORDER_IDS);
     }
     const parsed = CancelOrdersRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     const store = fastify.store;

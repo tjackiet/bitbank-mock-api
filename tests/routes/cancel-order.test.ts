@@ -95,7 +95,7 @@ describe("POST /v1/user/spot/cancel_order", () => {
       url: "/v1/user/spot/cancel_order",
       payload: { pair: "btc_jpy" },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.data.code).toBe(30006);
   });
@@ -225,7 +225,7 @@ describe("POST /v1/user/spot/cancel_orders", () => {
       url: "/v1/user/spot/cancel_orders",
       payload: { pair: "btc_jpy", order_ids: ["", 2] },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(20003);

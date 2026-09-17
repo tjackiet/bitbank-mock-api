@@ -108,7 +108,7 @@ describe("絞り込みパラメータの不正値（実 API 実測）", () => {
         method: "GET",
         url: `/v1/user/spot/active_orders?${query}`,
       });
-      expect(res.statusCode, query).toBe(400);
+      expect(res.statusCode, query).toBe(200);
       expect(res.json(), query).toEqual({ success: 0, data: { code } });
     }
   });
@@ -136,7 +136,7 @@ describe("絞り込みパラメータの不正値（実 API 実測）", () => {
         method: "GET",
         url: `/v1/user/spot/active_orders?${query}`,
       });
-      expect(res.statusCode, query).toBe(400);
+      expect(res.statusCode, query).toBe(200);
       expect(res.json(), query).toEqual({ success: 0, data: { code } });
     }
   });
@@ -148,7 +148,7 @@ describe("絞り込みパラメータの不正値（実 API 実測）", () => {
       method: "GET",
       url: "/v1/user/spot/active_orders?end=1&end=2",
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ success: 0, data: { code: 40007 } });
   });
 

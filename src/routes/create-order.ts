@@ -48,15 +48,13 @@ function mapPlaceError(error: string) {
 }
 
 export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/v1/user/spot/order", async (request, reply) => {
+  fastify.post("/v1/user/spot/order", async (request) => {
     const missing = missingCreateOrderCode(request.body);
     if (missing !== null) {
-      reply.code(400);
       return err(missing);
     }
     const parsed = CreateOrderRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     const { pair, side, type, amount, price } = parsed.data;
@@ -65,7 +63,6 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     const digits = precisionOf(pair);
     if (!fitsDigits(amount, digits.amountDigits)) return err(ErrorCode.AMOUNT_PRECISION);
     if (type === "limit" && price !== undefined && !fitsDigits(price, digits.priceDigits)) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
 

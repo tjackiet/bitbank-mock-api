@@ -5,19 +5,16 @@ import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
 
 export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/v1/user/spot/order", async (request, reply) => {
+  fastify.get("/v1/user/spot/order", async (request) => {
     const query = asRecord(request.query) ?? {};
     if (isMissing(query.order_id)) {
-      reply.code(400);
       return err(ErrorCode.MISSING_ORDER_ID);
     }
     if (isMissing(query.pair)) {
-      reply.code(400);
       return err(ErrorCode.MISSING_ASSET);
     }
     const parsed = GetOrderQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     await fastify.store.tick();
@@ -29,23 +26,19 @@ export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
     return ok(formatOrder(found));
   });
 
-  fastify.post("/v1/user/spot/orders_info", async (request, reply) => {
+  fastify.post("/v1/user/spot/orders_info", async (request) => {
     const body = asRecord(request.body);
     if (!body) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     if (isMissing(body.order_ids)) {
-      reply.code(400);
       return err(ErrorCode.MISSING_ORDER_IDS);
     }
     if (isMissing(body.pair)) {
-      reply.code(400);
       return err(ErrorCode.MISSING_ASSET);
     }
     const parsed = OrdersInfoRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      reply.code(400);
       return err(ErrorCode.INVALID_PARAMETER);
     }
     await fastify.store.tick();

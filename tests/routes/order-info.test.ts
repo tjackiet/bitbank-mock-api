@@ -185,7 +185,7 @@ describe("GET /v1/user/spot/order", () => {
       method: "GET",
       url: "/v1/user/spot/order?pair=btc_jpy",
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
     const body = res.json() as Envelope<{ code: number }>;
     expect(body.data.code).toBe(30006);
   });
@@ -409,6 +409,19 @@ describe("ペアのコード", () => {
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(30009);
+  });
+
+  it("orders_info: order_ids を落とすと 30007", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/orders_info",
+      payload: { pair: "btc_jpy" },
+    });
+    // 失敗でも HTTP は 200（実 API の実測。src/routes/envelope.ts の err の docstring）。
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.data.code).toBe(30007);
   });
 
   it("orders_info: pair を落とすと 30009", async () => {

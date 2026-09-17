@@ -156,7 +156,7 @@ describe("絞り込みパラメータの不正値（実 API 実測）", () => {
         method: "GET",
         url: `/v1/user/spot/trade_history?${query}`,
       });
-      expect(res.statusCode, query).toBe(400);
+      expect(res.statusCode, query).toBe(200);
       expect(res.json(), query).toEqual({ success: 0, data: { code } });
     }
   });
