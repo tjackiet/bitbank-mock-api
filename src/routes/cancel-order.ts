@@ -41,8 +41,7 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     if (!isActive(target)) return err(ErrorCode.ORDER_NOT_FOUND);
     const r = cancelOrder(store.state(), wantId, new Date().toISOString());
     if (!r.success) return err(ErrorCode.ORDER_NOT_FOUND);
-    store.replace(r.data.state);
-    await store.persist();
+    await store.commit(r.data.state);
     return ok(formatOrder(r.data.order));
   });
 
@@ -85,8 +84,7 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
       canceled.push(r.data.order);
     }
     if (canceled.length === 0) return err(ErrorCode.ORDER_NOT_FOUND);
-    store.replace(next);
-    await store.persist();
+    await store.commit(next);
     return ok({ orders: canceled.map(formatOrder) });
   });
 };

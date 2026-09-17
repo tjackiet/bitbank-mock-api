@@ -77,6 +77,26 @@ export class SessionStore {
   }
 
   /**
+   * 状態を差し替えて状態ファイルへ書き出す。**状態を変えるルートは必ずこれを通す。**
+   *
+   * `replace()` と `persist()` を別々に呼ぶ形だと、書き出しを呼び忘れた経路が
+   * 「応答は 2xx なのに再起動で消える」状態を作る。docs/fidelity.md の「状態の永続化」は
+   * この非対称を記録しているが、記録しているのは persist が**失敗した**場合であって、
+   * 呼び忘れはその対象ですらない（失敗なら `persistHealth()` と劣化モードで検知できるが、
+   * 呼んでいなければどちらも動かない）。1 つの操作にしておけば呼び忘れようがない。
+   *
+   * `persist()` と同じく、書き出しに失敗しても throw しない（失敗は `_persistHealth` へ
+   * 記録して warn に出すだけ）。したがって `await` が返ったことは書き出しの成功を意味しない。
+   *
+   * **`replace()` は公開のまま残す。** `SessionStore` の書き込みの直列化を検査するテストが、
+   * 書き出しと切り離して状態だけを差し替える必要があるため（tests/store/session.test.ts）。
+   */
+  async commit(next: PaperState): Promise<void> {
+    this.replace(next);
+    await this.persist();
+  }
+
+  /**
    * 状態ファイルへの書き出しが今どうなっているか（`PersistHealth`）。
    *
    * `path` を持たない store（テストや `path: null`）は書き出し自体をしないので、
