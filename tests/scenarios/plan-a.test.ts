@@ -104,6 +104,7 @@ describe("plan A scenario: DCL の reserved とモックの拘束額の境界", 
   const PRICE = 5_000_000;
   const BALANCE = 1_000_000;
 
+  /** 残高を `BALANCE` ちょうどに据えたサーバ。境界の数値はこの残高を前提にしている。 */
   async function build() {
     const store = new SessionStore(buildState({ balances: { jpy: BALANCE } }), {
       path: null,
