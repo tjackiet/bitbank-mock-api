@@ -24,6 +24,27 @@ Plan A（v0.1.0）で実装しているのは次の 3 つです。
 
 注文状態の照合（リコンサイル）は `orders_info` を主経路にします。private stream（R4）は未実装です。
 
+## 実装しているエンドポイント
+
+bitbank Private REST API に対応する互換ルートは次の 7 パス・8 経路です。本文を取る経路は `content-type: application/json` で送ってください。
+
+| メソッド | パス | パラメータ |
+| --- | --- | --- |
+| `POST` | `/v1/user/spot/order` | `pair` / `amount` / `price`（任意）/ `side`（`buy` \| `sell`）/ `type`（`limit` \| `market`） |
+| `GET` | `/v1/user/spot/order` | `pair` / `order_id` |
+| `POST` | `/v1/user/spot/orders_info` | `pair` / `order_ids`（配列） |
+| `GET` | `/v1/user/spot/active_orders` | `pair`（任意。省略で全ペア）/ `count` / `from_id` / `end_id` / `since` / `end` |
+| `GET` | `/v1/user/spot/trade_history` | `pair`（任意。省略で全ペア）/ `count` / `order_id` / `since` / `end` / `order`（`asc` \| `desc`） |
+| `POST` | `/v1/user/spot/cancel_order` | `pair` / `order_id` |
+| `POST` | `/v1/user/spot/cancel_orders` | `pair` / `order_ids`（1 件以上） |
+| `GET` | `/v1/user/assets` | なし |
+
+**この表はパラメータの名前までで、契約そのものではありません。** 値をどう解釈するか・何を返すか・どの入力をどの error code で断るかの正は [`docs/fidelity.md`](docs/fidelity.md) です。本物との差分の記録であると同時に、**このモックの契約書でもあります**。読む順は同ファイルの「[v0.1.0 からの改訂](docs/fidelity.md#v010-からの改訂)」で今の版を把握してから、対応表の該当する節へ。
+
+**`trade_history` は `from_id` / `end_id` を持ちません**（公式 `rest-api.md` のパラメータ表に無いため。送られても黙って無視します。実 API は絞り込みに使うので、同じ要求で結果が変わります。経緯は [`docs/fidelity.md`](docs/fidelity.md) の「絞り込みパラメータの不正値」の節）。
+
+実際に叩く例は [`examples/scenario-plan-a.sh`](examples/scenario-plan-a.sh) にあります。`/_control/` の 5 経路は下の「[`/_control/`](#_control)」節です。
+
 ## `mock-bitbankcc` との棲み分け
 
 | | 本リポジトリ | [`bitbankinc/mock-bitbankcc`](https://github.com/bitbankinc/mock-bitbankcc) |
