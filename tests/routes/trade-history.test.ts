@@ -85,6 +85,53 @@ describe("GET /v1/user/spot/trade_history", () => {
     expect(body.data.trades.map((t) => t.trade_id)).toEqual([1, 2]);
     expect(body.data.trades.every((t) => t.order_id === 10)).toBe(true);
   });
+
+  /**
+   * `since` と `end` が**実際に絞り込むこと**を見る。
+   *
+   * `active_orders` の `end_id` / `end` と同じ穴で、不正値を断る側（下の「空文字は…」）
+   * だけが検査されていた。この 2 つの `filter` を no-op に差し替えても 444 件が
+   * 1 件も落ちない（実測）。
+   *
+   * 並びは `order=asc` に固定する。既定の `desc` は上の「returns trades newest-first」が
+   * 見ているので、ここでは**どの約定が残るか**だけを読めるようにする。
+   */
+  it("filters by since and end", async () => {
+    const at = (m: number) =>
+      new Date(Date.parse("2026-01-01T00:00:00.000Z") + m * 60_000).toISOString();
+    const state = buildState({
+      trades: [
+        buildTrade({ tradeId: "1", orderId: "1", executedAt: at(1) }),
+        buildTrade({ tradeId: "2", orderId: "2", price: 5_100_000, executedAt: at(2) }),
+        buildTrade({ tradeId: "3", orderId: "3", price: 5_200_000, executedAt: at(3) }),
+      ],
+    });
+    const { fastify } = await build(state);
+
+    // `since` は `executed_at` のミリ秒で、境界を含む（約定 2 が残る）。
+    const from = await fastify.inject({
+      method: "GET",
+      url: `/v1/user/spot/trade_history?order=asc&since=${Date.parse(at(2))}`,
+    });
+    const fromBody = from.json() as { data: { trades: { trade_id: number }[] } };
+    expect(fromBody.data.trades.map((t) => t.trade_id)).toEqual([2, 3]);
+
+    // `end` も境界を含む。
+    const to = await fastify.inject({
+      method: "GET",
+      url: `/v1/user/spot/trade_history?order=asc&end=${Date.parse(at(2))}`,
+    });
+    const toBody = to.json() as { data: { trades: { trade_id: number }[] } };
+    expect(toBody.data.trades.map((t) => t.trade_id)).toEqual([1, 2]);
+
+    // 両端を同じ値で挟むと、境界の 1 件だけが残る。
+    const both = await fastify.inject({
+      method: "GET",
+      url: `/v1/user/spot/trade_history?order=asc&since=${Date.parse(at(2))}&end=${Date.parse(at(2))}`,
+    });
+    const bothBody = both.json() as { data: { trades: { trade_id: number }[] } };
+    expect(bothBody.data.trades.map((t) => t.trade_id)).toEqual([2]);
+  });
 });
 
 describe("GET /v1/user/spot/trade_history official field set", () => {
