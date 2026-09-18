@@ -214,3 +214,70 @@ describe("README.md の環境変数一覧", () => {
     expect(missing, `README.md の「環境変数」節へ追記する: ${missing.join(" / ")}`).toEqual([]);
   });
 });
+
+/**
+ * 改訂一覧（`docs/fidelity.md` の「v0.1.0 からの改訂」）から各小節へのリンクが実在するかを見る。
+ *
+ * 一覧は索引なので、**一覧だけが古くなる**のが一番起きやすい壊れ方である。小節の名前を変えても、
+ * 小節を消しても、一覧は何も言わずに残る。読む側からは「リンクが死んでいる」ことが
+ * クリックするまで分からない。`tests/structure.test.ts` の許可リストと同じ考え方でここに置く。
+ *
+ * 見ているのは 2 方向。
+ *
+ * 1. リンク先（`#...`）が実在する見出しのアンカーであること
+ * 2. リンクの**文字列**がその見出しの名前と一致すること（見出しだけ改名しても落ちる）
+ */
+describe("docs/fidelity.md の改訂一覧", () => {
+  /**
+   * GitHub の見出しアンカー（github-slugger）の規則。小文字化 → 記号の除去 → 空白をハイフンへ。
+   * ハイフンと下線は残る。
+   */
+  const slug = (s: string): string =>
+    s
+      .toLowerCase()
+      .replace(/[\u2000-\u206F\u2E00-\u2E7F\\'!"#$%&()*+,./:;<=>?@[\]^`{|}~]/g, "")
+      .replace(/ /g, "-");
+
+  /**
+   * 上の `slug()` が GitHub と**確実に同じ結果になる**文字だけを並べた集合。
+   *
+   * github-slugger が落とす記号の一覧は長く、ここに写すと写し間違いが起きる。かといって
+   * 近似で通すと、アンカーが GitHub 側でだけ違う値になってリンクが黙って死ぬ。そこで
+   * 「判断が付く文字だけを許す」側に倒し、外れる見出し（`・` や全角括弧を含むもの）へ
+   * リンクしようとしたらここで落とす。そのときはアンカーを手で確かめてから足すこと。
+   */
+  const ANCHOR_SAFE =
+    /^[0-9A-Za-z_\-./` \u3005\u3040-\u309F\u30A0-\u30FA\u30FC-\u30FF\u4E00-\u9FFF]+$/;
+
+  /** 見出しの名前 → アンカー。 */
+  const anchors = new Map([...HEADINGS].map((h) => [h, `#${slug(h)}`]));
+
+  /** 一覧に限らず、`docs/fidelity.md` の中の内部リンクを全部拾う。 */
+  const links = [...FIDELITY.matchAll(/\[([^\]]+)\]\((#[^)]*)\)/g)].map((m) => ({
+    text: m[1]!,
+    frag: m[2]!,
+  }));
+
+  it("導出が空振りしていない", () => {
+    expect(links.length).toBeGreaterThan(20);
+    expect(anchors.size).toBeGreaterThan(40);
+  });
+
+  it("リンク先の見出しが実在する", () => {
+    const valid = new Set(anchors.values());
+    const dead = links.filter((l) => !valid.has(l.frag)).map((l) => `「${l.text}」→ ${l.frag}`);
+    expect(dead, `指す先の見出しが無い: ${dead.join(" / ")}`).toEqual([]);
+  });
+
+  it("リンクの文字列が見出しの名前と一致する", () => {
+    const wrong = links
+      .filter((l) => anchors.get(l.text) !== l.frag)
+      .map((l) => `「${l.text}」→ ${l.frag}`);
+    expect(wrong, `見出しの名前とリンクの文字列が食い違う: ${wrong.join(" / ")}`).toEqual([]);
+  });
+
+  it("アンカーの計算が GitHub と一致すると言い切れる見出しにだけリンクしている", () => {
+    const risky = links.map((l) => l.text).filter((t) => !ANCHOR_SAFE.test(t));
+    expect(risky, `アンカーを手で確かめること: ${risky.join(" / ")}`).toEqual([]);
+  });
+});
