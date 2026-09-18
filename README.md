@@ -5,7 +5,7 @@
 
 挙動確認・検証目的で作成している、bitbank Private REST API モック。注文の状態を持つ挙動確認用であり、**bitbank 公式のテスト環境ではない**。
 
-旧リポジトリ名は `bitbank-mock-api`。
+パッケージ名は `bitbank-lab-mock`、リポジトリ名は `bitbank-mock-api` で、両者は一致しません。clone 先もバッジのリンクもリポジトリ名の側です。
 
 ## はじめにお読みください
 
@@ -68,6 +68,7 @@ BITBANK_MOCK_CONTROL=1 npm run dev
 | `BITBANK_MOCK_STATE_PATH` | `~/.bitbank-mock/sessions/default/state.json` | 状態ファイルのパス |
 | `BITBANK_MOCK_HOME` | `~/.bitbank-mock` | `STATE_PATH` 未指定時のルート |
 | `BITBANK_PUBLIC_BASE_URL` | `https://public.bitbank.cc` | 足を取りに行く公開 API のベース URL（`BITBANK_MOCK_FILL_MODE=market` のときだけ使う） |
+| `BITBANK_MOCK_URL` | `http://127.0.0.1:14000` | **サーバは読みません。** `examples/scenario-plan-a.sh` が叩き先として読みます。既定以外のポートで起動したときに使ってください |
 
 状態ファイルは起動時に検査します。JSON が壊れている・スキーマに合わない場合に加えて、[`docs/fidelity.md`](docs/fidelity.md) の「状態の不変量（PaperState v3）」のうち単一の状態から判定できるもの（不変量 1〜3・5・6）を破っている場合も**起動しません**（自動修復も初期化もしません。ファイルはそのまま残します）。エラーには破れた不変量の番号と、その対象を特定する識別子が出ます（不変量 1〜3・5 は注文 ID、注文の無い trade は trade ID、不変量 6 は資産キー）。
 
@@ -95,7 +96,7 @@ bitbank API には存在しません。本番クライアントから叩かな�
 | --- | --- | --- |
 | `POST` | `/_control/orders/:order_id/fill` | 指定注文を約定。`amount` 省略は残量全部、`price` 省略は指値 |
 | `POST` | `/_control/tick` | `{ pair, price }` または `{ pair, candle }` で人工の足を 1 本適用 |
-| `POST` | `/_control/clock` | `lastTickAt` だけを動かす。本文省略で現在時刻、`{ lastTickAt }` に ISO 文字列かエポックミリ秒。注文・約定・残高は残る |
+| `POST` | `/_control/clock` | 時計（`lastTickAt`）を動かす。本文省略で現在時刻、`{ lastTickAt }` に ISO 文字列かエポックミリ秒。注文・約定・残高は残る（`updatedAt` は書き込み時刻として動きます） |
 | `POST` | `/_control/reset` | 状態を初期化 |
 | `GET` | `/_control/state` | `PaperState` に、状態ファイルへの書き出しの状況（`persist`）を添えて返す |
 
