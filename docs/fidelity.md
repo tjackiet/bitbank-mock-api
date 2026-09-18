@@ -167,7 +167,7 @@ Plan A は maker / taker 表示に関わらず**単一の料率**で計算する
 
 ### 数量・価格の精度
 
-応答の数量はペア桁で `toFixed`（btc_jpy は数量 4 桁 `"0.0010"`、価格 0 桁 `"5000000"`）。未登録ペアも同じ桁を仮置きする（**桁を登録しているのは `btc_jpy` だけ**なので、公式一覧の残り 61 ペアはすべてこの仮置きで動く。ペアの実在性の検査を入れた後も、この決定は変えていない。下の「ペア」節）。発注 `amount` が桁に収まらなければ `60004`。trade の `fee_amount_quote` は JPY 4 桁
+応答の数量はペア桁で `toFixed`（btc_jpy は数量 4 桁 `"0.0010"`、価格 0 桁 `"5000000"`）。未登録ペアも同じ桁を仮置きする（**桁を登録しているのは `btc_jpy` だけ**なので、公式一覧の残り 61 ペアはすべてこの仮置きで動く。ペアの実在性の検査を入れた後も、この決定は変えていない。下の「ペア」節）。発注 `amount` が桁に収まらなければ `60004`。判定の `fitsDigits()` はスケール後の整数からのずれを `1e-8`（`DIGIT_FIT_EPS`）未満まで塵として許すので、厳密に桁へ乗っていない値も通る。trade の `fee_amount_quote` は JPY 4 桁
 
 - **根拠**: pair list / `GET /spot/pairs` の `amount_digits` / `price_digits`
 - **本物との差異**: 公式 `60004` は「数量がしきい値を下回る」。モックは桁溢れ拒否に流用。価格の桁溢れは `20003`。ゼロ数量は `"0.0000"`、未約定の `average_price` だけは `"0"`
@@ -275,10 +275,10 @@ Plan A は maker / taker 表示に関わらず**単一の料率**で計算する
 
 ### trade_history の絞り込み
 
-`order_id` / `since` / `end` / `order(asc|desc)` を追加。`since`/`end` は `executed_at` のミリ秒 inclusive。既定は `desc`（新しい順）。`count` 指定時は最大 1000。未指定なら全件
+`order_id` / `since` / `end` / `order(asc|desc)` を追加。`since`/`end` は `executed_at` のミリ秒 inclusive。既定は `desc`（新しい順）。`count` 指定時は最大 1000 で、超過は断らずに切り詰める。未指定なら全件
 
-- **根拠**: REST API: Fetch trade history
-- **本物との差異**: 公式の既定件数は未確認。モックは未指定で全件返す
+- **根拠**: REST API: Fetch trade history（パラメータ表の `count | number | NO | take limit (up to 1000)`。`Fetch active orders` の同じ欄は `take limit` だけで上限が無く、モックも `active_orders` には上限を置いていない）
+- **本物との差異**: 公式の既定件数は未確認。モックは未指定で全件返す。**上限を超えた `count` を実 API が断るのか切り詰めるのかも公式に記載が無く、未実測**。モックは切り詰める側を選んでいる
 - **推測**: はい
 - **利用側への含意**: 利用側が注文単位で約定を突き合わせられる
 

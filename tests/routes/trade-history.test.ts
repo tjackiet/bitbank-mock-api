@@ -132,6 +132,44 @@ describe("GET /v1/user/spot/trade_history", () => {
     const bothBody = both.json() as { data: { trades: { trade_id: number }[] } };
     expect(bothBody.data.trades.map((t) => t.trade_id)).toEqual([2]);
   });
+
+  /**
+   * `count` の上限 1000 を見る。
+   *
+   * 上限は公式のパラメータ表が持つ（`count | number | NO | take limit (up to 1000)`。
+   * `Fetch active orders` の同じ欄は `take limit` だけで上限を書いておらず、モックも
+   * `active_orders` には上限を置いていない）。**超過をどう扱うかは公式が書いていない**——
+   * モックは断らずに切り詰める側を選んでいる。ここで固定するのはその選択である。
+   *
+   * 上の「respects count limit」は `count=1` を 2 件に当てるだけで天井に触れないので、
+   * `Math.min(q.count, TRADE_HISTORY_MAX)` を `q.count` に差し替えても落ちなかった（実測）。
+   */
+  it("clamps count at the official 1000 upper bound instead of rejecting", async () => {
+    const base = Date.parse("2026-01-01T00:00:00.000Z");
+    const state = buildState({
+      trades: Array.from({ length: 1001 }, (_, i) =>
+        buildTrade({
+          tradeId: String(i + 1),
+          orderId: String(i + 1),
+          executedAt: new Date(base + i * 1000).toISOString(),
+        }),
+      ),
+    });
+    const { fastify } = await build(state);
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/trade_history?count=5000",
+    });
+
+    // 断らない。上限を超えた count はエラーではなく切り詰めになる。
+    const body = res.json() as { success: number; data: { trades: { trade_id: number }[] } };
+    expect(body.success).toBe(1);
+    expect(body.data.trades).toHaveLength(1000);
+
+    // 既定の desc で新しい順に 1000 件。落ちるのは最も古い 1 件（trade_id 1）。
+    expect(body.data.trades[0]?.trade_id).toBe(1001);
+    expect(body.data.trades.at(-1)?.trade_id).toBe(2);
+  });
 });
 
 describe("GET /v1/user/spot/trade_history official field set", () => {
