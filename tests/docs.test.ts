@@ -216,26 +216,34 @@ describe("README.md の環境変数一覧", () => {
 });
 
 /**
- * 改訂一覧（`docs/fidelity.md` の「v0.1.0 からの改訂」）から各小節へのリンクが実在するかを見る。
+ * 改訂一覧（`docs/fidelity.md` の「v0.1.0 からの改訂」）をはじめ、`docs/fidelity.md` の見出しを
+ * 指す内部リンクが実在するかを機械で見る。
  *
  * 一覧は索引なので、**一覧だけが古くなる**のが一番起きやすい壊れ方である。小節の名前を変えても、
  * 小節を消しても、一覧は何も言わずに残る。読む側からは「リンクが死んでいる」ことが
  * クリックするまで分からない。`tests/structure.test.ts` の許可リストと同じ考え方でここに置く。
  *
- * 見ているのは 2 方向。
+ * 対象は `docs/fidelity.md` の中のリンクだけではない。**他のドキュメントから対応表の節を指す
+ * リンクも同じように腐る**ので、追跡対象の Markdown から一律に拾う。
+ *
+ * 見ているのは 3 方向。
  *
  * 1. リンク先（`#...`）が実在する見出しのアンカーであること
- * 2. リンクの**文字列**がその見出しの名前と一致すること（見出しだけ改名しても落ちる）
+ * 2. リンクの**文字列**がその見出しの名前を含むこと（見出しだけ改名しても落ちる）
+ * 3. アンカーの計算が GitHub と一致すると言い切れる見出しにだけリンクしていること
  */
-describe("docs/fidelity.md の改訂一覧", () => {
+describe("docs/fidelity.md の見出しを指すリンク", () => {
   /**
    * GitHub の見出しアンカー（github-slugger）の規則。小文字化 → 記号の除去 → 空白をハイフンへ。
    * ハイフンと下線は残る。
+   *
+   * `・`（U+30FB）は記号として落ちる。これは推測ではなく、GitHub が描画した
+   * `docs/fidelity.md` の HTML から確かめた（`数量・価格の精度` → `user-content-数量価格の精度`）。
    */
   const slug = (s: string): string =>
     s
       .toLowerCase()
-      .replace(/[\u2000-\u206F\u2E00-\u2E7F\\'!"#$%&()*+,./:;<=>?@[\]^`{|}~]/g, "")
+      .replace(/[\u2000-\u206F\u2E00-\u2E7F\u30FB\\'!"#$%&()*+,./:;<=>?@[\]^`{|}~]/g, "")
       .replace(/ /g, "-");
 
   /**
@@ -243,41 +251,64 @@ describe("docs/fidelity.md の改訂一覧", () => {
    *
    * github-slugger が落とす記号の一覧は長く、ここに写すと写し間違いが起きる。かといって
    * 近似で通すと、アンカーが GitHub 側でだけ違う値になってリンクが黙って死ぬ。そこで
-   * 「判断が付く文字だけを許す」側に倒し、外れる見出し（`・` や全角括弧を含むもの）へ
-   * リンクしようとしたらここで落とす。そのときはアンカーを手で確かめてから足すこと。
+   * 「判断が付く文字だけを許す」側に倒し、外れる見出し（全角括弧を含むものなど）へ
+   * リンクしようとしたらここで落とす。そのときは GitHub の描画でアンカーを確かめてから、
+   * その文字を `slug()` とこの集合の両方へ足すこと（`・` はそうやって足した）。
    */
   const ANCHOR_SAFE =
-    /^[0-9A-Za-z_\-./` \u3005\u3040-\u309F\u30A0-\u30FA\u30FC-\u30FF\u4E00-\u9FFF]+$/;
+    /^[0-9A-Za-z_\-./` \u3005\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+$/;
 
-  /** 見出しの名前 → アンカー。 */
-  const anchors = new Map([...HEADINGS].map((h) => [h, `#${slug(h)}`]));
+  /** アンカー → 見出しの名前。 */
+  const headingOf = new Map([...HEADINGS].map((h) => [`#${slug(h)}`, h]));
 
-  /** 一覧に限らず、`docs/fidelity.md` の中の内部リンクを全部拾う。 */
-  const links = [...FIDELITY.matchAll(/\[([^\]]+)\]\((#[^)]*)\)/g)].map((m) => ({
-    text: m[1]!,
-    frag: m[2]!,
-  }));
+  /**
+   * `docs/fidelity.md` の見出しを指すリンク。ファイル内リンク（`](#...)`）は
+   * `docs/fidelity.md` 自身のものだけを拾う（README の目次まで巻き込まないため）。
+   */
+  function fidelityLinks(files: string[]) {
+    const re = /\[([^\]]+)\]\(((?:\.{0,2}\/)*(?:docs\/)?fidelity\.md)?(#[^)]+)\)/g;
+    const out: Array<{ file: string; text: string; frag: string }> = [];
+    for (const f of files.filter((x) => x.endsWith(".md"))) {
+      for (const m of readFileSync(f, "utf8").matchAll(re)) {
+        if (m[2] === undefined && f !== "docs/fidelity.md") continue;
+        out.push({ file: f, text: m[1]!, frag: m[3]! });
+      }
+    }
+    return out;
+  }
+
+  /** リンクの文字列が見出しを名指ししているか。鉤括弧で引用する書き方も許す。 */
+  const namesHeading = (text: string, heading: string) =>
+    text === heading || text.includes(`「${heading}」`);
+
+  const links = fidelityLinks(trackedFiles());
 
   it("導出が空振りしていない", () => {
     expect(links.length).toBeGreaterThan(20);
-    expect(anchors.size).toBeGreaterThan(40);
+    expect(headingOf.size).toBeGreaterThan(40);
   });
 
   it("リンク先の見出しが実在する", () => {
-    const valid = new Set(anchors.values());
-    const dead = links.filter((l) => !valid.has(l.frag)).map((l) => `「${l.text}」→ ${l.frag}`);
+    const dead = links
+      .filter((l) => !headingOf.has(l.frag))
+      .map((l) => `${l.file}: 「${l.text}」→ ${l.frag}`);
     expect(dead, `指す先の見出しが無い: ${dead.join(" / ")}`).toEqual([]);
   });
 
-  it("リンクの文字列が見出しの名前と一致する", () => {
+  it("リンクの文字列が見出しの名前を含む", () => {
     const wrong = links
-      .filter((l) => anchors.get(l.text) !== l.frag)
-      .map((l) => `「${l.text}」→ ${l.frag}`);
+      .filter((l) => {
+        const h = headingOf.get(l.frag);
+        return h !== undefined && !namesHeading(l.text, h);
+      })
+      .map((l) => `${l.file}: 「${l.text}」→ ${l.frag}`);
     expect(wrong, `見出しの名前とリンクの文字列が食い違う: ${wrong.join(" / ")}`).toEqual([]);
   });
 
   it("アンカーの計算が GitHub と一致すると言い切れる見出しにだけリンクしている", () => {
-    const risky = links.map((l) => l.text).filter((t) => !ANCHOR_SAFE.test(t));
-    expect(risky, `アンカーを手で確かめること: ${risky.join(" / ")}`).toEqual([]);
+    const risky = [...new Set(links.map((l) => headingOf.get(l.frag)))]
+      .filter((h): h is string => h !== undefined)
+      .filter((h) => !ANCHOR_SAFE.test(h));
+    expect(risky, `GitHub の描画でアンカーを確かめること: ${risky.join(" / ")}`).toEqual([]);
   });
 });
