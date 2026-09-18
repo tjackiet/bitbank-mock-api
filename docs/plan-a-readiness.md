@@ -46,19 +46,9 @@
 
 ### 実装しているエンドポイント
 
-互換ルート（bitbank Private REST API に対応するもの）は次の 7 パス・8 経路。
-`/_control/` の 5 経路は [`README.md`](../README.md) の「`/_control/`」節に表がある。
-
-| メソッド | パス |
-| --- | --- |
-| `GET` | `/v1/user/assets` |
-| `GET` | `/v1/user/spot/order` |
-| `POST` | `/v1/user/spot/order` |
-| `POST` | `/v1/user/spot/orders_info` |
-| `GET` | `/v1/user/spot/active_orders` |
-| `GET` | `/v1/user/spot/trade_history` |
-| `POST` | `/v1/user/spot/cancel_order` |
-| `POST` | `/v1/user/spot/cancel_orders` |
+**一覧は [`README.md`](../README.md) の「実装しているエンドポイント」節が正**（互換ルートの 7 パス・8 経路と、
+それぞれのパラメータ名）。`/_control/` の 5 経路は同じく README の「`/_control/`」節にある。
+**ここでは写さない**——同じ表を 2 か所に置くと、片方だけが古くなる。
 
 注文を返す 5 経路が同じ整形関数を共有することは
 [`fidelity.md` の「注文オブジェクトの共通形」](fidelity.md#注文オブジェクトの共通形)にある。
