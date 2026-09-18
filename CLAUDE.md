@@ -26,6 +26,7 @@
 - **公式ドキュメントに明記されない挙動を決めたら、実装と同じ PR で `docs/fidelity.md` に追記する。** [`.github/pull_request_template.md`](.github/pull_request_template.md) のチェックリスト項目であり、挙動の前提を記録するという `docs/fidelity.md` の役割そのもの。
 - **`npm test` と `npm run typecheck` を green にしてから PR を出す。** これも PR テンプレートのチェックリストにある。
 - CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は **Node 24** で `npm ci` → `npm run typecheck` → `npm test` を走らせる。`package.json` の `engines.node` は `>=20` なので、ローカルが 20 系でも CI は 24 で通る必要がある。
+- **PR ではもう 1 本、[`.github/workflows/security.yml`](.github/workflows/security.yml) も走る。**`npm audit --audit-level=high`（high 以上の脆弱性で落ちる）と gitleaks（git 全履歴の秘密情報スキャン）の 2 ジョブ。CI が green でもこちらが赤いことがある。
 
 ## コードの約束
 
@@ -34,7 +35,7 @@
 - **`src/` と `tests/` はディレクトリ構成を対応させる。** `src/engine/match.ts` のテストは `tests/engine/match.test.ts`。`tests/` には固有のディレクトリとして `fixtures/`（テストデータ）と `scenarios/`（結合シナリオ）がある。
 - **bitbank 互換ルートは [`src/routes/envelope.ts`](src/routes/envelope.ts) の `ok()` / `err()` で bitbank 封筒に包む。** 成功は `{ success: 1, data }`、失敗は `{ success: 0, data: { code } }`。エラーは同ファイルの `ErrorCode` にある bitbank の error code を返す（例: 残高不足 `60001`、注文が見つからない `50009`）。
 - 互換ルートのパスは `/v1/user/...`（`src/routes/` の各ファイル）。登録は [`src/server/http.ts`](src/server/http.ts) の `buildServer()`。
-- **`/_control/` は bitbank API に存在しない実験用の口で、素の JSON を返す。** 封筒には包まず、HTTP ステータス（400 / 403 / 404 / 409）で失敗を表す。実装は [`src/routes/control.ts`](src/routes/control.ts)。`BITBANK_MOCK_CONTROL=1` のときだけ登録され、非ループバックからは `X-Control-Token` の一致を要求する。
+- **`/_control/` は bitbank API に存在しない実験用の口で、素の JSON を返す。** 封筒には包まず、HTTP ステータス（400 / 403 / 404 / 409。状態ファイルへの書き出しに失敗した後は、状態を変える口が 503）で失敗を表す。実装は [`src/routes/control.ts`](src/routes/control.ts)。`BITBANK_MOCK_CONTROL=1` のときだけ登録され、非ループバックからは `X-Control-Token` の一致を要求する。
 - **注文の単一の真実は [`src/engine/state.ts`](src/engine/state.ts) の `OrderRecord`。** 注文状態・約定量・約定代金はここに集約する。状態全体は `PaperState`（zod スキーマ、`version: 3`）。
 - **[`src/engine/invariants.ts`](src/engine/invariants.ts) の不変量は常に保つ**（`executedAmount` の範囲、status と約定量の整合、trade 合計と `executedAmount` / `executedNotional` の一致、残高が負にならない、拘束量が残高を超えない）。**状態を変える変更を入れたら `tests/engine/invariants.test.ts` も確認する**（fast-check によるランダム操作列のプロパティテスト）。
 - **コメントとドキュメントは日本語**で書く。

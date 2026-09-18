@@ -10,6 +10,7 @@ import {
   type PaperState,
   type TradeRecord,
 } from "./state.ts";
+import type { Result } from "./types.ts";
 
 /**
  * `fillOrder` が全約定へクランプする閾値。残量との差がこれ以下なら残量ちょうどを約定させ、
@@ -20,7 +21,6 @@ import {
  * 必要は無い。理由は `AMOUNT_ABS_TOL` の項に実測付きで書いてある。
  */
 const AMOUNT_EPS = 1e-12;
-import type { Result } from "./types.ts";
 
 export const TransitionError = {
   ORDER_NOT_FOUND: "ORDER_NOT_FOUND",

@@ -29,7 +29,7 @@ export const READ_ROUTES: ReadonlySet<string> = new Set([
  * 劣化中に断る経路。
  *
  * 判定そのものは「読み取りに無ければ断る」という fail-closed なので、この集合は
- * **列挙漏れを起動時に落とすため**だけにある（`assertRoutesClassified()`）。
+ * **列挙漏れを起動時に落とすため**だけにある（`assertRouteClassified()`）。
  * 新しい経路を足した人は、どちらかに載せるまでサーバを起動できない。
  */
 export const MUTATING_ROUTES: ReadonlySet<string> = new Set([

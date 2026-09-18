@@ -5,6 +5,48 @@ import { setupBuildTestServer } from "./helpers.ts";
 describe("GET /v1/user/assets", () => {
   const build = setupBuildTestServer();
 
+  /**
+   * 残高が無くても必ず出る資産の一覧を固定する（`src/routes/format.ts` の `KNOWN_ASSETS`）。
+   *
+   * **この 10 個に公式の根拠は無い**（`docs/fidelity.md` の「assets に出る資産」行に
+   * 未確定として記録した）。根拠が無いものこそ黙って変わると気づけないので、
+   * ここで並びごと固定しておく。実 API を測って変えるときは、この期待値も同じ PR で動かす。
+   *
+   * **`src/engine/pairs.ts` の `OFFICIAL_PAIRS`（62 ペア＝48 資産）とは別の集合**である。
+   * ペアを足しても assets の既定は増えない、という非連動をここで示す。
+   */
+  it("残高が無くても固定の 10 資産を返し、残高のある資産だけが足される", async () => {
+    const { fastify } = await build(buildState({ balances: {} }));
+    const read = async () => {
+      const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { data: { assets: { asset: string }[] } };
+      return body.data.assets.map((a) => a.asset);
+    };
+
+    expect(await read()).toEqual([
+      "jpy",
+      "btc",
+      "eth",
+      "xrp",
+      "ltc",
+      "bcc",
+      "mona",
+      "xlm",
+      "qtum",
+      "bat",
+    ]);
+
+    // 一覧に無い資産は、残高を持って初めて現れる（公式ペア一覧に居ても現れない）。
+    const { fastify: withSol } = await build(buildState({ balances: { sol: 2 } }));
+    const res = await withSol.inject({ method: "GET", url: "/v1/user/assets" });
+    const assets = (res.json() as { data: { assets: { asset: string }[] } }).data.assets.map(
+      (a) => a.asset,
+    );
+    expect(assets).toHaveLength(11);
+    expect(assets).toContain("sol");
+  });
+
   it("returns assets with locked/free split", async () => {
     const state = buildState({
       balances: { jpy: 1_000_000, btc: 0.5 },

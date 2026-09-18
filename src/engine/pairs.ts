@@ -16,7 +16,8 @@
  * **写したのはペア名と停止フラグだけで、公式表の base / quote 列は持たない。**
  * 公式表は `sky_jpy` の base を `sui` と書いており（2026-09-17 時点。誤記とみられる）、
  * 列をそのまま信じると名前と食い違う。base / quote が要るところは今までどおり
- * `pairAssets()` がペア名から導く。
+ * `pairAssets()`（**`src/engine/state.ts`** にある。ペア名の解析はこのファイルではない）が
+ * ペア名から導く。
  *
  * **一覧が古くなる方向の失敗は避けられない。** bitbank が新しいペアを足しても、この表は
  * 誰かが更新するまで古いままで、本物なら通る発注をモックが `40017` で断る。上場は
@@ -104,7 +105,8 @@ export const OFFICIAL_PAIRS: readonly PairSpec[] = [
   { pair: "lpt_jpy", orderSuspended: false },
   { pair: "atom_jpy", orderSuspended: false },
   { pair: "sui_jpy", orderSuspended: false },
-  { pair: "sky_jpy", orderSuspended: false },];
+  { pair: "sky_jpy", orderSuspended: false },
+];
 
 const KNOWN_PAIRS: ReadonlySet<string> = new Set(OFFICIAL_PAIRS.map((p) => p.pair));
 
