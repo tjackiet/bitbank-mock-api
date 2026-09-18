@@ -16,6 +16,26 @@ import { describe, expect, it } from "vitest";
 
 const FIDELITY = readFileSync("docs/fidelity.md", "utf8");
 
+/** 正規表現に埋めるための退避。 */
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** `#` で始まる見出しの名前。 */
+const HEADINGS = new Set([...FIDELITY.matchAll(/^#{1,6}\s+(.+?)\s*$/gm)].map((m) => m[1]));
+
+/**
+ * その名前が節・論点の見出しとして実在するか。
+ *
+ * **見出しだけに絞ると落ちる。** `docs/fidelity.md` には太字の段落を見出し代わりに
+ * 使っている論点が 3 つあり（「不変量 5 と \`fillOrder\` のクランプ」「不変量の前提」
+ * 「資産キー・ペア名で引く地図」）、そこを指す参照が実在する。実測して確かめた。
+ *
+ * 逆に**本文のどこかに出るだけ**で通すと、節を消しても語がどこかに残っていれば
+ * 「ある」と報告してしまう。だから見出しか行頭の太字か、のどちらかを要求する。
+ */
+function isAnchor(name: string): boolean {
+  return HEADINGS.has(name) || new RegExp(`^\\*\\*${escapeRegExp(name)}`, "m").test(FIDELITY);
+}
+
 /** 追跡対象のソースとドキュメント。ビルド生成物や node_modules を拾わないよう git に聞く。 */
 function trackedFiles(): string[] {
   return execFileSync("git", ["ls-files"], { encoding: "utf8" })
@@ -62,7 +82,7 @@ describe("docs/fidelity.md への参照", () => {
     const missing: string[] = [];
     for (const f of files) {
       for (const name of referencedNames(readFileSync(f, "utf8"))) {
-        if (!FIDELITY.includes(name)) missing.push(`${f}: 「${name}」`);
+        if (!isAnchor(name)) missing.push(`${f}: 「${name}」`);
       }
     }
     expect(missing, `docs/fidelity.md に無い: ${missing.join(" / ")}`).toEqual([]);
@@ -78,7 +98,7 @@ describe("docs/fidelity.md への参照", () => {
     for (const f of files) {
       const text = readFileSync(f, "utf8");
       for (const item of items) {
-        const re = new RegExp(`「${item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}」[^。、）\\n]{0,6}行`);
+        const re = new RegExp(`「${escapeRegExp(item)}」[^。、）\\n]{0,6}行`);
         if (re.test(text)) stale.push(`${f}: 「${item}」…行`);
       }
     }
