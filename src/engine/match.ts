@@ -15,7 +15,7 @@ const MAX_LOOKBACK_MS = 24 * 60 * 60 * 1000;
  * `POST /_control/tick` と `SessionStore.tick()` の 2 つで、後者は互換ルートの先頭から
  * 走る。throw はハンドラの未捕捉例外になるので、`/v1/user/...` が bitbank 封筒でない
  * 500（`{"statusCode":500,...}`）を返していた。劣化中も通す読み取り経路である
- * `POST /v1/user/spot/orders_info`（Nyx のリコンサイルの主経路）まで落ちる。
+ * `POST /v1/user/spot/orders_info`（注文状態の照合の主経路）まで落ちる。
  *
  * 到達する state ファイルは 2 つ実測している。どちらも docs/fidelity.md が
  * 「起動はするが 500 にはならない」と書いていたものである。

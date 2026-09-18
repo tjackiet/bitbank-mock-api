@@ -364,7 +364,7 @@ describe("経路の分類", () => {
     expect(routeKey("HEAD", "/v1/user/assets")).toBe("GET /v1/user/assets");
   });
 
-  // メソッドで機械的に判定すると Nyx のリコンサイルの主経路を劣化中に殺す。
+  // メソッドで機械的に判定すると注文状態の照合の主経路を劣化中に殺す。
   it("POST /v1/user/spot/orders_info は読み取りとして分類されている", () => {
     expect(READ_ROUTES.has("POST /v1/user/spot/orders_info")).toBe(true);
     expect(MUTATING_ROUTES.has("POST /v1/user/spot/orders_info")).toBe(false);

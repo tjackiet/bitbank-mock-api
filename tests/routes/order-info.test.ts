@@ -488,7 +488,7 @@ describe("不正な id の error code（実測に合わせた）", () => {
     expect(await post({ pair: "btc_jpy", order_ids: [1.5] })).toBe(40014);
   });
 
-  // 一番大きな差。以前は success: 1 と空の一覧を返しており、DCL のリコンサイルの
+  // 一番大きな差。以前は success: 1 と空の一覧を返しており、注文状態の照合の
   // 主経路で実 API と成否が逆になっていた。
   it("orders_info: 空配列は 40014（success: 1 ではない）", async () => {
     expect(await post({ pair: "btc_jpy", order_ids: [] })).toBe(40014);

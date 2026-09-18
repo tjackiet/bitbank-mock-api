@@ -234,8 +234,8 @@ export type LoadStateOptions = {
  *
  * zod スキーマは形しか見ないので、`executedAmount > startAmount` や負の残高のように
  * 不変量だけを破る状態ファイルはスキーマを通ってしまう。docs/fidelity.md の
- * 「状態の不変量（PaperState v3）」は Nyx 仕様書 D1 の前提なので、破れた状態のまま
- * 応答を返すと（負の `remaining_amount` など）先方の証明の前提が崩れる。壊れた JSON と
+ * 「状態の不変量（PaperState v3）」は本モックの応答が意味を持つための前提なので、破れた
+ * 状態のまま応答を返すと（負の `remaining_amount` など）読み手の前提が崩れる。壊れた JSON と
  * 同じ fail-closed に揃え、違反を見つけたら起動させない。
  *
  * ただし fail-closed にするのは**もともと v3 だったファイルだけ**。v1 / v2 から移行した
@@ -245,7 +245,7 @@ export type LoadStateOptions = {
  *
  * 不変量の**前提**（注文 id / trade id の一意性、採番と既存 id の整合、`startAmount > 0`）も
  * 同じ扱いで検査する（`preconditionViolations()`）。前提の違反は不変量とは別の関数・別の
- * メッセージにする。6 本は Nyx 仕様書 D1 と対応していて本数も内容も変えないからで、
+ * メッセージにする。6 本は前提条件として固定してあり本数も内容も変えないからで、
  * 前提を混ぜると 7 本目に見える。
  *
  * 前提を破って落とすときは不変量の違反を並べない。`invariantViolations()` の文字列は注文を
