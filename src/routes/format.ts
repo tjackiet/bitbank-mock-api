@@ -1,7 +1,6 @@
 import {
   amountOf,
   computeLocked,
-  DEFAULT_TAKER_FEE_RATE,
   isActive,
   remainingOf,
   type OrderRecord,
@@ -169,8 +168,15 @@ export type AssetShape = {
 /**
  * `GET /v1/user/assets` の資産一覧を組み立てる。既知資産に state の残高と
  * 拘束額のキーを足した集合を返し、金額は宣言する `amount_precision` の桁で揃える。
+ *
+ * **`feeRate` に既定値を持たせない。** 拘束額は `price × amount × (1 + feeRate)` なので、
+ * 渡し忘れると発注ガード（`availableOf` は `SessionStore` の率で引く）と応答の
+ * `locked_amount` が別の率で計算され、**free_amount が発注できる量と食い違う**。
+ * 既定値があったころは実際に `src/routes/assets.ts` が渡し忘れており、率を `0.05` に
+ * した状態で拘束 1,050,000 に対し応答は 1,001,200（既定 0.0012）を返していた。
+ * typecheck もテスト 437 件も通ってしまうので、呼び出し側に必ず書かせる。
  */
-export function formatAssets(state: PaperState, feeRate: number = DEFAULT_TAKER_FEE_RATE): {
+export function formatAssets(state: PaperState, feeRate: number): {
   assets: AssetShape[];
 } {
   const locked = computeLocked(state, feeRate);

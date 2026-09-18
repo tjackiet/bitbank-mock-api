@@ -76,6 +76,32 @@ describe("GET /v1/user/assets", () => {
     expect(Number(btc?.onhand_amount)).toBe(0.5);
   });
 
+  /**
+   * 拘束額は `SessionStore` の料率で計算する。**既定の料率では検査にならない。**
+   *
+   * `formatAssets()` の `feeRate` に既定値があったころ、`src/routes/assets.ts` は渡し忘れて
+   * いた。それでも既定の料率どうしだと値が一致するので、typecheck もテスト 437 件も通った。
+   * 料率を動かして初めて差が出る（下の 48,800 JPY）。
+   *
+   * ずれると実害がある。発注ガードは `availableOf()` を store の料率で引くので、
+   * 応答の `free_amount` を見て発注量を決める利用側が、通ると見た注文を `60001` で断られる。
+   */
+  it("locked_amount は store の料率で計算する（既定値へ落とさない）", async () => {
+    const state = buildState({
+      balances: { jpy: 100_000_000 },
+      orders: [buildOrder({ id: "1", side: "buy", price: 1_000_000, startAmount: 1 })],
+    });
+    const { fastify } = await build(state, {}, { feeRate: 0.05 });
+    const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
+    const body = res.json() as { data: { assets: { asset: string; locked_amount: string }[] } };
+    const jpy = body.data.assets.find((a) => a.asset === "jpy");
+
+    // 1,000,000 × 1 × (1 + 0.05)
+    expect(jpy?.locked_amount).toBe("1050000.0000");
+    // 既定料率 0.0012 なら 1,001,200。渡し忘れるとこちらになる。
+    expect(jpy?.locked_amount).not.toBe("1001200.0000");
+  });
+
   // `constructor` は Object.prototype が持つ名前なので、素の {} から引くと関数が返り、
   // free_amount が "NaN"、onhand_amount が関数のソース文字列になって応答に漏れていた。
   it("formats an asset named like an Object.prototype key as a decimal string", async () => {
