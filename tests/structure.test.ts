@@ -57,7 +57,9 @@ const SRC_WITHOUT_TEST: Record<string, string> = {
  */
 const TEST_WITHOUT_SRC: Record<string, string> = {
   "structure.test.ts": "この対応表そのもの",
-  "docs.test.ts": "docs の参照と対応表の形を見る。src の 1 モジュールに対応しない",
+  "docs.test.ts":
+    "`docs/fidelity.md` の参照と対応表の形、`README.md` の環境変数一覧を見る。" +
+    "src の 1 モジュールに対応しない",
   "routes/pair-whitelist.test.ts": "ペアの実在性を検査する経路／しない経路を横断して見る",
   "routes/tick.test.ts": "互換ルートが必ず `SessionStore.tick()` を通ることを横断して見る",
   "server/not-found.test.ts": "経路が見つからない要求の応答を、互換ルートと `/_control/` の両方で見る",

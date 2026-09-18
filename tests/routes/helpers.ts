@@ -21,6 +21,14 @@ export type TestServerOptions = {
   controlEnabled?: boolean;
   /** 既定は捨てる。ログの副作用が応答に出ないことを見るテストだけが渡す。 */
   logger?: Logger;
+  /**
+   * 既定は `SessionStore` の既定料率（`DEFAULT_TAKER_FEE_RATE`）。
+   *
+   * **率が経路の端まで通っているかを見るテストだけが渡す。** 既定のままだと、率を
+   * 渡し忘れた経路と渡した経路が同じ値になり区別できない（実際 `GET /v1/user/assets` は
+   * 渡し忘れていた）。
+   */
+  feeRate?: number;
 };
 
 export async function buildTestServer(
@@ -33,6 +41,7 @@ export async function buildTestServer(
     fillMode: opts.fillMode ?? "market",
     fetchCandles: stubFetchCandles(candlesByPair),
     logger: opts.logger,
+    feeRate: opts.feeRate,
   });
   const fastify = await buildServer({
     store,

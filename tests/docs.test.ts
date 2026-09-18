@@ -36,6 +36,30 @@ function isAnchor(name: string): boolean {
   return HEADINGS.has(name) || new RegExp(`^\\*\\*${escapeRegExp(name)}`, "m").test(FIDELITY);
 }
 
+const README = readFileSync("README.md", "utf8");
+
+/**
+ * `src/` が読む環境変数の名前。`process.env.X` と、`env` を引数で受ける形（`env.X`）の両方を拾う。
+ * `src/server/config.ts` は既定引数 `env: NodeJS.ProcessEnv = process.env` で受けるので、
+ * `process.env.` だけを探すと 9 個中 6 個を取り逃がす（実測した）。
+ */
+function envNamesInSrc(files: string[]): Map<string, string[]> {
+  const found = new Map<string, string[]>();
+  for (const f of files.filter((x) => x.startsWith("src/"))) {
+    for (const m of readFileSync(f, "utf8").matchAll(/\benv\.([A-Z][A-Z0-9_]*)/g)) {
+      found.set(m[1]!, [...(found.get(m[1]!) ?? []), f]);
+    }
+  }
+  return found;
+}
+
+/** README の「環境変数」節に `\`名前\`` として出る語。 */
+function envNamesInReadme(): Set<string> {
+  const after = README.split("## 環境変数")[1] ?? "";
+  const section = after.split("\n## ")[0]!;
+  return new Set([...section.matchAll(/`([A-Z][A-Z0-9_]*)`/g)].map((m) => m[1]!));
+}
+
 /** 追跡対象のソースとドキュメント。ビルド生成物や node_modules を拾わないよう git に聞く。 */
 function trackedFiles(): string[] {
   return execFileSync("git", ["ls-files"], { encoding: "utf8" })
@@ -161,5 +185,32 @@ describe("docs/fidelity.md 対応表の形", () => {
       if ((line?.replace("- **推測**: ", "") ?? "").trim() === "") empty.push(item);
     }
     expect(empty, `推測かどうかが書かれていない: ${empty.join(" / ")}`).toEqual([]);
+  });
+});
+
+/**
+ * CLAUDE.md は「環境変数の一覧は `README.md` の「環境変数」節」と指示する。
+ * その一覧が実際に全部を載せているかを見る。
+ *
+ * 一覧が欠けても**誰も落ちない**——コードは読めるし、README は間違っていないように見える。
+ * 気づくのは、設定したのに効かないと悩んだ人が `src/` を grep したときになる。
+ * `docs/fidelity.md` の参照を機械で見るのと同じ理由でここに置く。
+ */
+describe("README.md の環境変数一覧", () => {
+  const files = trackedFiles();
+  const inSrc = envNamesInSrc(files);
+  const inReadme = envNamesInReadme();
+
+  it("導出が空振りしていない", () => {
+    // 見出しを変えたり読み方を変えたりすると、両方が空になって全部通ってしまう。
+    expect(inSrc.size).toBeGreaterThan(5);
+    expect(inReadme.size).toBeGreaterThan(5);
+  });
+
+  it("`src/` が読む環境変数がすべて載っている", () => {
+    const missing = [...inSrc]
+      .filter(([name]) => !inReadme.has(name))
+      .map(([name, where]) => `${name}（${where.join(", ")}）`);
+    expect(missing, `README.md の「環境変数」節へ追記する: ${missing.join(" / ")}`).toEqual([]);
   });
 });

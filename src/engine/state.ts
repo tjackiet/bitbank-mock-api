@@ -12,12 +12,40 @@ export const ORDER_STATUSES = [
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
-export const TERMINAL_STATUSES = [
-  "FULLY_FILLED",
-  "CANCELED_UNFILLED",
-  "CANCELED_PARTIALLY_FILLED",
-  "REJECTED",
-] as const;
+/** 注文状態の 3 分類。`active` と `terminal` の意味は下の `STATUS_KIND` を見る。 */
+type StatusKind = "pending" | "active" | "terminal";
+
+/**
+ * どの状態がどの分類かを 1 か所で持つ。
+ *
+ * - `pending`: まだ板に出ていない（`INACTIVE`。逆指値の待機で、Plan A では到達しない）
+ * - `active`: 板にあり、約定・取消・拒否の対象になる。残高を拘束するのもこの分類だけ
+ * - `terminal`: 以後の遷移で変化しない（不変量 4）
+ *
+ * **`ORDER_STATUSES` に状態を足したら、ここへ載せるまで typecheck が通らない。**
+ * 分類を `isActive()` と `TERMINAL_STATUSES` が別々に並べていたころは、足した状態が
+ * どちらにも載らないまま「active でも terminal でもない」へ落ちていた。実測すると
+ * `ORDER_STATUSES` に 1 つ足しても typecheck もテスト 437 件も通ってしまい、
+ * 拘束（`computeLocked`）からも終端ガード（`transitions.ts` の `ORDER_NOT_ACTIVE`）からも
+ * 黙って外れる。`Record<OrderStatus, StatusKind>` にすれば漏れは型で落ちる。
+ *
+ * 網羅を 1 か所で締める発想は `src/server/degraded.ts` の `assertRouteClassified()` と同じ。
+ * あちらは起動時に throw し、こちらは typecheck で落とす。
+ */
+const STATUS_KIND = {
+  INACTIVE: "pending",
+  UNFILLED: "active",
+  PARTIALLY_FILLED: "active",
+  FULLY_FILLED: "terminal",
+  CANCELED_UNFILLED: "terminal",
+  CANCELED_PARTIALLY_FILLED: "terminal",
+  REJECTED: "terminal",
+} as const satisfies Record<OrderStatus, StatusKind>;
+
+/** 終端状態。`STATUS_KIND` から導くので、分類と食い違うことはない。 */
+export const TERMINAL_STATUSES: readonly OrderStatus[] = ORDER_STATUSES.filter(
+  (s) => STATUS_KIND[s] === "terminal",
+);
 
 export const OrderRecordSchema = z.object({
   id: z.string(),
@@ -102,11 +130,11 @@ export function genId(): string {
 }
 
 export function isActive(o: OrderRecord): boolean {
-  return o.status === "UNFILLED" || o.status === "PARTIALLY_FILLED";
+  return STATUS_KIND[o.status] === "active";
 }
 
 export function isTerminal(o: OrderRecord): boolean {
-  return (TERMINAL_STATUSES as readonly OrderStatus[]).includes(o.status);
+  return STATUS_KIND[o.status] === "terminal";
 }
 
 export function activeOrders(state: PaperState): OrderRecord[] {
