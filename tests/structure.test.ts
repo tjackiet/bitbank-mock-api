@@ -20,7 +20,13 @@ import { describe, expect, it } from "vitest";
  *    エントリを消すまで落ちる。これが無いと許可リストだけが増え続ける
  */
 
-/** `tests/` 固有のディレクトリ。`src/` に対応物を持たない（CLAUDE.md に明記がある）。 */
+/**
+ * `tests/` 固有のディレクトリ。`src/` 側に同名のディレクトリを作らせないためだけに持つ。
+ *
+ * **配下のテストを検査から外すためではない。** 一括で除外すると、ここへ置いた
+ * 普通の単体テストが黙って対応検査をすり抜ける。`scenarios/` の各ファイルは
+ * 下の `TEST_WITHOUT_SRC` に 1 件ずつ理由つきで載せてある。
+ */
 const TESTS_ONLY_DIRS = ["fixtures", "scenarios"];
 
 /**
@@ -54,22 +60,24 @@ const TEST_WITHOUT_SRC: Record<string, string> = {
   "routes/pair-whitelist.test.ts": "ペアの実在性を検査する経路／しない経路を横断して見る",
   "routes/tick.test.ts": "互換ルートが必ず `SessionStore.tick()` を通ることを横断して見る",
   "server/not-found.test.ts": "経路が見つからない要求の応答を、互換ルートと `/_control/` の両方で見る",
+  "scenarios/plan-a.test.ts": "結合シナリオ。発注から約定までを複数モジュールにまたがって通す",
+  "scenarios/large-amount-fill.test.ts": "結合シナリオ。大きな数量での約定を端から端まで通す",
 };
 
 /** ディレクトリ配下の相対パスを再帰で集める。 */
 function walk(root: string, dir = root): string[] {
   return readdirSync(join(root, dir === root ? "" : dir))
     .flatMap((name) => {
-      const rel = dir === root ? name : join(dir, name);
+      // 論理パスは常に `/` で組む。`join()` は Windows で `\` を返すので、
+      // 許可リストの鍵（`engine/types.ts`）と一致しなくなる。fs アクセスには join を使う。
+      const rel = dir === root ? name : `${dir}/${name}`;
       return statSync(join(root, rel)).isDirectory() ? walk(root, rel) : [rel];
     })
     .sort();
 }
 
 const srcFiles = walk("src").filter((f) => f.endsWith(".ts"));
-const testFiles = walk("tests")
-  .filter((f) => f.endsWith(".test.ts"))
-  .filter((f) => !TESTS_ONLY_DIRS.some((d) => f.startsWith(`${d}/`)));
+const testFiles = walk("tests").filter((f) => f.endsWith(".test.ts"));
 
 /** `engine/match.ts` → `engine/match.test.ts`。 */
 const testNameOf = (src: string) => src.replace(/\.ts$/, ".test.ts");
@@ -102,6 +110,15 @@ describe("src/ と tests/ の対応", () => {
    * エントリを消すまでここが落ちる。放っておくと許可リストだけが増えて規約が形骸化する。
    */
   it("例外の許可リストに古いエントリが残っていない", () => {
+    // 理由の無い例外を許さない。値が `string` なだけだと空文字でも通ってしまい、
+    // 「理由つきで持つ」という前提が空洞になる。
+    for (const [file, reason] of [
+      ...Object.entries(SRC_WITHOUT_TEST),
+      ...Object.entries(TEST_WITHOUT_SRC),
+    ]) {
+      expect(reason.trim(), `${file} の理由が空`).not.toBe("");
+    }
+
     const solved = Object.keys(SRC_WITHOUT_TEST).filter((f) => testFiles.includes(testNameOf(f)));
     expect(solved, `テストが付いたので SRC_WITHOUT_TEST から消す: ${solved.join(", ")}`).toEqual([]);
 
