@@ -4,7 +4,7 @@
 
 ## プロジェクトの位置づけ
 
-- Nyx Foundation 共同研究向けの bitbank Private REST API モック（パッケージ名 `bitbank-lab-mock`、リポジトリ名 `bitbank-mock-api`）。
+- 挙動確認・検証目的で作成している bitbank Private REST API モック（パッケージ名 `bitbank-lab-mock`、リポジトリ名 `bitbank-mock-api`）。
 - **bitbank 公式のテスト環境ではない。** 公開ドキュメントに準拠した近似であり、動作保証はしない。bitbank バグバウンティプログラムの対象範囲外。
 - 本物との差分は [`docs/fidelity.md`](docs/fidelity.md) を正とする。挙動の根拠を確認するときは実装よりまずこの表を読む。
 - 計画の詳細は [`docs/plan-lab-mock.md`](docs/plan-lab-mock.md)、設計は [`docs/design.md`](docs/design.md)。
@@ -23,7 +23,7 @@
 
 ## 必須の規約
 
-- **公式ドキュメントに明記されない挙動を決めたら、実装と同じ PR で `docs/fidelity.md` に追記する。** [`.github/pull_request_template.md`](.github/pull_request_template.md) のチェックリスト項目であり、共同研究の前提条件書としての `docs/fidelity.md` の役割そのもの。
+- **公式ドキュメントに明記されない挙動を決めたら、実装と同じ PR で `docs/fidelity.md` に追記する。** [`.github/pull_request_template.md`](.github/pull_request_template.md) のチェックリスト項目であり、挙動の前提を記録するという `docs/fidelity.md` の役割そのもの。
 - **`npm test` と `npm run typecheck` を green にしてから PR を出す。** これも PR テンプレートのチェックリストにある。
 - CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は **Node 24** で `npm ci` → `npm run typecheck` → `npm test` を走らせる。`package.json` の `engines.node` は `>=20` なので、ローカルが 20 系でも CI は 24 で通る必要がある。
 

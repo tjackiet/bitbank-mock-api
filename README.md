@@ -3,7 +3,7 @@
 [![CI](https://github.com/tjackiet/bitbank-mock-api/actions/workflows/ci.yml/badge.svg)](https://github.com/tjackiet/bitbank-mock-api/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Nyx Foundation 共同研究向けの、bitbank Private REST API モック。注文の状態を持つ挙動確認用であり、**bitbank 公式のテスト環境ではない**。
+挙動確認・検証目的で作成している、bitbank Private REST API モック。注文の状態を持つ挙動確認用であり、**bitbank 公式のテスト環境ではない**。
 
 旧リポジトリ名は `bitbank-mock-api`。
 
@@ -22,13 +22,13 @@ Plan A（v0.1.0）で実装しているのは次の 3 つです。
 - **R1** `GET /v1/user/spot/order` と `POST /v1/user/spot/orders_info` による照会
 - **R2** 実験用の `/_control/`（市場に依存せず約定を起こす）
 
-DCL のリコンサイルは `orders_info` を主経路にします。private stream（R4）は未実装です。
+注文状態の照合（リコンサイル）は `orders_info` を主経路にします。private stream（R4）は未実装です。
 
 ## `mock-bitbankcc` との棲み分け
 
 | | 本リポジトリ | [`bitbankinc/mock-bitbankcc`](https://github.com/bitbankinc/mock-bitbankcc) |
 | --- | --- | --- |
-| 用途 | 注文状態を持つ挙動確認・共同研究 | SDK テスト用の静的スタブ |
+| 用途 | 注文状態を持つ挙動確認・検証 | SDK テスト用の静的スタブ |
 | 実装 | 仮想残高・約定・永続化 | WireMock の固定レスポンス |
 | 公式テスト環境か | いいえ | いいえ |
 
@@ -89,7 +89,7 @@ v1 / v2 の状態ファイルを v3 へ移行した結果が不変量を破っ�
 
 ## `/_control/`
 
-bitbank API には存在しません。DCL や本番クライアントから叩かないでください。応答は bitbank 封筒ではなく素の JSON です。
+bitbank API には存在しません。本番クライアントから叩かないでください。応答は bitbank 封筒ではなく素の JSON です。
 
 | メソッド | パス | 動作 |
 | --- | --- | --- |
@@ -133,7 +133,7 @@ npm run typecheck
 
 ### 金融商品取引法上の位置づけ
 
-本ツールは情報提供および共同研究上の挙動確認のみを目的として提供されるものであり、投資助言・代理業、投資勧誘、その他金融商品取引法上の行為を目的とするものではありません。
+本ツールは情報提供および挙動確認・検証のみを目的として提供されるものであり、投資助言・代理業、投資勧誘、その他金融商品取引法上の行為を目的とするものではありません。
 
 ### 外部サービスへの依拠
 

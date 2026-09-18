@@ -718,7 +718,7 @@ describe("runTick が約定を適用できないとき", () => {
     expect(get.statusCode).toBe(200);
     expect(get.json()).toMatchObject({ success: 1 });
 
-    // 劣化中も通す読み取り経路（Nyx のリコンサイルの主経路）も落ちない。
+    // 劣化中も通す読み取り経路（注文状態の照合の主経路）も落ちない。
     const info = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/orders_info",

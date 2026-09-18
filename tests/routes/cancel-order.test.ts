@@ -165,7 +165,7 @@ describe("POST /v1/user/spot/cancel_orders", () => {
    * id と pair の両方で照合するので、どちらも `undefined` になって `continue` へ落ちる。
    *
    * 重複 id と併せて、応答の `orders` が `order_ids` より短くなる経路はこの 3 つである
-   * （docs/fidelity.md の「取消済み・約定済みの取消」行）。Nyx が件数の一致で成否を
+   * （docs/fidelity.md の「取消済み・約定済みの取消」行）。呼び出し側が件数の一致で成否を
    * 判定できないのはこのため。
    */
   it("skips ids that do not resolve to an order of the requested pair", async () => {

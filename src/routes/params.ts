@@ -41,7 +41,7 @@ export function isOrderIdValue(v: unknown): boolean {
  * `order_ids` が id の配列になっているか。**空配列は偽**。
  *
  * 実 API は `[]` を `40014` で弾く（2026-09-17 実測）。モックは以前 `success: 1` と
- * 空の一覧を返しており、**DCL のリコンサイルの主経路で成否が逆になっていた**。
+ * 空の一覧を返しており、**注文状態の照合の主経路で成否が逆になっていた**。
  */
 export function isOrderIdArray(v: unknown): boolean {
   return Array.isArray(v) && v.length > 0 && v.every(isOrderIdValue);
@@ -88,7 +88,7 @@ const QUERY_PARAM_CODES: Record<string, ErrorCodeValue> = {
  * **実 API で裏が取れているのは `count` が `end` / `since` より先であることだけ**
  * （2026-09-17、`count=&end=` / `end=&count=` / `since=&count=` の 3 本がすべて `40006`）。
  * `from_id` / `end_id` を含む組み合わせの相対順は未実測なので、この並びは推測を含む。
- * Nyx は複数不正時のコード選択に依存しないこと（docs/fidelity.md の同行）。
+ * 読み手は複数不正時のコード選択に依存しないこと（docs/fidelity.md の同行）。
  */
 const QUERY_PARAM_ORDER = ["count", "from_id", "end_id", "since", "end"] as const;
 

@@ -12,7 +12,7 @@ export type PersistFailureMode = "degrade" | "ignore";
  * 劣化中も通す読み取り経路（`<METHOD> <ルートの url>`）。
  *
  * **`POST /v1/user/spot/orders_info` が読み取りである点に注意。** メソッドで機械的に
- * 判定すると、Nyx のリコンサイルの主経路（`docs/plan-lab-mock.md` の R1）を劣化中に殺す。
+ * 判定すると、注文状態の照合の主経路（`docs/plan-lab-mock.md` の R1）を劣化中に殺す。
  *
  * `HEAD` は Fastify が `GET` から自動登録するので、判定では `GET` と同じに扱う。
  */

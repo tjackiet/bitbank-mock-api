@@ -84,23 +84,22 @@ describe("plan A scenario: place then control fill", () => {
 });
 
 /**
- * DCL の委譲枠とモックの拘束額が食い違う境界を固定する。
+ * 手数料を含めない拘束額の見積もりと、モックの拘束額が食い違う境界を固定する。
  *
- * Nyx の DCL は `reserved = price × size`（手数料なし。提案書 6.3）で委譲枠を見るが、
- * モックは `price × amount × (1 + feeRate)` を拘束する（`computeLocked`）。そのため
- * **委譲枠と口座残高が近いとき、DCL が許可した注文をモックが `60001` で断る**
- * （`docs/plan-lab-mock.md` 1.4 節の最終行）。
+ * 呼び出し側が `price × size`（手数料なし）で発注可能量を見積もると、モックは
+ * `price × amount × (1 + feeRate)` を拘束する（`computeLocked`）ので数字が合わない。そのため
+ * **見積もりと口座残高が近いとき、呼び出し側が通ると見た注文をモックが `60001` で断る**。
  *
  * **2026-09-17 に実測して決着した。** 実 API に約定しない指値買いを 1 本置いて
  * `locked_amount` の増分を測ったところ、建玉額を **taker 料率ぶん（0.12%）上回った**。
  * 指値（maker）注文なのに taker 料率で、maker 料率（リベート）ではなかった。
  *
- * **したがってモックの `computeLocked()` が正しく、ずれているのは DCL の `reserved` の方**で、
+ * **したがってモックの `computeLocked()` が正しく、ずれているのは手数料を含めない見積もりの方**で、
  * ここで固定しているのは「現状」ではなく「実 API と一致する挙動」である。
- * **この `60001` は実 API でも起きる**ので、委譲枠には手数料ぶんの余白が要る。
+ * **この `60001` は実 API でも起きる**ので、発注可能量の見積もりには手数料ぶんの余白が要る。
  * 数値と留保は `docs/fidelity.md` の「拘束額」行。
  */
-describe("plan A scenario: DCL の reserved とモックの拘束額の境界", () => {
+describe("plan A scenario: 手数料を含めない見積もりとモックの拘束額の境界", () => {
   const cleanups: Array<() => Promise<void>> = [];
   afterEach(async () => {
     for (const fn of cleanups.splice(0)) await fn();
@@ -129,8 +128,8 @@ describe("plan A scenario: DCL の reserved とモックの拘束額の境界", 
       payload: { pair: "btc_jpy", amount, price: String(PRICE), side: "buy", type: "limit" },
     });
 
-  // price × size がちょうど残高に一致する注文。DCL はこれを枠内として許可する。
-  it("DCL が枠内と判定する price × size = 残高 の注文を 60001 で断る", async () => {
+  // price × size がちょうど残高に一致する注文。手数料を見ない見積もりでは通る。
+  it("手数料を見ない見積もりでは通る price × size = 残高 の注文を 60001 で断る", async () => {
     const fastify = await build();
     expect(PRICE * 0.2).toBe(BALANCE);
     const body = (await place(fastify, "0.2")).json() as {
@@ -156,7 +155,7 @@ describe("plan A scenario: DCL の reserved とモックの拘束額の境界", 
     expect(ng.data.code).toBe(60001);
   });
 
-  // 拘束額そのものにも手数料が乗っている（DCL が assets を読むなら見える差）。
+  // 拘束額そのものにも手数料が乗っている（呼び出し側が assets を読むなら見える差）。
   it("locked_amount が price × amount を手数料ぶん上回る", async () => {
     const fastify = await build();
     expect((await place(fastify, "0.1997")).json()).toMatchObject({ success: 1 });

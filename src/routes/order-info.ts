@@ -52,7 +52,7 @@ export const orderInfoRoutes: FastifyPluginAsync = async (fastify) => {
     }
     // 実 API は `order_ids` が id の配列でなければ `40014`（2026-09-17 実測。`"1"` /
     // `1` / `[1.5]` / `[]`）。**空配列も弾かれる**点がモックとの一番大きな差で、
-    // 以前は `success: 1` と空の一覧を返していた。DCL のリコンサイルの主経路である。
+    // 以前は `success: 1` と空の一覧を返していた。注文状態の照合の主経路である。
     if (!isOrderIdArray(body.order_ids)) {
       return err(ErrorCode.INVALID_ORDER_ID_ARRAY);
     }

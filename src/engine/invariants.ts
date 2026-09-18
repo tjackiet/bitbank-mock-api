@@ -206,7 +206,7 @@ function seqViolations(kind: "order" | "trade", seq: number, ids: string[]): str
 /**
  * 6 本の不変量が成り立つための**前提**の違反を並べる。違反が無ければ空配列。
  *
- * これは 7 本目の不変量ではない。6 本は Nyx 仕様書 D1 と対応していて本数も内容も変えない
+ * これは 7 本目の不変量ではない。6 本は本モックの前提条件として固定してあり、本数も内容も変えない
  * （docs/fidelity.md の「状態の不変量（PaperState v3）」）。ここで見るのは、その 6 本の主張と
  * `invariantViolations()` の検査が意味を持つために必要な前提である。だから関数を分け、返す
  * 文字列の前置きも不変量の番号ではなく前提の名前（`order-id` / `trade-id` / `order-seq` /
