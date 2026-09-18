@@ -35,7 +35,8 @@ export const ErrorCode = {
    * **かつて不正なペアに流用していたが、やめた**（`INVALID_ASSET` に移した）。実 API が
    * この番号を返すのは経路が見つからないときで、`GET /v1/nonexistent` を**認証ヘッダ無しで**
    * 叩くと `HTTP 404` + 封筒 `10000` を観測できる（2026-09-17）。
-   * モックの未登録パスはまだ Fastify の素の 404 で、封筒に包んでいない（別 PR）。
+   * モックも未登録パスをこの封筒で返す（`src/server/http.ts` の `registerNotFoundHandler()`。
+   * `/v1/user/` 配下だけは実 API に合わせて 200 + `20003`。`/_control/` は対象外）。
    */
   URL_NOT_FOUND: 10000,
   INVALID_AUTH: 20001,

@@ -233,8 +233,14 @@ export class SessionStore {
    * ルートは `await store.persist()` の戻りを見ていないので、ここで投げるとハンドラの
    * 未捕捉例外になり、封筒でない 500 が返る。
    *
-   * 応答を返した注文が再起動後に消える経路がここに残る点は `docs/fidelity.md` の
-   * 「状態の永続化」の行に記録してある（`docs/plan-lab-mock.md` 10 節の PR 3 で扱う）。
+   * **既定（`BITBANK_MOCK_PERSIST_FAILURE=degrade`）では、この失敗の引き金になった要求も
+   * 断る**（`buildServer()` の `preSerialization` が応答を差し替える）。`write()` は互換ルートと
+   * `/_control/` の両方から呼ばれるので、断り方も 2 通りある——互換ルートは封筒の `70001`、
+   * `/_control/` は素の JSON + 503 `PERSIST_DEGRADED`（`src/server/degraded.ts` の
+   * `degradedResponse()`）。
+   * メモリ上の注文は巻き戻さないので、応答は失敗・メモリには残る、という食い違いが残る。
+   * `ignore` を選んだときだけ 2xx が返り、その注文は再起動後に消える。
+   * どちらも `docs/fidelity.md` の「状態の永続化」の行に記録してある。
    * 呼び出し側がそれを検知する手段が `persistHealth()` であり、`GET /_control/state` の
    * `persist` として出る。
    */

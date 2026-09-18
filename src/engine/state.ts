@@ -127,6 +127,7 @@ export function remainingOf(o: OrderRecord): number {
  * ペアを足したときに弾いてしまうので、記号を落とすという目的に必要な分だけ残した。
  * 実在するペアかどうかは検査しない（未登録でも形が正しければ通す。docs/fidelity.md の
  * 「未登録ペアも同じ桁を仮置きする」を保つため）。ここで直したのは文字種であって実在性ではない。
+ * **実在性は `src/engine/pairs.ts` の `isKnownPair()` が別に見る**（routes 側が `40017` を返す）。
  *
  * 記号を落とすことで、pair がそのまま外向き URL のパスセグメントへ流れる経路
  * （src/engine/candles.ts の fetchOneDay）で `..` / `?` / `#` や制御文字が効かなくなる。

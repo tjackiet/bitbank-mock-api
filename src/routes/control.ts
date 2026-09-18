@@ -95,7 +95,8 @@ function syntheticCandle(price: number, timestamp: number): Candle {
 
 /**
  * `/_control/` の実験用ルート群。bitbank API には存在しないので、応答は bitbank 封筒に
- * 包まず素の JSON で返し、失敗は HTTP ステータス（400 / 403 / 404 / 409）で表す。
+ * 包まず素の JSON で返し、失敗は HTTP ステータス（400 / 403 / 404 / 409。状態ファイルへの
+ * 書き出しに失敗した後は状態を変える口が 503）で表す。
  * 登録は `BITBANK_MOCK_CONTROL=1` のときだけ（src/server/http.ts の `buildServer()`）。
  */
 export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fastify, opts) => {

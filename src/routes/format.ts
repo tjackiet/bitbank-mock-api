@@ -11,6 +11,21 @@ import {
 } from "../engine/state.ts";
 import { formatAmount, formatPrice } from "../engine/precision.ts";
 
+// このファイルは「レコード → wire の 1 オブジェクト」を作る。
+// 数値 → ペア桁の文字列にする `formatAmount()` / `formatPrice()` は engine 側
+// （`src/engine/precision.ts`）にあり、別の層である。名前が似ているので取り違えないこと。
+
+/**
+ * 残高が無くても `GET /v1/user/assets` に必ず出す資産。
+ *
+ * **この 10 個という選び方に公式の根拠は無い**（実装当初からの値で、導出も出典も残っていない）。
+ * 公式は「assets が何を返すか」の集合を明記しておらず、実 API も測っていない。
+ * `src/engine/pairs.ts` の `OFFICIAL_PAIRS`（62 ペア＝48 資産）とは**別の集合**で、
+ * 連動していない。残りの 38 資産は残高か拘束を持つまで応答に現れない。
+ *
+ * 変えるなら実 API の実測が要る。未確定であることは `docs/fidelity.md` の
+ * 「assets に出る資産」行に記録した。一覧は `tests/routes/assets.test.ts` が固定している。
+ */
 const KNOWN_ASSETS = ["jpy", "btc", "eth", "xrp", "ltc", "bcc", "mona", "xlm", "qtum", "bat"];
 
 /** 資産残高の桁。jpy は 4、他は 8。応答の amount_precision と同一の値を使う。 */
