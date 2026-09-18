@@ -97,7 +97,7 @@ describe("plan A scenario: place then control fill", () => {
  * **したがってモックの `computeLocked()` が正しく、ずれているのは手数料を含めない見積もりの方**で、
  * ここで固定しているのは「現状」ではなく「実 API と一致する挙動」である。
  * **この `60001` は実 API でも起きる**ので、発注可能量の見積もりには手数料ぶんの余白が要る。
- * 数値と留保は `docs/fidelity.md` の「拘束額」行。
+ * 数値と留保は `docs/fidelity.md` の「拘束額」節。
  */
 describe("plan A scenario: 手数料を含めない見積もりとモックの拘束額の境界", () => {
   const cleanups: Array<() => Promise<void>> = [];

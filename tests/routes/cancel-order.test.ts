@@ -134,7 +134,7 @@ describe("POST /v1/user/spot/cancel_orders", () => {
    * 注文に当たって `cancelOrder` が `ORDER_NOT_ACTIVE` を返す。ルートはそれを読み飛ばす。
    *
    * 応答の `orders` が `order_ids` より短くなる 3 経路のうちの 1 つ（他の 2 つは存在しない id と
-   * 別のペアの id。次のテストで見る）。docs/fidelity.md の「取消済み・約定済みの取消」行が
+   * 別のペアの id。次のテストで見る）。docs/fidelity.md の「取消済み・約定済みの取消」節が
    * 「取消が一部だけ成立する意味での部分成功は起きない」と書いているのと両立する
    * （同じ注文を 1 回取り消しただけで、取り逃した注文は無い）。
    */
@@ -165,7 +165,7 @@ describe("POST /v1/user/spot/cancel_orders", () => {
    * id と pair の両方で照合するので、どちらも `undefined` になって `continue` へ落ちる。
    *
    * 重複 id と併せて、応答の `orders` が `order_ids` より短くなる経路はこの 3 つである
-   * （docs/fidelity.md の「取消済み・約定済みの取消」行）。呼び出し側が件数の一致で成否を
+   * （docs/fidelity.md の「取消済み・約定済みの取消」節）。呼び出し側が件数の一致で成否を
    * 判定できないのはこのため。
    */
   it("skips ids that do not resolve to an order of the requested pair", async () => {

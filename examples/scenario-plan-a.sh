@@ -66,7 +66,7 @@ echo "$before_json"
 require_status "$before_json" "UNFILLED" "約定前の GET order"
 
 # 発注の時点で free が減り、同額が locked に移る。onhand はまだ動かない。
-# 拘束額には手数料が含まれる（詳細は docs/fidelity.md の「拘束額」の行）。
+# 拘束額には手数料が含まれる（詳細は docs/fidelity.md の「拘束額」の節）。
 echo "発注後の jpy（free が減り locked へ移る）:"
 jpy_balance
 

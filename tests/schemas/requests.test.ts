@@ -61,7 +61,7 @@ describe("クエリの数値（queryNum / queryCount）", () => {
   /**
    * 同名のクエリが 2 本来ると値は配列になる。`Number(["1","2"])` は `NaN` なので
    * 結果は落とす側で変わらないが、**要素数を数えずに数値へ強制しない**という姿勢を型で示す。
-   * wire 上どの code になるかは `docs/fidelity.md` の「同じ名前で複数来る値」行と
+   * wire 上どの code になるかは `docs/fidelity.md` の「同じ名前で複数来る値」節と
    * `tests/routes/active-orders.test.ts` が持つ。
    */
   it("同名で複数来た値（配列）は落とす", () => {

@@ -15,7 +15,7 @@ export function ok<T>(data: T): Envelope<T> {
  * `success: 0` だけが表す。
  *
  * そのため互換ルートのハンドラは `reply` を受け取っていない。ステータスを触りたく
- * なったら、まず `docs/fidelity.md` の「エラーコード」行の実測を読むこと。
+ * なったら、まず `docs/fidelity.md` の「エラーコード」節の実測を読むこと。
  *
  * 例外は経路が決まらない要求で、そこは 200 ではない（`/v1/` 直下の未知パスは
  * 実 API も 404 + 封筒 `10000`）。`/_control/` は bitbank API に無い口なので、
@@ -26,7 +26,7 @@ export function err(code: number): Envelope<never> {
 }
 
 // 出典: https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/errors.md
-// 公式と違う意味に流用しているコードは docs/fidelity.md の「エラーコード」行に記録する
+// 公式と違う意味に流用しているコードは docs/fidelity.md の「エラーコード」節に記録する
 // （20003 / 60004）。errors.md に定義の無い番号は置かない。
 export const ErrorCode = {
   /**

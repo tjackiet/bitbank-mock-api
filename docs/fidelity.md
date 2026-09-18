@@ -12,61 +12,484 @@
 
 ## 対応表
 
-| 項目 | モックの挙動 | 根拠 | 本物との差異 | 推測 | 利用側への含意 |
-| --- | --- | --- | --- | --- | --- |
-| 注文照会 | `GET /v1/user/spot/order`（query: `pair`, `order_id`）と `POST /v1/user/spot/orders_info`（body: `pair`, `order_ids`）を実装する。ヒットした `OrderRecord` を `formatOrder()` で返す | REST API: Fetch order information / Fetch multiple orders | 3 か月超の履歴削除はしない。モック上の全注文が引ける | いいえ | `orders_info` を Reconcile の主経路にする |
-| 存在しない単一注文 ID | `GET order` は `50009` を返す。`pair` 不一致も `50009` | 公式は「3 か月超の終端注文は 50009」のみ明記 | 存在しない ID 自体の明記はない | はい | snapshot を取得できない注文は利用側が stale / fail-closed と扱う |
-| 存在しない一括照会 ID | `orders_info` はエラーにせず該当 ID を `orders` から除外する。0 件でも `success: 1`。応答順はリクエストの `order_ids` 順 | 公式は「3 か月超の終端注文は返さない」と明記 | 存在しない ID への適用と配列順は未明記 | はい | 利用側は欠落 ID の再照会上限を持つ必要がある |
-| 注文状態 | `INACTIVE` を含む公式の 7 値を `OrderRecord.status` に持つ。Plan A で `INACTIVE` は到達しない | REST API: Fetch order information | 逆指値等は未実装 | いいえ | 終端状態の不変性を検証対象にする |
-| 注文 ID | 状態の `nextOrderSeq`（初期値 1）を永続化し、発注のたびに単調増加させる。採番が安全整数を使い切ったら発注を断る（`create_order` は 70001。同じ id を 2 回配らないため。下の「不変量の前提」） | 公式は数値の order id を定義 | 実取引所の桁数・採番方式とは異なる。v2 から移行した巨大 ID（旧 `Date.now() * 1000 + counter`）がある場合は、その最大値 + 1 から続くので桁が大きく残る | はい | シナリオの再現性と再起動後の一意性を優先 |
-| trade ID | 注文 ID とは別の `nextTradeSeq`（初期値 1）を永続化する。v2 の `history.id` は使わず 1 から振り直す | 公式の trade history は trade_id を持つ | 本物の採番とは一致しない | はい | 部分約定でも trade を一意に参照できる |
-| 成行注文の記録 | 成行も `OrderRecord` を採番し、即時 `fillOrder` して `FULLY_FILLED` として残す | 公式は成行も order id を返す | 旧モックは成行を `history` にだけ入れ、注文レコードを持たなかった | はい | Phase 2 の ID 照会で成行も引ける前提になる |
-| v2 からの移行 | 旧 `openOrders` は `UNFILLED`、旧 `history` は `FULLY_FILLED` + `trades`。`history.filledAt` を移行後の `orderedAt` とする | 旧 state に発注時刻がない | 移行済み注文の `ordered_at` は真の発注時刻ではない | はい | 既存ローカル state の照会結果は検証データに使わない |
-| 指値の約定価格 | `fillOrder()` は指値に対し、買いは `price <= order.price`、売りは `price >= order.price` だけを受け付ける。成行には適用しない。違反は状態を変えず `INVALID_PRICE` | 指値注文の `price` は order price と定義される（REST API: Create new order） | 約定可能価格の明文規定は確認できていない | はい（2026-09-11 に検証要件として決定） | `price × size` を上限とする利用側の残高見積もりと整合する |
-| 手数料 | Plan A は maker / taker 表示に関わらず**単一の料率**で計算する。既定は `DEFAULT_TAKER_FEE_RATE = 0.0012`（0.12%）で、**サーバとして動かす限りこの値から変わらない**（`src/index.ts` は料率を渡さず、環境変数も CLI フラグも無い）。`SessionStoreOptions.feeRate` で差し替える口はあり `SessionStore` → `runTick()` / 発注ルート → `fillOrder()` まで通っているが、**同一プロセスで `SessionStore` を組み立てる場合だけ**の口で（`package.json` に `main` / `exports` が無く、依存として import できない）、現状これを渡しているのはテストだけ・値はすべて `0` である。`makerTaker` は trade に記録するだけで、`fillOrder()` の `feeQuote = notional * feeRate` には効かない | 計画書 9 節の決定。料率の実測は **`GET https://api.bitbank.cc/v1/spot/pairs`（認証不要）** | **実 API は通貨ペア・maker/taker 別（2026-09-17 の 1 回の観測）。** taker は `0.0012` が 61 ペア、**`btc_jpy` だけ `0.001`**。maker は **`-0.0002` が 61 ペア**（負＝リベートで受け取る）、**`btc_jpy` だけ `0`**。つまり**モックが唯一桁を登録しているペア `btc_jpy` が、taker も maker も唯一の例外**にあたる。指値約定ではモックが `0.0012` を**引く**のに対し、実 API は受け取る（他 61 ペア）か無料（`btc_jpy`）で、**符号が逆になる**。**料率は固定の契約ではない**（キャンペーンで変わる。`bitbank-lab-mcp` は `/spot/pairs` を TTL 1 時間でキャッシュし、`refresh_pairs_cache` で強制再取得する作りになっている）ので、上の数値はこの時点の観測であって、将来も同じとは限らない | はい | 累計の約定代金には手数料を含めない。Plan B で見直す。**利用側は残高の推移を手数料まで含めてモックと突き合わせないこと**（指値では符号ごと違う）。直すなら `/spot/pairs` を取得して `taker_fee_rate_quote` / `maker_fee_rate_quote` をペア別に引く |
-| 拘束額 | 買いの `locked_amount` は注文残量の価格と手数料から計算する（`price × amount × (1 + feeRate)`）。**2026-09-17 の実測でこの向きが実 API と一致することを確認した。挙動は変えていない** | 現行 `computeLocked()`。**実 API を実測**（2026-09-17）: `xrp_jpy` に約定しない指値買いを 1 本置き、`GET /v1/user/assets` の `locked_amount` の増分を測って取り消した。`price 101 × amount 9.9009 = 999.9909` に対し増分は **`1001.1908`**。差 **1.1999 JPY = 建玉額の 0.12%** で、`taker_fee_rate_quote`（`0.0012`）と一致する | **実 API は拘束額に手数料を含む。しかも指値（maker）注文なのに taker 料率だった。** `maker_fee_rate_quote` は `-0.0002`（リベート）なので、maker 料率で拘束していれば増分は建玉額を**下回る**はずだが、そうならなかった。**したがってモックの `computeLocked()` は向きも率も正しく、ずれているのは利用側の `reserved = price × size`（手数料なし）の方である。** この結論は**この行の意味を反転させる**——`60001` の境界（下記）は**モックの作り物ではなく実 API でも起きる**。**留保**: 1 回の観測。ペアによって違わないか、成行（taker）と指値で拘束が変わらないかは測っていない。`btc_jpy` は maker 料率が `0` なのでこの方法では測れない（「手数料を含まない」と区別が付かない） | いいえ（手数料を含めること自体。実測で確定）。はい（料率を `DEFAULT_TAKER_FEE_RATE` 固定にしていること。上の「手数料」行） | **手数料を含めない拘束額の見積もりは実 API の拘束額より小さい。** 見積もりと口座残高が近いと、**通ると見た注文が実 API でも残高不足で断られる**（モックと同じく）。再現と境界は `tests/scenarios/plan-a.test.ts`: 残高 1,000,000 JPY で `price 5,000,000 × amount 0.2` は `reserved` では枠ちょうどだが `1,001,200` を要求されて `60001`、通る上限は `0.1997`。**利用側は発注可能量の見積もりに手数料ぶんの余白を見込むこと。** プラン A の分割回避シナリオ（9.9 万円 × 6 本）のように枠を使い切る設計だと踏む |
-| 数量・価格の精度 | 応答の数量はペア桁で `toFixed`（btc_jpy は数量 4 桁 `"0.0010"`、価格 0 桁 `"5000000"`）。未登録ペアも同じ桁を仮置きする（**桁を登録しているのは `btc_jpy` だけ**なので、公式一覧の残り 61 ペアはすべてこの仮置きで動く。ペアの実在性の検査を入れた後も、この決定は変えていない。下の「ペア」節）。発注 `amount` が桁に収まらなければ `60004`。trade の `fee_amount_quote` は JPY 4 桁 | pair list / `GET /spot/pairs` の `amount_digits` / `price_digits` | 公式 `60004` は「数量がしきい値を下回る」。モックは桁溢れ拒否に流用。価格の桁溢れは `20003`。ゼロ数量は `"0.0000"`、未約定の `average_price` だけは `"0"` | はい（60004 の流用・未登録ペアの桁・fee 桁） | 円・satoshi の整数表現との変換誤差を防ぐ |
-| ペアの実在性 | 公式一覧（62 ペア）に無いペアは、照会 4 経路と発注で `40017`。取消 2 経路と `/_control/` は断らない。発注停止（`stop_order`）のフラグは持つが発注の可否に使わない | pairs.md / `GET /spot/pairs`（2026-09-17 実測。一覧は `src/engine/pairs.ts` の `OFFICIAL_PAIRS` に静的に写す） | 一覧は静的な写しなので、bitbank が上場を増やすと古くなる向きに倒れる（本物なら通る発注をモックが断る） | 発注経路だけ外挿（推測）。照会 4 経路は実測 | **「照会できるペア」と「発注できるペア」は別の集合**として扱うこと。経路ごとの挙動と根拠は下の「ペア」節にある |
-| 残高の桁 | `GET /v1/user/assets` の `free_amount` / `onhand_amount` / `locked_amount` は、同じ応答で宣言する `amount_precision` の桁の固定桁 10 進文字列で返す（jpy は 4 桁 `"9892.0000"`、他資産は 8 桁 `"0.50000000"`）。残高と拘束額をその桁の最小単位の整数（`bigint`）へ四捨五入してから `free = onhand - locked` を整数で引くので、応答の 3 値の間でこの等式が文字列として成り立つ。倍精度の乗除を挟まないため、`Number.MAX_SAFE_INTEGER` を超える残高でも指数表記に落ちない。非有限な残高（壊れた state）だけは丸めずそのまま出す | REST API: Fetch asset（応答は文字列の金額と `amount_precision` を持つ）。桁の値 4 / 8 は本モックの既存宣言を踏襲 | **丸めか切り捨てかは 2026-09-17 に実測して確定した——切り捨てである。** 実 API の `locked_amount` は、厳密値 `999.9909 × 1.0012 = 1001.19088908` に対し **`1001.1908`** を返した（四捨五入なら `1001.1909`）。モックも切り捨てに合わせた（`toMinimumUnits()`。**以前は四捨五入だった**）。**区別できていないこと**: 「合計を切り捨てる」のか「手数料を切り捨ててから足す」のかは決まっていない。これは観測が 1 点だったからではなく**構造的**である——`price` が整数なら `price × amount` は表示桁（4 桁）の格子にちょうど乗るので、`floor(n + n×r) = n + floor(n×r)` が常に成り立ち、2 つの規則は必ず同じ値になる。**分けるには `price × amount` が 4 桁に収まらない組み合わせが要る**（＝価格に小数がある場合）。例: `101.234 × 9.9009 = 1002.3077106` なら、合計切り捨ては `1003.5104`、手数料を切り捨てて足すと `1003.5104106` で分かれる。ただし**そういう価格を実際に置けるペアがあるかは測っていない**——`price_digits` を実測して記録したのは `btc_jpy`（0 桁）だけで、他のペアの桁は `/spot/pairs` にあるが取得していない。**測るならまずその桁を確かめること。****2 つの規則が一致する条件は「`price × amount` が表示桁の格子にちょうど乗ること」**で、「価格が整数であること」ではない。モックの桁検査 `fitsDigits()` は整数から `1e-8`（`DIGIT_FIT_EPS`）未満のずれを許すので、**厳密な整数でない価格も通る**。ずれが 4 桁目（`1e-4`）に届くには `amount > 1e4` が要るが、届けばモックの上でも分かれる（`price = 5000000.000000009`、`amount = 10000` で確認）。これはモックの許容幅に由来する作り物で、実 API の契約とは関係ない。**負値も未実測**で、モックは 0 方向へ切り捨てる（絶対値を小さくする向き）。`free_amount` は負になり得るので、実 API が -∞ 方向へ倒すなら差が出る。3 値をどう整合させるかは引き続き公式 docs に明記がない。engine の内部演算は倍精度のままで、丸めは応答文字列だけに効く | はい（jpy 以外を一律 8 桁とすること、free を差で組み立てること、負値の切り捨て方向）。いいえ（`amount_precision` の存在、金額が文字列であること、**切り捨てであること**——実測で確定） | 円建て残高が整数に落ちるので、利用側は最小単位（円 / satoshi）へ入口で丸め直さずに取り込める。表示の丸めで負値を 0 にクランプはしないため、`locked > 残高` は `free_amount` が負のまま現れる。残高の非負・`locked <= 残高` は引き続き不変量 6（`src/engine/invariants.ts`）で検査する |
-| 資産応答の固定フィールド | `GET /v1/user/assets` は公式の応答表にあるフィールドを全て返す。`withdrawing_amount` は出金を実装しないので常に 0（残高と同じ固定桁）。`withdrawal_fee` は公式と同じ形のオブジェクトで、jpy は `{under, over, threshold}`、他資産は `{min, max}`。値は全て 0。`collateral_ratio` は信用取引を実装しないので `"0"` 固定。`network_list` は jpy では省略し、他資産では常に空配列 | REST API: Fetch asset の応答表（`withdrawing_amount` / `withdrawal_fee` / `network_list` / `collateral_ratio`） | 本物は資産・ネットワークごとの実際の出金手数料と代用掛け目を返し、`network_list` に対応ネットワークを列挙する。本モックは出金・信用取引・ネットワークのいずれも模さない | はい（0 固定・掛け目 0・空配列。フィールドの存在と形は公式どおりで、いいえ） | 利用側は出金手数料・代用掛け目・ネットワーク一覧を判断材料にしない。値が 0 であることを「手数料無料」「担保価値なし」と解釈せず、未実装の印として扱う |
-| assets に出る資産 | `GET /v1/user/assets` は**固定の 10 資産**（`jpy` / `btc` / `eth` / `xrp` / `ltc` / `bcc` / `mona` / `xlm` / `qtum` / `bat`。`src/routes/format.ts` の `KNOWN_ASSETS`）に、残高か拘束を持つ資産を足して返す。新規状態では 10 件ちょうど、`sol` の残高を足すと 11 件（実測 2026-09-18） | **無し。公式は返す資産の集合を明記していない** | **本物が何を返すかは未実測。** 公式ペア一覧の 62 ペアに現れる 48 資産のうち 38 は、このモックでは残高を持つまで応答に現れない | はい（10 資産という並びに根拠は無く、実装当初からの値） | **応答に無い＝取扱が無い、と解釈しないこと。** 残高 0 の資産は現れないことがある。資産の存在確認にこの応答を使わない |
-| 平均約定価格の丸め | `average_price = executedNotional / executedAmount` を価格桁に四捨五入（`executedAmount == 0` なら除算せず `"0"`）。部分約定で平均が価格単位に乗らないとき、`executed_amount × average_price` と約定代金の差は `executed_amount × 価格単位 × 0.5` 以下 | REST API の `average_price` は文字列 | 内部は JS 倍精度のまま。丸めは応答文字列だけ | はい | 利用側が累計の約定代金をこの積で再計算すると同じ誤差が乗る |
-| 取消済み・約定済みの取消 | 取消済み（`CANCELED_*`）は `50026`、約定済み（`FULLY_FILLED`）は `50027`。`REJECTED` は `50009`。`cancel_orders` はリクエスト順で終端が混ざるとエラーを返し、1 件も取消しない。**応答の `orders` は `order_ids` より短くなり得る。** 要求した id のうち「そのペアの active な注文」に解決しないものを黙って飛ばすためで、(a) 存在しない id、(b) 別のペアの注文の id、(c) 同じ id を 2 回以上入れたときの 2 件目以降（直前の取消で終端になっている）の 3 つが該当する（実測）。いずれもエラーにはならず、解決した分だけ取り消して `success: 1` を返す | error codes | 公式のバッチ混在時の挙動は未確認。`REJECTED` への取消コードも未明記 | はい（REJECTED とバッチ fail-closed、重複 id の扱い） | 終端状態の識別を保つ。**取消が一部だけ成立する意味での部分成功は起きない**（終端が混ざれば 1 件も取り消さない）。一方で `orders` の件数は上記 3 つの理由で `order_ids` より少なくなり得るため、**利用側は件数の一致で成否を判定せず、`order_id` の集合で照合すること** |
-| エラーコード | 残高不足 `60001`。欠落: amount `30001`、price `30012`、side `30013`、type `30015`、order_id `30006`、order_ids `30007`、**pair `30009`**。絞り込みパラメータの不正値は専用コード（`40006` / `40007` / `40008` / `40009` / `40022`。上の「絞り込みパラメータの不正値」行）。**不正なペアは `40017`**。それ以外の不正値は `20003`（公式の ACCESS-KEY 欠落コードをパラメータエラーに流用） | errors.md。**`30009`「Missing asset.」と `40017`「Invalid asset.」は 2026-09-17 に実 API で実測**（`btc_jpy`、認証済みの口座）。`pair` の欠落 → `30009` を 3 経路で確認（`GET order` / `POST orders_info` / **`POST order`**。最後のものは `pair` が無いと取引できる先が無いので注文は成立しない）。**不正なペア → `40017` は照会系 4 経路すべてで確認**（`GET order` / `GET active_orders` / `GET trade_history` / `POST orders_info` に `pair=xxx_yyy`）。`POST order` に `pair: "   "`（空白のみ）も `40017` | 全 error code は網羅しない。HTTP は**互換ルートの失敗をすべて 200** に揃えた（実 API の実測。上の「封筒に包まれない応答」行）。`src/routes/envelope.ts` の `ErrorCode` に errors.md で定義されない番号は置かない | はい（`20003` と `60004` の流用、HTTP 区分） | 利用側がコードで失敗原因を区別できる。**流用は `20003` と `60004` の 2 つだけになった**（`10000` の流用は廃止。`60004` の公式の意味は「Order quantity has exceeded the lower threshold.」＝最小数量割れで、本モックは桁溢れに使っている）。この 2 つは公式と意味が違うので、コードの意味を errors.md から引かない |
-| 注文の固定フィールド | `post_only: false` は `type == limit` のときだけ出す（成行では省略。`price` の有無とは独立で、`price` を持たない指値でも出る）。`expire_at: null`。`user_cancelable` はアクティブ注文だけ `true`。成行の `price` は省略し `average_price` に約定値を載せる | REST API: Fetch order information の応答表（`price` は「type = `limit` または `stop_limit` 時のみ」、`post_only` は「type = `limit` 時のみ」と別条件で定義される） | post only・期限・注文訂正を実装しない。`post_only` を `true` にする経路は無い | はい（値が常に false であること）。いいえ（出現条件は公式どおり） | 利用側はこれらの値で分岐しない前提 |
-| `expire_at` | 常に `null` を返す（有効期限を実装しないため） | REST API: Fetch order information の応答表に `expire_at` がある | **本物は数値を返す場合がある。** 実 API の `GET /v1/user/spot/active_orders` で `"expire_at":1803738105746` を観測した（2026-09-16）。ただし観測できたのは `type: "stop"` / `status: "INACTIVE"` の注文で、**本モックが実装する通常の指値注文が非 `null` を返すかは未確認** | はい | **要追加確認。挙動は変えていない。** 指値注文 1 件の応答を実 API で確認できれば確定する。利用側は `expire_at` を `null` 固定と決め打ちしない |
-| 注文の `canceled_at` | 取消済み（`canceledAt` を持つ注文）のときだけ出す。取消系の 2 経路（`cancel_order` / `cancel_orders`）では必ず出て、未約定・約定済みの注文を `GET order` / `orders_info` / `active_orders` で引いたときは出ない。取消済み注文を `GET order` / `orders_info` で引くと出る | REST API: **Cancel order の応答表**（`canceled_at \| number \| canceled at unix timestamp (milliseconds)`）。この項目を応答表に持つ節は Cancel order だけで、Fetch order information の表には無い | **未確定。** 公式の記述では決め切れない。(a) Fetch order information の応答表に `canceled_at` は載っていない。(b) Fetch multiple orders の応答例 JSON には `"canceled_at": 0` が入るが、あの例は全フィールドをダミー値で並べた雛形で、常に返る証拠にならない。(c) Fetch active orders の応答例 JSON には入っていない（アクティブな注文は取消済みになりえないので、どちらの解釈とも矛盾しない）。(d) 英語版は Cancel order の型を `number`、日本語版は `number \| undefined` と書いており、両版で食い違う。本物が取消済み注文の照会で常に返すのか、Cancel order の応答でだけ返すのかは確認できていない | はい（照会経路で出すかどうかの選択）。いいえ（Cancel order の応答に出ること） | 利用側は `canceled_at` の**有無**を取消判定に使わない。取消は `status`（`CANCELED_UNFILLED` / `CANCELED_PARTIALLY_FILLED`）で判定する |
-| active_orders の絞り込み | `count` / `from_id` / `end_id` / `since` / `end` を受け、生成順のまま絞る。`from_id`/`end_id` は inclusive、`since`/`end` は `ordered_at` のミリ秒 inclusive | REST API: Fetch active orders | 公式の since/end が秒かミリ秒かは明記なし | はい | 発注応答を取りこぼした利用側が自分の注文を探す経路 |
-| trade_history の絞り込み | `order_id` / `since` / `end` / `order(asc\|desc)` を追加。既定は `desc`（新しい順）。`count` 指定時は最大 1000。未指定なら全件 | REST API: Fetch trade history | 公式の既定件数は未確認。モックは未指定で全件返す | はい | 利用側が注文単位で約定を突き合わせられる |
-| 約定の固定フィールド | `formatTrade()` は公式の「Fetch trade history」の応答表のうち、現物で意味を持つ 12 フィールドを全て返す。`fee_occurred_amount_quote` は公式が「現物取引では `fee_amount_quote` と同値」と明記するので同値を返す。`fee_amount_base` は base 資産の手数料を取らないので常に `"0"` | REST API: Fetch trade history の応答表（`fee_occurred_amount_quote \| string \| quote fee occurred amount which taken later. In case of spot trading, this value is same as fee_amount_quote.`） | `fee_amount_base` の桁の刻み方は公式に記載が無く、本モックは桁を付けない素の `"0"` を返す（`fee_amount_quote` は jpy の 4 桁）。本物が `"0.00000000"` のような固定桁を返すかは**要追加確認** | はい（`fee_amount_base` の表記）。いいえ（`fee_occurred_amount_quote` の値） | 利用側は quote 手数料を `fee_amount_quote` と `fee_occurred_amount_quote` のどちらから読んでも同じ値になる。`fee_amount_base` の文字列表記に桁を仮定しない |
-| 信用取引・逆指値の項目 | 公式の応答表にあっても、本モックが機能を実装しないフィールドはキー自体を出さない。注文: `position_side` / `triggered_at` / `trigger_price`。約定: `position_side` / `profit_loss` / `interest` | REST API の各応答表（`position_side` は「only for margin trading」、`triggered_at` / `trigger_price` は「present only if type = `stop`, `stop_limit`, `take_profit`, `stop_loss`」と条件が明記される） | `profit_loss` / `interest` は型が `string \| undefined` とだけ書かれ、省略条件の明記が無い。信用取引の項目なので現物では出ないと判断した（**推測**） | はい（`profit_loss` / `interest` を出さない判断）。いいえ（その他は公式の条件どおり） | 利用側はこれらのキーの存在を前提にしない。省略は未実装の印であって、値 0 の意味ではない |
-| 配列の包み方 | `orders_info` / `active_orders` / `cancel_orders` は `data.orders`、`trade_history` は `data.trades` に配列を置き、`data` 直下に他のキーを持たない | REST API: Fetch multiple orders / Fetch active orders / Cancel multiple orders は `orders \| Array`、Fetch trade history の応答例は `data.trades` | 差異なし | いいえ | 利用側は配列の位置を固定して読める |
-| 注文オブジェクトの共通形 | 注文を返す 5 経路（`GET order` / `POST order` / `cancel_order` / `orders_info` / `active_orders`）は `formatOrder()` の 1 つの整形関数を共有する。経路ごとの形の違いは `canceled_at` の有無だけで、それも注文が取消済みかどうかで決まる | REST API: Fetch multiple orders と Fetch active orders は応答を「list of object same as [Fetch order information response]」と定義し、Cancel multiple orders は「list of object same as [Cancel order response]」と定義する。Cancel order の応答表は Fetch order information の表に `canceled_at` を足したもの | 差異なし | いいえ | 経路ごとに別のパーサを持つ必要はない |
-| maker / taker 表示 | 指値の trade は `maker`、成行は `taker` と表示する | REST API の trade history | 手数料が 0.12% 固定であり、**指値の表示と計算が整合しない**。`maker` と表示しながら taker 相当の率を引いている。実 API の maker 料率は上の「手数料」行のとおり負またはゼロなので、**`fee_amount_quote` の符号まで違う** | はい | 累計の約定代金の判定には影響しない。`fee_amount_quote` を使う処理があるなら、`makerTaker` との整合を前提にしないこと |
-| 注文訂正 | 注文訂正 API を提供しない | bitbank REST API に amend 相当のエンドポイントが無い（公式 rest-api.md に記載なし） | bitbank の対応可否も含め、本モックの対象外 | いいえ | 利用側は発注後の価格・数量変更を前提にしない |
-| 部分約定を取り消した注文 | `CANCELED_PARTIALLY_FILLED` でも `executed_amount` と trade 記録を保持する | REST API の status enum（`CANCELED_PARTIALLY_FILLED` が定義されている） | 本物の保持期間（3 か月）はモックに無い | はい | 利用側の累計約定量は取消後も減らない |
-| 成行注文の価格上限 | 成行に価格上限は設けない | 公式 rest-api.md に成行の価格上限を指定するパラメータの記載が無い（**未実測**） | 指値だけに価格制約を適用する | はい | 価格上限が必要な実験は指値で行う |
-| 認証 | Plan A は認証ヘッダを検証しない | REST API は private API に認証を要求 | 意図的に未実装 | はい | 利用側の HMAC 送信は通過するが認証の検証対象にはしない |
-| レート制限 | 実装しない | REST API: QUERY 10/s、UPDATE 6/s、超過時 429。**error code は `10009`**（errors.md「You sent requests too frequently. Retry later with decreased requests.」。2026-09-17 に実 API で `HTTP 429` + 封筒 `10009` を実測） | 意図的に未実装 | いいえ | 負荷・429 復旧の実験には使えない。**利用側は `10009` と 429 を再試行の合図として扱う**（モックは決して返さない） |
-| 封筒に包まれない応答 | 互換ルート（`/v1/user/...`）のうち、**Fastify が route ハンドラへ入る前に返す応答は bitbank 封筒ではない**。(a) `content-type: application/json` で本文が壊れた JSON（`__proto__` キーを含む本文も同じ扱い）は `{"statusCode":400,"code":"FST_ERR_CTP_INVALID_JSON_BODY",...}`、(b) **未登録のパス・メソッドは封筒に包むようになった**（実 API の実測に合わせた。下記）。`/_control/` の未登録パスだけは従来どおり `{"message":"Route ... not found","error":"Not Found","statusCode":404}`、(c) ハンドラ内の未捕捉例外は `{"statusCode":500,...}` で例外メッセージが出る（**現状、互換ルートのハンドラから出る未捕捉例外は無い**。`applyFill()` の throw を `Result` へ変えて、state ファイル由来の 2 経路——採番の飽和と `startAmount == 0`——を塞いだ）。ハンドラが**扱った**失敗（欠落・不正値・不正なペア `40017`・数量の桁溢れ `60004`・残高不足 `60001`・`50009` などの照会エラー）は **HTTP 200 + 封筒**で返す。上の (c) の未捕捉例外だけはこの規則の外で、封筒に包まれない素の 500 になる（現状その経路は無い）。**かつてルート層で弾いた欠落・不正値だけ 400 にしていたが、やめた**。実 API は区別せず 200 を返すことを 2026-09-17 に 17 経路で実測した（`btc_jpy`、認証済みの口座）。失敗は封筒の `success: 0` だけが表す | 本モック固有（Fastify の既定ハンドラ） | **実 API の未登録パスは 3 通りに分かれる**（2026-09-17 実測）。`/v1/` 直下（`/v1/nonexistent`、認証ヘッダ無し）は `HTTP 404` + 封筒 `10000`（"Url not found."）。`/v1/user/` 配下（`/v1/user/spot/ping`）は認証ヘッダ無しで `HTTP 200` + 封筒 `20003`（"ACCESS-KEY not found."）、**有りで `HTTP 200` + 封筒 `20001`**（"Authentication failed api authorization."）。**実 API は認可をルーティングより先に走らせており、パスの打ち間違いが認証エラーに見える。** モックは `20003` の側だけを再現する（認証ヘッダを検証しないため。`20001` との出し分けはヘッダを見ることになり README の「認証は非目標」に触れるのでしない）。壊れた本文・内部エラーに対する本物の応答は確認できていない | はい | **未確定。** 本物が壊れた JSON 本文へ返すコードが errors.md から決められないので、封筒へ包み直す変更は入れていない（推測でコードを選ばない）。利用側のパーサは、実装済みエンドポイントであっても `success` キーを持たない応答が返り得ることを前提にする（`success` の有無で分岐し、無ければ HTTP ステータスで扱う） |
-| パラメータの型強制 | **id は実 API に合わせて型ごと検査する（2026-09-17 の実測で確定。挙動を変えた）。** `order_id` が 10 進の数字として読めなければ `40013`、`order_ids` が id の非空配列でなければ `40014`、`pair` が文字列でなければ `40017`（`src/routes/params.ts` の `isOrderIdValue` / `isOrderIdArray`）。**それ以外の数値パラメータは従来どおり型を見ずに強制する**（`z.coerce.number()`、`/_control/` は素の `Number()`）。したがって発注の `amount` / `price` では **`true` は `1`、要素 1 つの配列 `[0.001]` は `0.001` として通る**（実測: `{"amount":[0.001]}` → `start_amount: "0.0010"` の注文が成立、`{"price":true}` → `price: "1"` の指値） | **実 API を実測**（2026-09-17、認証済みの口座、読み取り経路のみ）。`GET order` に `order_id=true` / `1.5` / 同名 2 本 → いずれも **`40013`**（"Invalid order id."）。`orders_info` に `order_ids` が `"1"` / `1` / `[1.5]` / `[]` → いずれも **`40014`**（"Invalid order id array."）。`pair: true` → **`40017`**。コードの定義は errors.md | **実 API は「読めない id」と「読めたが存在しない id」を分けている**（前者 `40013`、後者 `50009`）。直す前のモックはどちらも `50009` か `20003` に潰していた。**一番大きかった差は空配列**で、モックは `order_ids: []` に `success: 1` と空の一覧を返していたのに対し実 API は `40014` で断る。**`order_ids: [true]` だけは実 API が `10001`（"System error."）を返す**（実測）。モックはこれを再現せず `40014` に寄せる——内部エラーは契約ではなく、模す意味がないため。取消の 2 経路（`cancel_order` / `cancel_orders`）の同じ入力は**未実測**で、挙動も変えていない | 一部はい（`[true]` を `40014` にすること、取消経路を変えないこと）。いいえ（`40013` / `40014` / `40017` の使い分け） | **利用側は `orders_info` に空の `order_ids` を送らないこと**（モックは以前受けていたが実 API は断る）。id は 10 進の整数の文字列か数値で送る。発注の `amount` / `price` は型の誤りが `success: 0` で弾かれるとは限らないので、送る側で JSON の型を保証する |
-| 絞り込みパラメータの不正値 | **`active_orders` は `count` / `from_id` / `end_id` / `since` / `end` の 5 つ、`trade_history` は `count` / `since` / `end` の 3 つ**（`trade_history` に `from_id` / `end_id` は無い。理由は「本物との差異」列）。**空文字と空白だけの値を「未指定」や `0` として扱わず**、パラメータごとの error code で断る（**HTTP 200**。上の「封筒に包まれない応答」行）。`count` `40006` / `end` `40007` / `end_id` `40008` / `from_id` `40009` / `since` `40022`。数値として読めない値（`?count=abc`）と、同名クエリが 2 本来て配列になった値も同じコード。複数が同時に不正なときは**クエリ文字列の並び順に依らず固定の優先順**で 1 つを返す。順序は `src/routes/params.ts` の `QUERY_PARAM_ORDER`（`count` → `from_id` → `end_id` → `since` → `end`）で決まり、**zod のスキーマ定義順ではない**（スキーマの並びを逆にしても応答が変わらないことを隔離コピーで実測）。指定が無いときの挙動は従来どおり | **実 API を実測**。2026-09-16（`btc_jpy`、認証済みの口座）: `active_orders?count=` → `40006`、`active_orders?end=` → `40007`、`trade_history?since=` → `40022`。**2026-09-17 に追加で実測し、それまで推測だった 3 点を確定させた**: (a) `end_id=` → `40008`、`from_id=` → `40009` を `active_orders` と `trade_history` の**両方**で確認。(b) 空白だけの値 `?end=%20` → `40007`（空文字と同じ）。(c) 複数同時不正は位置に依らない（`count=&end=` も `end=&count=` も `40006`、`since=&count=` も `40006`）。コードの定義は errors.md（`0badd680`）の `"Invalid count."` / `"Invalid end param."` / `"Invalid end_id."` / `"Invalid from_id."` / `"Invalid trading start time."` | **`trade_history` の `from_id` / `end_id` が未確定（挙動は変えていない）。** rest-api.md の Fetch trade history のパラメータ表は `pair` / `count` / `order_id` / `since` / `end` / `order` の 6 つだけで、**`from_id` / `end_id` を載せていない**（Fetch active orders の表には両方ある）。ところが実 API は `trade_history?end_id=` に `40008`、`?from_id=` に `40009` を返し、**絞り込みにも使っている**（対照の `?count=1` が非空に対し、`?from_id=<巨大値>` と `?end_id=1` はどちらも空。2026-09-17 実測）。公式ドキュメントと実 API が食い違っており、どちらを正とするか決め切れないので、**モックは公式どおり `trade_history` に両パラメータを持たない**（送られても黙って無視し `success: 1` を返す）。**`trade_history` が何で絞るかは 2026-09-17 に実測して確定した——`from_id` は trade id で絞る**（最新の約定の `trade_id` を渡すと拾え、同じ約定の `order_id` を渡すと空。対照として極端に大きい値を渡すと空になるので、「無視されている」可能性も潰してある）。それでも**モックは実装しない**——公式 `rest-api.md` のパラメータ表に載っていないという上の理由が変わらないため。確定したのは実 API の側の意味だけで、どちらを正とするかの判断は動いていない | 一部はい（`trade_history` の 2 パラメータを持たない選択） | v0.1.0 からの**改訂**。旧版は `z.coerce.number()` が `""` を `0` にするため、**`?end=` が `success: 1` のまま常に空配列**を返していた（`0` 以下だけを残す絞り込みになる）。`?count=` は汎用の `20003` だった。**利用側は `trade_history` に `from_id` / `end_id` を渡さないこと**（モックは無視するが実 API は絞り込むため、同じ要求で結果が変わる）。値が空・空白になり得る変数をクエリへ入れないこと |
-| 同じ名前で複数来る値 | 同名のクエリが 2 本以上来ると値は配列になる。数値を取るパラメータは**配列を数値へ強制せず、パラメータごとの専用コードで断る**（実測 2026-09-18、`btc_jpy`: `active_orders?count=1&count=2` は `40006`、`trade_history?since=1&since=2` は `40022`）。判定は `src/schemas/requests.ts` の `queryNum` が「文字列でなければ落とす」形で持つ | **無し。公式 doc に記載が無い** | **実 API の挙動は未実測。** 本物が最初の値を採るのか最後を採るのか、断るのかは分かっていない | はい | **同名パラメータを複数送らないこと。** モックは不正値として断る。実 API がどう扱うかは別問題なので、どちらの挙動にも依存しないクライアントにしておく |
-| 解釈できない時刻を持つ state | `orderedAt` / `executedAt` / `canceledAt` は `PaperStateSchema` が `z.string()` としか見ないので、日付として解釈できない文字列がそのまま読み込まれる。応答では `Date.parse()` が `NaN` を返し、**`JSON.stringify` が `NaN` を `null` に落とすため、数値と宣言しているフィールドに `null` が出る**（実測: `orderedAt: "not-a-date"` の state で `GET /v1/user/spot/order` → `"ordered_at":null`）。本モック自身は ISO 文字列しか書かないので、入口は手書き・別実装・旧版の state ファイルに限られる | 本モック固有 | 公式の `ordered_at` / `executed_at` / `canceled_at` は数値（ミリ秒）で、`null` は取らない | はい | **未確定。挙動は変えていない。** 直すなら読み込み時の検査（`loadState()`）に「時刻文字列が解釈できること」を足して fail-closed にする案になるが、不変量の前提を 1 つ増やす判断なのでここでは決めていない。利用側は `ordered_at` を数値と決め打ちせず、`null` を stale として扱う |
-| ログに出す利用者由来の値 | 状態ファイル・環境変数・リクエスト由来の文字列は、warn / info に出すとき JSON で包む（`src/store/session.ts` の `tick()`、`src/engine/persist.ts` の `saveState()`、`src/engine/match.ts` の `runTick()`）。包まないと改行で行を割って偽のログ行を差し込める。`Date.parse()` は `"Jan 1 2020 (\n...)"` のような改行入りの表記も解釈するので、`lastTickAt` のように「日付として妥当」でも制御文字を含み得る値がある | 本モック固有 | 本物には対応する概念がない | いいえ | 実験のログを証跡に使うとき、行の境界がリクエスト側から動かせない |
-| `/_control/` | `BITBANK_MOCK_CONTROL=1` のときだけ登録する。素の JSON（bitbank 封筒ではない）。`POST /_control/orders/:id/fill`、`POST /_control/tick`、`POST /_control/clock`、`POST /_control/reset`、`GET /_control/state`（`PaperState` に、状態ファイルへの書き出しの状況 `persist` を添えて返す。`persist` は `PaperState` の一部ではないが、`PaperStateSchema` は不明なキーを落とすので、この応答をそのまま状態ファイルへ書き戻しても読み込みは通る）。無効時はルート自体を登録しないので、メソッド・パスによらず Fastify の既定 404（本文も他の未登録パスと同じ）。有効時は、非ループバックから見ると登録済みの（メソッド, パス）が 403、未登録が 404 になるので、どの口が在るかは区別できる。状態ファイルへの書き出しに失敗した後は、状態を変える口（`fill` / `tick` / `clock` / `reset`）が **503 `{"error":"PERSIST_DEGRADED"}`** になる（`GET /state` は通る。同じ表の「状態の永続化」） | 本モック固有 | bitbank API に存在しない | はい | 利用側 / 本番 API の仕様に control の存在を混入させない |
-| control のアクセス境界 | control 有効時の listen 既定は `127.0.0.1`（`BITBANK_MOCK_HOST` で上書き可）。非ループバックは `X-Control-Token` が `BITBANK_MOCK_CONTROL_TOKEN` と一致しない限り 403。トークン未設定なら非ループバックは常に 403。**ループバックからはトークン無しで全操作を通す**ので、同一ホスト上の別プロセス・別ユーザからの誤操作は防げない。判定に使う接続元は **TCP の対向アドレス（`request.socket.remoteAddress`）だけ**で、`X-Forwarded-For` 等のヘッダは見ない。そのため `buildServer()` の `trustProxy` の有無で境界は変わらない。**許可判定を `request.ip` に戻してはいけない**（`request.ip` は `trustProxy` を有効にすると `X-Forwarded-For` を返すので、その瞬間にヘッダ詐称で境界が消える）。トークンは `X-Control-Token` の**ヘッダ行がちょうど 1 本のときだけ**受け、0 本・2 本以上は 403（Node は同名ヘッダを `", "` 繋ぎの 1 本の文字列にするため、行数は生ヘッダで数える）。一致は `timingSafeEqual` で見る（長さの違いは隠れないので固定長で運用する） | 本モック固有 | 本物の取引所には無い | はい | 同一ネットワークからの誤操作を防ぐ。利用側は control を叩かない |
-| control 時の自動約定 | control 有効時の既定は `BITBANK_MOCK_FILL_MODE=manual`。`store.tick()` は足を取らず約定しない。明示で `market` にすると REST 経路は現行どおり市場連動 | 計画書 9 節の決定 | 本物の取引所には対応する切替がない | はい | 同一シナリオを市場価格に依存せず再現できる |
-| control の時計 | `POST /_control/tick` は状態の `lastTickAt` を `max(現在時刻, 前回 + 60 秒, 足の timestamp)` へ進める。1 回の tick で必ず 60 秒以上進み（1 分足が同じ実時刻の 2 本でも別の窓に落ちるため）、tick では**巻き戻らない**。**ただし実時刻より先へ進める幅は 24 時間まで**（`src/routes/control.ts` の `MAX_CLOCK_AHEAD_MS`）。足の `timestamp` が `現在時刻 + 24 時間` を超えると 400 `CANDLE_TOO_FAR_AHEAD`（`maxTimestamp` 付き）、60 秒の単調前進だけで超えるとき（＝時計が上限の 60 秒手前まで来ているとき）は 400 `CLOCK_TOO_FAR_AHEAD`（`lastTickAt` / `maxLastTickAt` 付き）で、どちらも状態を変えない。進める経路はこの 2 つだけなので、`4e12`（西暦 2096）や `1e15`（西暦 33658）を渡しても、tick を何回重ねても、時計が実時間から 24 時間より離れることはない。上限にクランプせず断るのは、足の timestamp を黙って書き換えると約定時刻（`candle.timestamp + 1 分`）がずれ、60 秒の前進を黙って縮めると同じ実時刻の 2 本が同じ窓・同じ約定時刻に落ちるため。**戻す手段は `POST /_control/clock`**（本文省略で現在時刻、`{ lastTickAt }` に ISO 文字列かエポックミリ秒で任意の時刻。注文・約定・残高はそのまま残る。範囲外の値と、本文そのものが record でないとき（配列・`null`・数値・文字列。本文の省略だけが「現在時刻へ戻す」）は 400 `INVALID_CLOCK`、`現在時刻 + 24 時間` 超は 400 `CLOCK_TOO_FAR_AHEAD`）。`POST /_control/reset`（注文・約定・残高を全部捨てる）でも戻るが、シナリオは失われる。過去の `timestamp` は今までどおり通る（上限は先の側だけに効く）。**market モードとの相互作用**: `BITBANK_MOCK_FILL_MODE=market` で `lastTickAt` が実時刻より先にあると、`SessionStore.tick()` の足の取得範囲が `(未来, 現在)` と逆転する。逆転した範囲で取った足は `runTick` の窓（`fromMs = min(lastTickAt, now)` 以上 `now` 以下）から全部外れて 1 本も約定しないので、**取得自体を飛ばし `tick: lastTickAt "..." is ahead of now "..."; skipping candle fetch` を warn で出す**（以前は逆転した範囲で問い合わせ、警告もエラーも無いまま約定が止まっていた）。この後 `SessionStore.tick()` は tick の最後で `lastTickAt` を現在時刻で上書きするので、未来へ進めた時計はそこで巻き戻り、次の tick は今までどおり取得して約定する（警告が出るのは 1 回）。この回だけは約定が 0 でも状態ファイルへ書く（書かないと再起動でファイルから未来の時計を読み直し、同じ空振りを繰り返すため）。24 時間の上限があるので、`lastTickAt` が `8.64e15 − 9 時間` を超えて market モードの足取得の日付が `NaNNaNNaN` になる経路は `/_control/tick` からは届かない | 本モック固有 | 本物の取引所には対応する概念がない | はい | **24 時間の根拠**: `runTick` が 1 回の tick で遡る上限（`MAX_LOOKBACK_MS`）と同じ幅で、1 分足なら 1 日分（1440 本）。合成の tick を 1440 回重ねるまでは今までどおり通る。#20 / #21 で入れた `timestamp` の上限（`Date` の表現範囲 − JST オフセット = `8.64e15 − 9 時間`。同じ表の「control の fill / tick 検証」行）とは別の、その内側にある制約。利用側は `lastTickAt` を実時間と見なさない |
-| control の fill / tick 検証 | 存在しない注文 404、終端 409。`POST /_control/tick` の `pair` は互換ルートと同じ検証（`pairAssets`）を通らなければ 400 `INVALID_PAIR`。`amount` が非正・残量超過・桁溢れは 400 `INVALID_AMOUNT`。`price` が非正・非有限は 400 `INVALID_PRICE`。足は `0 < low <= open <= high` かつ `low <= close <= high` の有限値で、`timestamp` は `Date` の表現範囲から下流の加算分を引いた範囲（`-8.64e15 <= t <= 8.64e15 − 9 時間`。上側だけ JST オフセット分の余裕を取るので非対称）に収まること。さらに `timestamp` が `現在時刻 + 24 時間` を超えるものは 400 `CANDLE_TOO_FAR_AHEAD`、60 秒の単調前進だけでその幅を超える tick は 400 `CLOCK_TOO_FAR_AHEAD`（同じ表の「control の時計」行）。`POST /_control/clock` の `lastTickAt` は ISO 文字列かエポックミリ秒で、同じ 2 つの範囲を外れると 400 `INVALID_CLOCK` / 400 `CLOCK_TOO_FAR_AHEAD`。`POST /_control/reset` の `balances` のキーは互換ルートと同じ文字種（`[a-z0-9]+`、`pairAssets` のセグメント）に限り、外れるものは 400 `INVALID_BALANCES`。拒否時は状態を変えない（`fill` / `tick` / `clock` / `reset` の全拒否経路で確認済み） | 本モック固有（不変量 1 の防御） | 本物には無い | はい | 実験用の部分約定は control からのみ起こす。利用側の通常経路では使わない |
-| 状態の永続化 | 発注・取消・約定のたびに `PaperState` 全体を状態ファイルへ書き出す。書き出しは一時ファイル（`state.json.<pid>.<乱数>.tmp` を `wx` で作り、`fsync` してから `rename`、その後に**親ディレクトリを fsync**。`mkdir -p` が階層を新しく作った回は、**作った段の親まで遡って fsync** する。葉だけだと階層自身のエントリが親に残らず、OS ごと落ちれば階層ごと消えて `state.json` も失われるため）で原子的なので、読み手が途中の内容を見ることはない。ディレクトリの fsync はどの環境でも通るとは限らないので（ファイルシステムによっては `EINVAL`）、失敗しても書き込みの失敗へは昇格させず、`state dir fsync failed for ...` を warn に出して成功のまま返す（対象のパスと fs のエラーメッセージはどちらも JSON で包む。fs のエラーはパスを生のまま含み、パスは `BITBANK_MOCK_STATE_PATH` 由来なので、包まないと改行でログ行を割られる）。書き込みに失敗したときは自分が作った一時ファイルだけ消す。**`rename` の前にプロセスが落ちると一時ファイルが残るが、次の起動が片付ける**（v0.1.0 からの改訂。以前は起動も以後の書き込みも片付けず、状態ディレクトリに溜まり続けた）。掃除は**起動時の排他を取ったあと**に行う（ロックが無いと、他プロセスが書いている最中の一時ファイルを消しかねない）。消すのは `<状態ファイル>.<数字>.<英小文字と数字>.tmp` に一致するものだけで、状態ディレクトリは利用者が `BITBANK_MOCK_STATE_PATH` で指す場所なので、`.tmp` で終わるというだけでは消さない。**掃除の失敗は起動を止めない**（見た目の問題で、残っていても読むのは `state.json` だけなので動作に影響しない）。同一プロセス内の書き込みは `SessionStore.persist()` で直列化する。`await store.persist()` が返った時点で、ファイルは**呼び出し時点の状態と同じか、それより新しい状態**を反映する。重なった書き込みは 1 本にまとめ、途中のスナップショットは捨てるが、最後の 1 本は必ず着地する | 本モック固有（`src/store/session.ts` / `src/engine/persist.ts`） | 本物の取引所はクライアント側に口座状態の永続化を持たせない | はい | 書き込みが成功していれば、2xx を受け取った注文は再起動後も状態ファイルに残る。**ただし 2xx だけでは書き込みの成否を判定できない。** 書き込みに失敗したとき（ディスク不足・権限など）、`persist()` は `persist failed: ...` を warn ログへ出すだけで throw せず、ルートは 2xx を返す。応答を返した注文が再起動後に消える経路がここに残る。**一度でも書き出しに失敗すると、以後は状態を変える要求を断る**（`BITBANK_MOCK_PERSIST_FAILURE`、既定 `degrade`。**v0.1.0 からの変更**。`docs/plan-lab-mock.md` 10.5 の決定）。断るのは発注・取消・`/_control/` の fill / tick / clock / reset で、照会（`GET order` / `orders_info` / `active_orders` / `trade_history` / `assets` / `GET /_control/state`）は通す。失敗したシナリオを読み出せることを優先している。互換ルートは封筒 + `70001`（`INTERNAL`）、`/_control/` は素の JSON + 503 `PERSIST_DEGRADED`。**書き込みに失敗した当の要求も断るが、巻き戻さない**ので、その注文はメモリに残り照会から見つかる（応答は失敗・状態には在る、という非対称。巻き戻すと合流した書き込みの分まで捨てるため）。再送は断られるので二重注文にはならない。**劣化中は market モードの自動約定も止める**（読み取りは通すので、止めないと読むたびにメモリだけ進んで状態ファイルとの差が開く）。**復帰手段は用意していない**（ディスクを直す → `GET /_control/state` で読み出す → 再起動）。`BITBANK_MOCK_PERSIST_FAILURE=ignore` で v0.1.0 の挙動に戻る。判定には `GET /_control/state` の `persist` を使う（`lastError` が直近の失敗の時刻とメッセージ、`consecutiveFailures` が連続失敗数。`lastError` は成功しても消さないので「一度でも失敗したか」が残り、「今まさに失敗し続けているか」は `consecutiveFailures > 0` で見る）。警告のメッセージは JSON で包む（fs のエラーがパスを生のまま含むため。同じ行の `state dir fsync failed` と同じ扱い）。耐久性の範囲は `rename` の後に親ディレクトリを fsync するところまでで、**OS ごと落ちた場合も差し替えは残る**（v0.1.0 からの変更。`docs/plan-lab-mock.md` 10 節の PR 1）。ただしディレクトリの fsync が失敗する環境では warn を出して成功のまま返すので、**その環境に限っては保証がプロセスの再起動までに戻る**。実験中はこの warn も監視する |
-| 同一状態ファイルの多重起動 | **起動時に排他する（v0.1.0 からの改訂）。** 状態ファイルに対して `<状態ファイル>.lock` を `wx` で作り、中身に保持プロセスの pid を 1 行書く。既にあれば `process.kill(pid, 0)` で生死を見て（**`ESRCH` だけを「居ない」の証拠にし、`EPERM` も判定できない失敗も生きている側に倒す**）、**生きていれば起動しない**（ロックのパスと `BITBANK_MOCK_STATE_PATH` を分ける旨を出して終了コード 1）。死んでいれば奪う（`SIGKILL` の後に二度と起動できないのを避けるため）。**pid を書けずに失敗した作りかけのロックは消してから投げる**（残すと中身が空になり、以後どの起動も奪わないので同じ行き止まりになる）。`SIGINT` / `SIGTERM` と `process.on("exit")` で手放す。**pid が読めないロックは奪わない**——空のロックファイルは他プロセスが `wx` で作った直後にも現れるので、`stale` と扱うと防ごうとしている二重起動をそこで作る。排他を取るのは `src/index.ts`（サーバの起動経路）だけで、`loadOrInitDefault()` は取らない（状態ファイルを読み直すだけの用途があるため）。**排他が無かったときに何が起きるかは実測済み**（2026-09-17）: 同じ状態ファイルへ 2 プロセスを向けて 3 本ずつ発注すると、両方が `order_id` 1・2・3 を 払い出して 6 本すべてに `success: 1` を返し、状態ファイルには後から書いた側の 3 本しか残らなかった。**競合を防ぎ切ってはいない**: 2 プロセスが同じ stale ロックを同時に奪いに行くと、消した直後に作る順序で 両方が取得しうる。取得後に pid を読み直して窓を狭めているが、消すには `flock` が要り Node は標準で持たない | 本モック固有 | 本物は口座状態を取引所側が単一に持つ | いいえ（実測に基づく。旧版は「ロックを足さない」を既決事項としていたが、その根拠「書き込みロックを入れても採番が分かれるので消失と重複は防げない」は**書き込みロックについての議論**だった。起動時の排他は状況そのものを作らせない別の機構であり、実測した消失・重複は起きなくなる。残る競合の窓は上記のとおり未解消で、そこは「保証する」とは書かない） | 並列にシナリオを流すときは `BITBANK_MOCK_STATE_PATH` をシナリオごとに分ける（同じパスは**黙って壊れる**のではなく起動しない）。`SIGKILL` の直後は stale ロックが残るが、次の起動が奪うので手で消す必要はない |
-| 状態ファイルのパス解決 | `BITBANK_MOCK_STATE_PATH` があればそれを、無ければ `BITBANK_MOCK_HOME`（既定 `~/.bitbank-mock`）の下の `sessions/<session>/state.json` を使う（`src/engine/persist.ts` の `defaultStatePath()`）。**空文字の env は「未設定」として扱い、次の候補へ落とす**（`BITBANK_MOCK_STATE_PATH=""` は `BITBANK_MOCK_HOME` へ落ちるので、`BITBANK_MOCK_HOME="/srv/x"` があれば `/srv/x/sessions/<session>/state.json` になる。`BITBANK_MOCK_HOME=""` は `~/.bitbank-mock` へ落ちる。両方が空か未設定のときだけ `~/.bitbank-mock/sessions/<session>/state.json`）。`src/server/config.ts` の `controlToken()` / `listenHost()` / `fillMode()` も空文字を未設定として落とすので、env の読み取りはこの 1 つの規則で揃っている。**相対パスはどちらの env でも通り、作業ディレクトリ基準で解決する**（`BITBANK_MOCK_STATE_PATH="rel.json"` は `rel.json`、`BITBANK_MOCK_HOME="rel"` は `rel/sessions/<session>/state.json`）。相対パスを弾かないのは、利用者が明示的に渡した値を黙って書き換えないため。書き出すファイルの許可は `0600`、途中のディレクトリは `mkdir -p` の既定（umask 次第。`umask 022` なら `0755`）で、同一ホストの他ユーザからディレクトリは辿れる | 本モック固有 | 本物はクライアント側に口座状態のファイルを持たない | はい（空文字を未設定として扱うこと、ディレクトリの許可を明示的に絞らないこと） | 並列にシナリオを流すときは `BITBANK_MOCK_STATE_PATH` に**絶対パス**を渡す。env を空で置いても（`BITBANK_MOCK_HOME=`）作業ディレクトリ配下へは逃げないが、**相対パスを値として渡すと起動ディレクトリごとに状態が分かれる**ので、実験を回す環境では両 env とも絶対パスで揃える |
-| 壊れた状態ファイル | fail-closed。不正な JSON・スキーマ違反・途中で切れたファイル・空ファイルはいずれも `loadState` が失敗を返し、`loadOrInitDefault` が throw して起動しない。黙って初期状態へ戻さず、壊れたファイルも消さない。ファイルが存在しないときだけ初期状態で始める | 本モック固有 | 本物には対応する概念がない | はい | 「残高が初期値に戻っている」状態でシナリオが進むことはない。起動しなかったこと自体を state 破損の合図として扱える |
-| 不変量を破る状態ファイル | fail-closed。zod スキーマは通るが「状態の不変量」を破る v3 の状態ファイル（`executedAmount > startAmount`、負の残高など）は、`loadState` が移行の直後に `invariantViolations()` を走らせて失敗を返し、`loadOrInitDefault` が throw して起動しない。同じ場所で不変量の**前提**（注文 id / trade id の一意性、採番と既存 id の整合、`startAmount > 0`）も `preconditionViolations()` が検査し、破れていれば `paper state violates invariant preconditions: ...` で同じく起動しない（下の「不変量の前提」）。失敗のメッセージには違反した不変量の番号と、対象を特定する識別子と値をそのまま載せる（不変量 1〜3・5 は注文 ID、注文の無い trade は trade ID、不変量 6 は資産キー `balance[<asset>]` / `locked[<asset>]`）（例: `paper state violates invariants: 6 violation(s): 1: order 1 executedAmount=0.005 startAmount=0.001; ...`）。状態は自動修復せず、ファイルも消さない。**v1 / v2 から移行した結果が破っている場合は warn を出して起動する**（下の「不変量をどこで担保するか」を参照） | 本モック固有 | 本物には対応する概念がない | はい | 負の `remaining_amount` や負の `free_amount` が Reconcile 経路へ出ない。ただし保証の範囲は 6 本すべてではない。warn なしで起動した v3 の state について読み込み時に検査済みなのは不変量 1〜3・5・6 で、不変量 4 は単一の状態からは判定できないため検査していない（遷移関数のガードとテストで担保）。移行の warn が出た state は違反したまま起動しているので、この検査済みの保証は付かない |
-| 状態の移行の冪等性 | v1 / v2 の状態ファイルを v3 へ移行する変換は決定的で、移行後の v3 を書き戻してもう一度読んでも結果は変わらない | 本モック固有 | 本物には対応する概念がない | いいえ | 旧 state から始めたシナリオでも、再起動のたびに注文・trade が動くことはない |
-| private stream | Phase 5 で PubNub ではなく素の WebSocket を提供する予定 | private stream docs のメッセージ形 | 接続・配信トランスポートが異なる | はい | 利用側は PubNub SDK ではなく WebSocket 接続層を使う |
-| private stream の順序 | 配信順序・重複なしを保証しない | private stream docs に順序保証の記載なし | Plan A では障害注入は提供しない | はい | 利用側は順不同・重複を許容して状態を解釈する |
+項目ごとに 1 小節。**「モックの挙動」が本文、残りの 4 列が箇条書き**である。v0.1.0 までは 1 項目 1 行の表だったが、1 行が 5,000 文字を超えて `grep` でも部分読みでも扱えなくなったため、内容を変えずに小節へ移した。
+
+### 注文照会
+
+`GET /v1/user/spot/order`（query: `pair`, `order_id`）と `POST /v1/user/spot/orders_info`（body: `pair`, `order_ids`）を実装する。ヒットした `OrderRecord` を `formatOrder()` で返す
+
+- **根拠**: REST API: Fetch order information / Fetch multiple orders
+- **本物との差異**: 3 か月超の履歴削除はしない。モック上の全注文が引ける
+- **推測**: いいえ
+- **利用側への含意**: `orders_info` を Reconcile の主経路にする
+
+### 存在しない単一注文 ID
+
+`GET order` は `50009` を返す。`pair` 不一致も `50009`
+
+- **根拠**: 公式は「3 か月超の終端注文は 50009」のみ明記
+- **本物との差異**: 存在しない ID 自体の明記はない
+- **推測**: はい
+- **利用側への含意**: snapshot を取得できない注文は利用側が stale / fail-closed と扱う
+
+### 存在しない一括照会 ID
+
+`orders_info` はエラーにせず該当 ID を `orders` から除外する。0 件でも `success: 1`。応答順はリクエストの `order_ids` 順
+
+- **根拠**: 公式は「3 か月超の終端注文は返さない」と明記
+- **本物との差異**: 存在しない ID への適用と配列順は未明記
+- **推測**: はい
+- **利用側への含意**: 利用側は欠落 ID の再照会上限を持つ必要がある
+
+### 注文状態
+
+`INACTIVE` を含む公式の 7 値を `OrderRecord.status` に持つ。Plan A で `INACTIVE` は到達しない
+
+- **根拠**: REST API: Fetch order information
+- **本物との差異**: 逆指値等は未実装
+- **推測**: いいえ
+- **利用側への含意**: 終端状態の不変性を検証対象にする
+
+### 注文 ID
+
+状態の `nextOrderSeq`（初期値 1）を永続化し、発注のたびに単調増加させる。採番が安全整数を使い切ったら発注を断る（`create_order` は 70001。同じ id を 2 回配らないため。下の「不変量の前提」）
+
+- **根拠**: 公式は数値の order id を定義
+- **本物との差異**: 実取引所の桁数・採番方式とは異なる。v2 から移行した巨大 ID（旧 `Date.now() * 1000 + counter`）がある場合は、その最大値 + 1 から続くので桁が大きく残る
+- **推測**: はい
+- **利用側への含意**: シナリオの再現性と再起動後の一意性を優先
+
+### trade ID
+
+注文 ID とは別の `nextTradeSeq`（初期値 1）を永続化する。v2 の `history.id` は使わず 1 から振り直す
+
+- **根拠**: 公式の trade history は trade_id を持つ
+- **本物との差異**: 本物の採番とは一致しない
+- **推測**: はい
+- **利用側への含意**: 部分約定でも trade を一意に参照できる
+
+### 成行注文の記録
+
+成行も `OrderRecord` を採番し、即時 `fillOrder` して `FULLY_FILLED` として残す
+
+- **根拠**: 公式は成行も order id を返す
+- **本物との差異**: 旧モックは成行を `history` にだけ入れ、注文レコードを持たなかった
+- **推測**: はい
+- **利用側への含意**: Phase 2 の ID 照会で成行も引ける前提になる
+
+### v2 からの移行
+
+旧 `openOrders` は `UNFILLED`、旧 `history` は `FULLY_FILLED` + `trades`。`history.filledAt` を移行後の `orderedAt` とする
+
+- **根拠**: 旧 state に発注時刻がない
+- **本物との差異**: 移行済み注文の `ordered_at` は真の発注時刻ではない
+- **推測**: はい
+- **利用側への含意**: 既存ローカル state の照会結果は検証データに使わない
+
+### 指値の約定価格
+
+`fillOrder()` は指値に対し、買いは `price <= order.price`、売りは `price >= order.price` だけを受け付ける。成行には適用しない。違反は状態を変えず `INVALID_PRICE`
+
+- **根拠**: 指値注文の `price` は order price と定義される（REST API: Create new order）
+- **本物との差異**: 約定可能価格の明文規定は確認できていない
+- **推測**: はい（2026-09-11 に検証要件として決定）
+- **利用側への含意**: `price × size` を上限とする利用側の残高見積もりと整合する
+
+### 手数料
+
+Plan A は maker / taker 表示に関わらず**単一の料率**で計算する。既定は `DEFAULT_TAKER_FEE_RATE = 0.0012`（0.12%）で、**サーバとして動かす限りこの値から変わらない**（`src/index.ts` は料率を渡さず、環境変数も CLI フラグも無い）。`SessionStoreOptions.feeRate` で差し替える口はあり `SessionStore` → `runTick()` / 発注ルート → `fillOrder()` まで通っているが、**同一プロセスで `SessionStore` を組み立てる場合だけ**の口で（`package.json` に `main` / `exports` が無く、依存として import できない）、現状これを渡しているのはテストだけ・値はすべて `0` である。`makerTaker` は trade に記録するだけで、`fillOrder()` の `feeQuote = notional * feeRate` には効かない
+
+- **根拠**: 計画書 9 節の決定。料率の実測は **`GET https://api.bitbank.cc/v1/spot/pairs`（認証不要）**
+- **本物との差異**: **実 API は通貨ペア・maker/taker 別（2026-09-17 の 1 回の観測）。** taker は `0.0012` が 61 ペア、**`btc_jpy` だけ `0.001`**。maker は **`-0.0002` が 61 ペア**（負＝リベートで受け取る）、**`btc_jpy` だけ `0`**。つまり**モックが唯一桁を登録しているペア `btc_jpy` が、taker も maker も唯一の例外**にあたる。指値約定ではモックが `0.0012` を**引く**のに対し、実 API は受け取る（他 61 ペア）か無料（`btc_jpy`）で、**符号が逆になる**。**料率は固定の契約ではない**（キャンペーンで変わる。`bitbank-lab-mcp` は `/spot/pairs` を TTL 1 時間でキャッシュし、`refresh_pairs_cache` で強制再取得する作りになっている）ので、上の数値はこの時点の観測であって、将来も同じとは限らない
+- **推測**: はい
+- **利用側への含意**: 累計の約定代金には手数料を含めない。Plan B で見直す。**利用側は残高の推移を手数料まで含めてモックと突き合わせないこと**（指値では符号ごと違う）。直すなら `/spot/pairs` を取得して `taker_fee_rate_quote` / `maker_fee_rate_quote` をペア別に引く
+
+### 拘束額
+
+買いの `locked_amount` は注文残量の価格と手数料から計算する（`price × amount × (1 + feeRate)`）。**2026-09-17 の実測でこの向きが実 API と一致することを確認した。挙動は変えていない**
+
+- **根拠**: 現行 `computeLocked()`。**実 API を実測**（2026-09-17）: `xrp_jpy` に約定しない指値買いを 1 本置き、`GET /v1/user/assets` の `locked_amount` の増分を測って取り消した。`price 101 × amount 9.9009 = 999.9909` に対し増分は **`1001.1908`**。差 **1.1999 JPY = 建玉額の 0.12%** で、`taker_fee_rate_quote`（`0.0012`）と一致する
+- **本物との差異**: **実 API は拘束額に手数料を含む。しかも指値（maker）注文なのに taker 料率だった。** `maker_fee_rate_quote` は `-0.0002`（リベート）なので、maker 料率で拘束していれば増分は建玉額を**下回る**はずだが、そうならなかった。**したがってモックの `computeLocked()` は向きも率も正しく、ずれているのは利用側の `reserved = price × size`（手数料なし）の方である。** この結論は**この行の意味を反転させる**——`60001` の境界（下記）は**モックの作り物ではなく実 API でも起きる**。**留保**: 1 回の観測。ペアによって違わないか、成行（taker）と指値で拘束が変わらないかは測っていない。`btc_jpy` は maker 料率が `0` なのでこの方法では測れない（「手数料を含まない」と区別が付かない）
+- **推測**: いいえ（手数料を含めること自体。実測で確定）。はい（料率を `DEFAULT_TAKER_FEE_RATE` 固定にしていること。上の「手数料」節）
+- **利用側への含意**: **手数料を含めない拘束額の見積もりは実 API の拘束額より小さい。** 見積もりと口座残高が近いと、**通ると見た注文が実 API でも残高不足で断られる**（モックと同じく）。再現と境界は `tests/scenarios/plan-a.test.ts`: 残高 1,000,000 JPY で `price 5,000,000 × amount 0.2` は `reserved` では枠ちょうどだが `1,001,200` を要求されて `60001`、通る上限は `0.1997`。**利用側は発注可能量の見積もりに手数料ぶんの余白を見込むこと。** プラン A の分割回避シナリオ（9.9 万円 × 6 本）のように枠を使い切る設計だと踏む
+
+### 数量・価格の精度
+
+応答の数量はペア桁で `toFixed`（btc_jpy は数量 4 桁 `"0.0010"`、価格 0 桁 `"5000000"`）。未登録ペアも同じ桁を仮置きする（**桁を登録しているのは `btc_jpy` だけ**なので、公式一覧の残り 61 ペアはすべてこの仮置きで動く。ペアの実在性の検査を入れた後も、この決定は変えていない。下の「ペア」節）。発注 `amount` が桁に収まらなければ `60004`。trade の `fee_amount_quote` は JPY 4 桁
+
+- **根拠**: pair list / `GET /spot/pairs` の `amount_digits` / `price_digits`
+- **本物との差異**: 公式 `60004` は「数量がしきい値を下回る」。モックは桁溢れ拒否に流用。価格の桁溢れは `20003`。ゼロ数量は `"0.0000"`、未約定の `average_price` だけは `"0"`
+- **推測**: はい（60004 の流用・未登録ペアの桁・fee 桁）
+- **利用側への含意**: 円・satoshi の整数表現との変換誤差を防ぐ
+
+### ペアの実在性
+
+公式一覧（62 ペア）に無いペアは、照会 4 経路と発注で `40017`。取消 2 経路と `/_control/` は断らない。発注停止（`stop_order`）のフラグは持つが発注の可否に使わない
+
+- **根拠**: pairs.md / `GET /spot/pairs`（2026-09-17 実測。一覧は `src/engine/pairs.ts` の `OFFICIAL_PAIRS` に静的に写す）
+- **本物との差異**: 一覧は静的な写しなので、bitbank が上場を増やすと古くなる向きに倒れる（本物なら通る発注をモックが断る）
+- **推測**: 発注経路だけ外挿（推測）。照会 4 経路は実測
+- **利用側への含意**: **「照会できるペア」と「発注できるペア」は別の集合**として扱うこと。経路ごとの挙動と根拠は下の「ペア」節にある
+
+### 残高の桁
+
+`GET /v1/user/assets` の `free_amount` / `onhand_amount` / `locked_amount` は、同じ応答で宣言する `amount_precision` の桁の固定桁 10 進文字列で返す（jpy は 4 桁 `"9892.0000"`、他資産は 8 桁 `"0.50000000"`）。残高と拘束額をその桁の最小単位の整数（`bigint`）へ四捨五入してから `free = onhand - locked` を整数で引くので、応答の 3 値の間でこの等式が文字列として成り立つ。倍精度の乗除を挟まないため、`Number.MAX_SAFE_INTEGER` を超える残高でも指数表記に落ちない。非有限な残高（壊れた state）だけは丸めずそのまま出す
+
+- **根拠**: REST API: Fetch asset（応答は文字列の金額と `amount_precision` を持つ）。桁の値 4 / 8 は本モックの既存宣言を踏襲
+- **本物との差異**: **丸めか切り捨てかは 2026-09-17 に実測して確定した——切り捨てである。** 実 API の `locked_amount` は、厳密値 `999.9909 × 1.0012 = 1001.19088908` に対し **`1001.1908`** を返した（四捨五入なら `1001.1909`）。モックも切り捨てに合わせた（`toMinimumUnits()`。**以前は四捨五入だった**）。**区別できていないこと**: 「合計を切り捨てる」のか「手数料を切り捨ててから足す」のかは決まっていない。これは観測が 1 点だったからではなく**構造的**である——`price` が整数なら `price × amount` は表示桁（4 桁）の格子にちょうど乗るので、`floor(n + n×r) = n + floor(n×r)` が常に成り立ち、2 つの規則は必ず同じ値になる。**分けるには `price × amount` が 4 桁に収まらない組み合わせが要る**（＝価格に小数がある場合）。例: `101.234 × 9.9009 = 1002.3077106` なら、合計切り捨ては `1003.5104`、手数料を切り捨てて足すと `1003.5104106` で分かれる。ただし**そういう価格を実際に置けるペアがあるかは測っていない**——`price_digits` を実測して記録したのは `btc_jpy`（0 桁）だけで、他のペアの桁は `/spot/pairs` にあるが取得していない。**測るならまずその桁を確かめること。****2 つの規則が一致する条件は「`price × amount` が表示桁の格子にちょうど乗ること」**で、「価格が整数であること」ではない。モックの桁検査 `fitsDigits()` は整数から `1e-8`（`DIGIT_FIT_EPS`）未満のずれを許すので、**厳密な整数でない価格も通る**。ずれが 4 桁目（`1e-4`）に届くには `amount > 1e4` が要るが、届けばモックの上でも分かれる（`price = 5000000.000000009`、`amount = 10000` で確認）。これはモックの許容幅に由来する作り物で、実 API の契約とは関係ない。**負値も未実測**で、モックは 0 方向へ切り捨てる（絶対値を小さくする向き）。`free_amount` は負になり得るので、実 API が -∞ 方向へ倒すなら差が出る。3 値をどう整合させるかは引き続き公式 docs に明記がない。engine の内部演算は倍精度のままで、丸めは応答文字列だけに効く
+- **推測**: はい（jpy 以外を一律 8 桁とすること、free を差で組み立てること、負値の切り捨て方向）。いいえ（`amount_precision` の存在、金額が文字列であること、**切り捨てであること**——実測で確定）
+- **利用側への含意**: 円建て残高が整数に落ちるので、利用側は最小単位（円 / satoshi）へ入口で丸め直さずに取り込める。表示の丸めで負値を 0 にクランプはしないため、`locked > 残高` は `free_amount` が負のまま現れる。残高の非負・`locked <= 残高` は引き続き不変量 6（`src/engine/invariants.ts`）で検査する
+
+### 資産応答の固定フィールド
+
+`GET /v1/user/assets` は公式の応答表にあるフィールドを全て返す。`withdrawing_amount` は出金を実装しないので常に 0（残高と同じ固定桁）。`withdrawal_fee` は公式と同じ形のオブジェクトで、jpy は `{under, over, threshold}`、他資産は `{min, max}`。値は全て 0。`collateral_ratio` は信用取引を実装しないので `"0"` 固定。`network_list` は jpy では省略し、他資産では常に空配列
+
+- **根拠**: REST API: Fetch asset の応答表（`withdrawing_amount` / `withdrawal_fee` / `network_list` / `collateral_ratio`）
+- **本物との差異**: 本物は資産・ネットワークごとの実際の出金手数料と代用掛け目を返し、`network_list` に対応ネットワークを列挙する。本モックは出金・信用取引・ネットワークのいずれも模さない
+- **推測**: はい（0 固定・掛け目 0・空配列。フィールドの存在と形は公式どおりで、いいえ）
+- **利用側への含意**: 利用側は出金手数料・代用掛け目・ネットワーク一覧を判断材料にしない。値が 0 であることを「手数料無料」「担保価値なし」と解釈せず、未実装の印として扱う
+
+### assets に出る資産
+
+`GET /v1/user/assets` は**固定の 10 資産**（`jpy` / `btc` / `eth` / `xrp` / `ltc` / `bcc` / `mona` / `xlm` / `qtum` / `bat`。`src/routes/format.ts` の `KNOWN_ASSETS`）に、残高か拘束を持つ資産を足して返す。新規状態では 10 件ちょうど、`sol` の残高を足すと 11 件（実測 2026-09-18）
+
+- **根拠**: **無し。公式は返す資産の集合を明記していない**
+- **本物との差異**: **本物が何を返すかは未実測。** 公式ペア一覧の 62 ペアに現れる 48 資産のうち 38 は、このモックでは残高を持つまで応答に現れない
+- **推測**: はい（10 資産という並びに根拠は無く、実装当初からの値）
+- **利用側への含意**: **応答に無い＝取扱が無い、と解釈しないこと。** 残高 0 の資産は現れないことがある。資産の存在確認にこの応答を使わない
+
+### 平均約定価格の丸め
+
+`average_price = executedNotional / executedAmount` を価格桁に四捨五入（`executedAmount == 0` なら除算せず `"0"`）。部分約定で平均が価格単位に乗らないとき、`executed_amount × average_price` と約定代金の差は `executed_amount × 価格単位 × 0.5` 以下
+
+- **根拠**: REST API の `average_price` は文字列
+- **本物との差異**: 内部は JS 倍精度のまま。丸めは応答文字列だけ
+- **推測**: はい
+- **利用側への含意**: 利用側が累計の約定代金をこの積で再計算すると同じ誤差が乗る
+
+### 取消済み・約定済みの取消
+
+取消済み（`CANCELED_*`）は `50026`、約定済み（`FULLY_FILLED`）は `50027`。`REJECTED` は `50009`。`cancel_orders` はリクエスト順で終端が混ざるとエラーを返し、1 件も取消しない。**応答の `orders` は `order_ids` より短くなり得る。** 要求した id のうち「そのペアの active な注文」に解決しないものを黙って飛ばすためで、(a) 存在しない id、(b) 別のペアの注文の id、(c) 同じ id を 2 回以上入れたときの 2 件目以降（直前の取消で終端になっている）の 3 つが該当する（実測）。いずれもエラーにはならず、解決した分だけ取り消して `success: 1` を返す
+
+- **根拠**: error codes
+- **本物との差異**: 公式のバッチ混在時の挙動は未確認。`REJECTED` への取消コードも未明記
+- **推測**: はい（REJECTED とバッチ fail-closed、重複 id の扱い）
+- **利用側への含意**: 終端状態の識別を保つ。**取消が一部だけ成立する意味での部分成功は起きない**（終端が混ざれば 1 件も取り消さない）。一方で `orders` の件数は上記 3 つの理由で `order_ids` より少なくなり得るため、**利用側は件数の一致で成否を判定せず、`order_id` の集合で照合すること**
+
+### エラーコード
+
+残高不足 `60001`。欠落: amount `30001`、price `30012`、side `30013`、type `30015`、order_id `30006`、order_ids `30007`、**pair `30009`**。絞り込みパラメータの不正値は専用コード（`40006` / `40007` / `40008` / `40009` / `40022`。上の「絞り込みパラメータの不正値」節）。**不正なペアは `40017`**。それ以外の不正値は `20003`（公式の ACCESS-KEY 欠落コードをパラメータエラーに流用）
+
+- **根拠**: errors.md。**`30009`「Missing asset.」と `40017`「Invalid asset.」は 2026-09-17 に実 API で実測**（`btc_jpy`、認証済みの口座）。`pair` の欠落 → `30009` を 3 経路で確認（`GET order` / `POST orders_info` / **`POST order`**。最後のものは `pair` が無いと取引できる先が無いので注文は成立しない）。**不正なペア → `40017` は照会系 4 経路すべてで確認**（`GET order` / `GET active_orders` / `GET trade_history` / `POST orders_info` に `pair=xxx_yyy`）。`POST order` に `pair: "   "`（空白のみ）も `40017`
+- **本物との差異**: 全 error code は網羅しない。HTTP は**互換ルートの失敗をすべて 200** に揃えた（実 API の実測。上の「封筒に包まれない応答」節）。`src/routes/envelope.ts` の `ErrorCode` に errors.md で定義されない番号は置かない
+- **推測**: はい（`20003` と `60004` の流用、HTTP 区分）
+- **利用側への含意**: 利用側がコードで失敗原因を区別できる。**流用は `20003` と `60004` の 2 つだけになった**（`10000` の流用は廃止。`60004` の公式の意味は「Order quantity has exceeded the lower threshold.」＝最小数量割れで、本モックは桁溢れに使っている）。この 2 つは公式と意味が違うので、コードの意味を errors.md から引かない
+
+### 注文の固定フィールド
+
+`post_only: false` は `type == limit` のときだけ出す（成行では省略。`price` の有無とは独立で、`price` を持たない指値でも出る）。`expire_at: null`。`user_cancelable` はアクティブ注文だけ `true`。成行の `price` は省略し `average_price` に約定値を載せる
+
+- **根拠**: REST API: Fetch order information の応答表（`price` は「type = `limit` または `stop_limit` 時のみ」、`post_only` は「type = `limit` 時のみ」と別条件で定義される）
+- **本物との差異**: post only・期限・注文訂正を実装しない。`post_only` を `true` にする経路は無い
+- **推測**: はい（値が常に false であること）。いいえ（出現条件は公式どおり）
+- **利用側への含意**: 利用側はこれらの値で分岐しない前提
+
+### `expire_at`
+
+常に `null` を返す（有効期限を実装しないため）
+
+- **根拠**: REST API: Fetch order information の応答表に `expire_at` がある
+- **本物との差異**: **本物は数値を返す場合がある。** 実 API の `GET /v1/user/spot/active_orders` で `"expire_at":1803738105746` を観測した（2026-09-16）。ただし観測できたのは `type: "stop"` / `status: "INACTIVE"` の注文で、**本モックが実装する通常の指値注文が非 `null` を返すかは未確認**
+- **推測**: はい
+- **利用側への含意**: **要追加確認。挙動は変えていない。** 指値注文 1 件の応答を実 API で確認できれば確定する。利用側は `expire_at` を `null` 固定と決め打ちしない
+
+### 注文の `canceled_at`
+
+取消済み（`canceledAt` を持つ注文）のときだけ出す。取消系の 2 経路（`cancel_order` / `cancel_orders`）では必ず出て、未約定・約定済みの注文を `GET order` / `orders_info` / `active_orders` で引いたときは出ない。取消済み注文を `GET order` / `orders_info` で引くと出る
+
+- **根拠**: REST API: **Cancel order の応答表**（`canceled_at | number | canceled at unix timestamp (milliseconds)`）。この項目を応答表に持つ節は Cancel order だけで、Fetch order information の表には無い
+- **本物との差異**: **未確定。** 公式の記述では決め切れない。(a) Fetch order information の応答表に `canceled_at` は載っていない。(b) Fetch multiple orders の応答例 JSON には `"canceled_at": 0` が入るが、あの例は全フィールドをダミー値で並べた雛形で、常に返る証拠にならない。(c) Fetch active orders の応答例 JSON には入っていない（アクティブな注文は取消済みになりえないので、どちらの解釈とも矛盾しない）。(d) 英語版は Cancel order の型を `number`、日本語版は `number | undefined` と書いており、両版で食い違う。本物が取消済み注文の照会で常に返すのか、Cancel order の応答でだけ返すのかは確認できていない
+- **推測**: はい（照会経路で出すかどうかの選択）。いいえ（Cancel order の応答に出ること）
+- **利用側への含意**: 利用側は `canceled_at` の**有無**を取消判定に使わない。取消は `status`（`CANCELED_UNFILLED` / `CANCELED_PARTIALLY_FILLED`）で判定する
+
+### active_orders の絞り込み
+
+`count` / `from_id` / `end_id` / `since` / `end` を受け、生成順のまま絞る。`from_id`/`end_id` は inclusive、`since`/`end` は `ordered_at` のミリ秒 inclusive
+
+- **根拠**: REST API: Fetch active orders
+- **本物との差異**: 公式の since/end が秒かミリ秒かは明記なし
+- **推測**: はい
+- **利用側への含意**: 発注応答を取りこぼした利用側が自分の注文を探す経路
+
+### trade_history の絞り込み
+
+`order_id` / `since` / `end` / `order(asc|desc)` を追加。既定は `desc`（新しい順）。`count` 指定時は最大 1000。未指定なら全件
+
+- **根拠**: REST API: Fetch trade history
+- **本物との差異**: 公式の既定件数は未確認。モックは未指定で全件返す
+- **推測**: はい
+- **利用側への含意**: 利用側が注文単位で約定を突き合わせられる
+
+### 約定の固定フィールド
+
+`formatTrade()` は公式の「Fetch trade history」の応答表のうち、現物で意味を持つ 12 フィールドを全て返す。`fee_occurred_amount_quote` は公式が「現物取引では `fee_amount_quote` と同値」と明記するので同値を返す。`fee_amount_base` は base 資産の手数料を取らないので常に `"0"`
+
+- **根拠**: REST API: Fetch trade history の応答表（`fee_occurred_amount_quote | string | quote fee occurred amount which taken later. In case of spot trading, this value is same as fee_amount_quote.`）
+- **本物との差異**: `fee_amount_base` の桁の刻み方は公式に記載が無く、本モックは桁を付けない素の `"0"` を返す（`fee_amount_quote` は jpy の 4 桁）。本物が `"0.00000000"` のような固定桁を返すかは**要追加確認**
+- **推測**: はい（`fee_amount_base` の表記）。いいえ（`fee_occurred_amount_quote` の値）
+- **利用側への含意**: 利用側は quote 手数料を `fee_amount_quote` と `fee_occurred_amount_quote` のどちらから読んでも同じ値になる。`fee_amount_base` の文字列表記に桁を仮定しない
+
+### 信用取引・逆指値の項目
+
+公式の応答表にあっても、本モックが機能を実装しないフィールドはキー自体を出さない。注文: `position_side` / `triggered_at` / `trigger_price`。約定: `position_side` / `profit_loss` / `interest`
+
+- **根拠**: REST API の各応答表（`position_side` は「only for margin trading」、`triggered_at` / `trigger_price` は「present only if type = `stop`, `stop_limit`, `take_profit`, `stop_loss`」と条件が明記される）
+- **本物との差異**: `profit_loss` / `interest` は型が `string | undefined` とだけ書かれ、省略条件の明記が無い。信用取引の項目なので現物では出ないと判断した（**推測**）
+- **推測**: はい（`profit_loss` / `interest` を出さない判断）。いいえ（その他は公式の条件どおり）
+- **利用側への含意**: 利用側はこれらのキーの存在を前提にしない。省略は未実装の印であって、値 0 の意味ではない
+
+### 配列の包み方
+
+`orders_info` / `active_orders` / `cancel_orders` は `data.orders`、`trade_history` は `data.trades` に配列を置き、`data` 直下に他のキーを持たない
+
+- **根拠**: REST API: Fetch multiple orders / Fetch active orders / Cancel multiple orders は `orders | Array`、Fetch trade history の応答例は `data.trades`
+- **本物との差異**: 差異なし
+- **推測**: いいえ
+- **利用側への含意**: 利用側は配列の位置を固定して読める
+
+### 注文オブジェクトの共通形
+
+注文を返す 5 経路（`GET order` / `POST order` / `cancel_order` / `orders_info` / `active_orders`）は `formatOrder()` の 1 つの整形関数を共有する。経路ごとの形の違いは `canceled_at` の有無だけで、それも注文が取消済みかどうかで決まる
+
+- **根拠**: REST API: Fetch multiple orders と Fetch active orders は応答を「list of object same as [Fetch order information response]」と定義し、Cancel multiple orders は「list of object same as [Cancel order response]」と定義する。Cancel order の応答表は Fetch order information の表に `canceled_at` を足したもの
+- **本物との差異**: 差異なし
+- **推測**: いいえ
+- **利用側への含意**: 経路ごとに別のパーサを持つ必要はない
+
+### maker / taker 表示
+
+指値の trade は `maker`、成行は `taker` と表示する
+
+- **根拠**: REST API の trade history
+- **本物との差異**: 手数料が 0.12% 固定であり、**指値の表示と計算が整合しない**。`maker` と表示しながら taker 相当の率を引いている。実 API の maker 料率は上の「手数料」節のとおり負またはゼロなので、**`fee_amount_quote` の符号まで違う**
+- **推測**: はい
+- **利用側への含意**: 累計の約定代金の判定には影響しない。`fee_amount_quote` を使う処理があるなら、`makerTaker` との整合を前提にしないこと
+
+### 注文訂正
+
+注文訂正 API を提供しない
+
+- **根拠**: bitbank REST API に amend 相当のエンドポイントが無い（公式 rest-api.md に記載なし）
+- **本物との差異**: bitbank の対応可否も含め、本モックの対象外
+- **推測**: いいえ
+- **利用側への含意**: 利用側は発注後の価格・数量変更を前提にしない
+
+### 部分約定を取り消した注文
+
+`CANCELED_PARTIALLY_FILLED` でも `executed_amount` と trade 記録を保持する
+
+- **根拠**: REST API の status enum（`CANCELED_PARTIALLY_FILLED` が定義されている）
+- **本物との差異**: 本物の保持期間（3 か月）はモックに無い
+- **推測**: はい
+- **利用側への含意**: 利用側の累計約定量は取消後も減らない
+
+### 成行注文の価格上限
+
+成行に価格上限は設けない
+
+- **根拠**: 公式 rest-api.md に成行の価格上限を指定するパラメータの記載が無い（**未実測**）
+- **本物との差異**: 指値だけに価格制約を適用する
+- **推測**: はい
+- **利用側への含意**: 価格上限が必要な実験は指値で行う
+
+### 認証
+
+Plan A は認証ヘッダを検証しない
+
+- **根拠**: REST API は private API に認証を要求
+- **本物との差異**: 意図的に未実装
+- **推測**: はい
+- **利用側への含意**: 利用側の HMAC 送信は通過するが認証の検証対象にはしない
+
+### レート制限
+
+実装しない
+
+- **根拠**: REST API: QUERY 10/s、UPDATE 6/s、超過時 429。**error code は `10009`**（errors.md「You sent requests too frequently. Retry later with decreased requests.」。2026-09-17 に実 API で `HTTP 429` + 封筒 `10009` を実測）
+- **本物との差異**: 意図的に未実装
+- **推測**: いいえ
+- **利用側への含意**: 負荷・429 復旧の実験には使えない。**利用側は `10009` と 429 を再試行の合図として扱う**（モックは決して返さない）
+
+### 封筒に包まれない応答
+
+互換ルート（`/v1/user/...`）のうち、**Fastify が route ハンドラへ入る前に返す応答は bitbank 封筒ではない**。(a) `content-type: application/json` で本文が壊れた JSON（`__proto__` キーを含む本文も同じ扱い）は `{"statusCode":400,"code":"FST_ERR_CTP_INVALID_JSON_BODY",...}`、(b) **未登録のパス・メソッドは封筒に包むようになった**（実 API の実測に合わせた。下記）。`/_control/` の未登録パスだけは従来どおり `{"message":"Route ... not found","error":"Not Found","statusCode":404}`、(c) ハンドラ内の未捕捉例外は `{"statusCode":500,...}` で例外メッセージが出る（**現状、互換ルートのハンドラから出る未捕捉例外は無い**。`applyFill()` の throw を `Result` へ変えて、state ファイル由来の 2 経路——採番の飽和と `startAmount == 0`——を塞いだ）。ハンドラが**扱った**失敗（欠落・不正値・不正なペア `40017`・数量の桁溢れ `60004`・残高不足 `60001`・`50009` などの照会エラー）は **HTTP 200 + 封筒**で返す。上の (c) の未捕捉例外だけはこの規則の外で、封筒に包まれない素の 500 になる（現状その経路は無い）。**かつてルート層で弾いた欠落・不正値だけ 400 にしていたが、やめた**。実 API は区別せず 200 を返すことを 2026-09-17 に 17 経路で実測した（`btc_jpy`、認証済みの口座）。失敗は封筒の `success: 0` だけが表す
+
+- **根拠**: 本モック固有（Fastify の既定ハンドラ）
+- **本物との差異**: **実 API の未登録パスは 3 通りに分かれる**（2026-09-17 実測）。`/v1/` 直下（`/v1/nonexistent`、認証ヘッダ無し）は `HTTP 404` + 封筒 `10000`（"Url not found."）。`/v1/user/` 配下（`/v1/user/spot/ping`）は認証ヘッダ無しで `HTTP 200` + 封筒 `20003`（"ACCESS-KEY not found."）、**有りで `HTTP 200` + 封筒 `20001`**（"Authentication failed api authorization."）。**実 API は認可をルーティングより先に走らせており、パスの打ち間違いが認証エラーに見える。** モックは `20003` の側だけを再現する（認証ヘッダを検証しないため。`20001` との出し分けはヘッダを見ることになり README の「認証は非目標」に触れるのでしない）。壊れた本文・内部エラーに対する本物の応答は確認できていない
+- **推測**: はい
+- **利用側への含意**: **未確定。** 本物が壊れた JSON 本文へ返すコードが errors.md から決められないので、封筒へ包み直す変更は入れていない（推測でコードを選ばない）。利用側のパーサは、実装済みエンドポイントであっても `success` キーを持たない応答が返り得ることを前提にする（`success` の有無で分岐し、無ければ HTTP ステータスで扱う）
+
+### パラメータの型強制
+
+**id は実 API に合わせて型ごと検査する（2026-09-17 の実測で確定。挙動を変えた）。** `order_id` が 10 進の数字として読めなければ `40013`、`order_ids` が id の非空配列でなければ `40014`、`pair` が文字列でなければ `40017`（`src/routes/params.ts` の `isOrderIdValue` / `isOrderIdArray`）。**それ以外の数値パラメータは従来どおり型を見ずに強制する**（`z.coerce.number()`、`/_control/` は素の `Number()`）。したがって発注の `amount` / `price` では **`true` は `1`、要素 1 つの配列 `[0.001]` は `0.001` として通る**（実測: `{"amount":[0.001]}` → `start_amount: "0.0010"` の注文が成立、`{"price":true}` → `price: "1"` の指値）
+
+- **根拠**: **実 API を実測**（2026-09-17、認証済みの口座、読み取り経路のみ）。`GET order` に `order_id=true` / `1.5` / 同名 2 本 → いずれも **`40013`**（"Invalid order id."）。`orders_info` に `order_ids` が `"1"` / `1` / `[1.5]` / `[]` → いずれも **`40014`**（"Invalid order id array."）。`pair: true` → **`40017`**。コードの定義は errors.md
+- **本物との差異**: **実 API は「読めない id」と「読めたが存在しない id」を分けている**（前者 `40013`、後者 `50009`）。直す前のモックはどちらも `50009` か `20003` に潰していた。**一番大きかった差は空配列**で、モックは `order_ids: []` に `success: 1` と空の一覧を返していたのに対し実 API は `40014` で断る。**`order_ids: [true]` だけは実 API が `10001`（"System error."）を返す**（実測）。モックはこれを再現せず `40014` に寄せる——内部エラーは契約ではなく、模す意味がないため。取消の 2 経路（`cancel_order` / `cancel_orders`）の同じ入力は**未実測**で、挙動も変えていない
+- **推測**: 一部はい（`[true]` を `40014` にすること、取消経路を変えないこと）。いいえ（`40013` / `40014` / `40017` の使い分け）
+- **利用側への含意**: **利用側は `orders_info` に空の `order_ids` を送らないこと**（モックは以前受けていたが実 API は断る）。id は 10 進の整数の文字列か数値で送る。発注の `amount` / `price` は型の誤りが `success: 0` で弾かれるとは限らないので、送る側で JSON の型を保証する
+
+### 絞り込みパラメータの不正値
+
+**`active_orders` は `count` / `from_id` / `end_id` / `since` / `end` の 5 つ、`trade_history` は `count` / `since` / `end` の 3 つ**（`trade_history` に `from_id` / `end_id` は無い。理由は「本物との差異」列）。**空文字と空白だけの値を「未指定」や `0` として扱わず**、パラメータごとの error code で断る（**HTTP 200**。上の「封筒に包まれない応答」節）。`count` `40006` / `end` `40007` / `end_id` `40008` / `from_id` `40009` / `since` `40022`。数値として読めない値（`?count=abc`）と、同名クエリが 2 本来て配列になった値も同じコード。複数が同時に不正なときは**クエリ文字列の並び順に依らず固定の優先順**で 1 つを返す。順序は `src/routes/params.ts` の `QUERY_PARAM_ORDER`（`count` → `from_id` → `end_id` → `since` → `end`）で決まり、**zod のスキーマ定義順ではない**（スキーマの並びを逆にしても応答が変わらないことを隔離コピーで実測）。指定が無いときの挙動は従来どおり
+
+- **根拠**: **実 API を実測**。2026-09-16（`btc_jpy`、認証済みの口座）: `active_orders?count=` → `40006`、`active_orders?end=` → `40007`、`trade_history?since=` → `40022`。**2026-09-17 に追加で実測し、それまで推測だった 3 点を確定させた**: (a) `end_id=` → `40008`、`from_id=` → `40009` を `active_orders` と `trade_history` の**両方**で確認。(b) 空白だけの値 `?end=%20` → `40007`（空文字と同じ）。(c) 複数同時不正は位置に依らない（`count=&end=` も `end=&count=` も `40006`、`since=&count=` も `40006`）。コードの定義は errors.md（`0badd680`）の `"Invalid count."` / `"Invalid end param."` / `"Invalid end_id."` / `"Invalid from_id."` / `"Invalid trading start time."`
+- **本物との差異**: **`trade_history` の `from_id` / `end_id` が未確定（挙動は変えていない）。** rest-api.md の Fetch trade history のパラメータ表は `pair` / `count` / `order_id` / `since` / `end` / `order` の 6 つだけで、**`from_id` / `end_id` を載せていない**（Fetch active orders の表には両方ある）。ところが実 API は `trade_history?end_id=` に `40008`、`?from_id=` に `40009` を返し、**絞り込みにも使っている**（対照の `?count=1` が非空に対し、`?from_id=<巨大値>` と `?end_id=1` はどちらも空。2026-09-17 実測）。公式ドキュメントと実 API が食い違っており、どちらを正とするか決め切れないので、**モックは公式どおり `trade_history` に両パラメータを持たない**（送られても黙って無視し `success: 1` を返す）。**`trade_history` が何で絞るかは 2026-09-17 に実測して確定した——`from_id` は trade id で絞る**（最新の約定の `trade_id` を渡すと拾え、同じ約定の `order_id` を渡すと空。対照として極端に大きい値を渡すと空になるので、「無視されている」可能性も潰してある）。それでも**モックは実装しない**——公式 `rest-api.md` のパラメータ表に載っていないという上の理由が変わらないため。確定したのは実 API の側の意味だけで、どちらを正とするかの判断は動いていない
+- **推測**: 一部はい（`trade_history` の 2 パラメータを持たない選択）
+- **利用側への含意**: v0.1.0 からの**改訂**。旧版は `z.coerce.number()` が `""` を `0` にするため、**`?end=` が `success: 1` のまま常に空配列**を返していた（`0` 以下だけを残す絞り込みになる）。`?count=` は汎用の `20003` だった。**利用側は `trade_history` に `from_id` / `end_id` を渡さないこと**（モックは無視するが実 API は絞り込むため、同じ要求で結果が変わる）。値が空・空白になり得る変数をクエリへ入れないこと
+
+### 同じ名前で複数来る値
+
+同名のクエリが 2 本以上来ると値は配列になる。数値を取るパラメータは**配列を数値へ強制せず、パラメータごとの専用コードで断る**（実測 2026-09-18、`btc_jpy`: `active_orders?count=1&count=2` は `40006`、`trade_history?since=1&since=2` は `40022`）。判定は `src/schemas/requests.ts` の `queryNum` が「文字列でなければ落とす」形で持つ
+
+- **根拠**: **無し。公式 doc に記載が無い**
+- **本物との差異**: **実 API の挙動は未実測。** 本物が最初の値を採るのか最後を採るのか、断るのかは分かっていない
+- **推測**: はい
+- **利用側への含意**: **同名パラメータを複数送らないこと。** モックは不正値として断る。実 API がどう扱うかは別問題なので、どちらの挙動にも依存しないクライアントにしておく
+
+### 解釈できない時刻を持つ state
+
+`orderedAt` / `executedAt` / `canceledAt` は `PaperStateSchema` が `z.string()` としか見ないので、日付として解釈できない文字列がそのまま読み込まれる。応答では `Date.parse()` が `NaN` を返し、**`JSON.stringify` が `NaN` を `null` に落とすため、数値と宣言しているフィールドに `null` が出る**（実測: `orderedAt: "not-a-date"` の state で `GET /v1/user/spot/order` → `"ordered_at":null`）。本モック自身は ISO 文字列しか書かないので、入口は手書き・別実装・旧版の state ファイルに限られる
+
+- **根拠**: 本モック固有
+- **本物との差異**: 公式の `ordered_at` / `executed_at` / `canceled_at` は数値（ミリ秒）で、`null` は取らない
+- **推測**: はい
+- **利用側への含意**: **未確定。挙動は変えていない。** 直すなら読み込み時の検査（`loadState()`）に「時刻文字列が解釈できること」を足して fail-closed にする案になるが、不変量の前提を 1 つ増やす判断なのでここでは決めていない。利用側は `ordered_at` を数値と決め打ちせず、`null` を stale として扱う
+
+### ログに出す利用者由来の値
+
+状態ファイル・環境変数・リクエスト由来の文字列は、warn / info に出すとき JSON で包む（`src/store/session.ts` の `tick()`、`src/engine/persist.ts` の `saveState()`、`src/engine/match.ts` の `runTick()`）。包まないと改行で行を割って偽のログ行を差し込める。`Date.parse()` は `"Jan 1 2020 (\n...)"` のような改行入りの表記も解釈するので、`lastTickAt` のように「日付として妥当」でも制御文字を含み得る値がある
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物には対応する概念がない
+- **推測**: いいえ
+- **利用側への含意**: 実験のログを証跡に使うとき、行の境界がリクエスト側から動かせない
+
+### `/_control/`
+
+`BITBANK_MOCK_CONTROL=1` のときだけ登録する。素の JSON（bitbank 封筒ではない）。`POST /_control/orders/:id/fill`、`POST /_control/tick`、`POST /_control/clock`、`POST /_control/reset`、`GET /_control/state`（`PaperState` に、状態ファイルへの書き出しの状況 `persist` を添えて返す。`persist` は `PaperState` の一部ではないが、`PaperStateSchema` は不明なキーを落とすので、この応答をそのまま状態ファイルへ書き戻しても読み込みは通る）。無効時はルート自体を登録しないので、メソッド・パスによらず Fastify の既定 404（本文も他の未登録パスと同じ）。有効時は、非ループバックから見ると登録済みの（メソッド, パス）が 403、未登録が 404 になるので、どの口が在るかは区別できる。状態ファイルへの書き出しに失敗した後は、状態を変える口（`fill` / `tick` / `clock` / `reset`）が **503 `{"error":"PERSIST_DEGRADED"}`** になる（`GET /state` は通る。同じ表の「状態の永続化」）
+
+- **根拠**: 本モック固有
+- **本物との差異**: bitbank API に存在しない
+- **推測**: はい
+- **利用側への含意**: 利用側 / 本番 API の仕様に control の存在を混入させない
+
+### control のアクセス境界
+
+control 有効時の listen 既定は `127.0.0.1`（`BITBANK_MOCK_HOST` で上書き可）。非ループバックは `X-Control-Token` が `BITBANK_MOCK_CONTROL_TOKEN` と一致しない限り 403。トークン未設定なら非ループバックは常に 403。**ループバックからはトークン無しで全操作を通す**ので、同一ホスト上の別プロセス・別ユーザからの誤操作は防げない。判定に使う接続元は **TCP の対向アドレス（`request.socket.remoteAddress`）だけ**で、`X-Forwarded-For` 等のヘッダは見ない。そのため `buildServer()` の `trustProxy` の有無で境界は変わらない。**許可判定を `request.ip` に戻してはいけない**（`request.ip` は `trustProxy` を有効にすると `X-Forwarded-For` を返すので、その瞬間にヘッダ詐称で境界が消える）。トークンは `X-Control-Token` の**ヘッダ行がちょうど 1 本のときだけ**受け、0 本・2 本以上は 403（Node は同名ヘッダを `", "` 繋ぎの 1 本の文字列にするため、行数は生ヘッダで数える）。一致は `timingSafeEqual` で見る（長さの違いは隠れないので固定長で運用する）
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物の取引所には無い
+- **推測**: はい
+- **利用側への含意**: 同一ネットワークからの誤操作を防ぐ。利用側は control を叩かない
+
+### control 時の自動約定
+
+control 有効時の既定は `BITBANK_MOCK_FILL_MODE=manual`。`store.tick()` は足を取らず約定しない。明示で `market` にすると REST 経路は現行どおり市場連動
+
+- **根拠**: 計画書 9 節の決定
+- **本物との差異**: 本物の取引所には対応する切替がない
+- **推測**: はい
+- **利用側への含意**: 同一シナリオを市場価格に依存せず再現できる
+
+### control の時計
+
+`POST /_control/tick` は状態の `lastTickAt` を `max(現在時刻, 前回 + 60 秒, 足の timestamp)` へ進める。1 回の tick で必ず 60 秒以上進み（1 分足が同じ実時刻の 2 本でも別の窓に落ちるため）、tick では**巻き戻らない**。**ただし実時刻より先へ進める幅は 24 時間まで**（`src/routes/control.ts` の `MAX_CLOCK_AHEAD_MS`）。足の `timestamp` が `現在時刻 + 24 時間` を超えると 400 `CANDLE_TOO_FAR_AHEAD`（`maxTimestamp` 付き）、60 秒の単調前進だけで超えるとき（＝時計が上限の 60 秒手前まで来ているとき）は 400 `CLOCK_TOO_FAR_AHEAD`（`lastTickAt` / `maxLastTickAt` 付き）で、どちらも状態を変えない。進める経路はこの 2 つだけなので、`4e12`（西暦 2096）や `1e15`（西暦 33658）を渡しても、tick を何回重ねても、時計が実時間から 24 時間より離れることはない。上限にクランプせず断るのは、足の timestamp を黙って書き換えると約定時刻（`candle.timestamp + 1 分`）がずれ、60 秒の前進を黙って縮めると同じ実時刻の 2 本が同じ窓・同じ約定時刻に落ちるため。**戻す手段は `POST /_control/clock`**（本文省略で現在時刻、`{ lastTickAt }` に ISO 文字列かエポックミリ秒で任意の時刻。注文・約定・残高はそのまま残る。範囲外の値と、本文そのものが record でないとき（配列・`null`・数値・文字列。本文の省略だけが「現在時刻へ戻す」）は 400 `INVALID_CLOCK`、`現在時刻 + 24 時間` 超は 400 `CLOCK_TOO_FAR_AHEAD`）。`POST /_control/reset`（注文・約定・残高を全部捨てる）でも戻るが、シナリオは失われる。過去の `timestamp` は今までどおり通る（上限は先の側だけに効く）。**market モードとの相互作用**: `BITBANK_MOCK_FILL_MODE=market` で `lastTickAt` が実時刻より先にあると、`SessionStore.tick()` の足の取得範囲が `(未来, 現在)` と逆転する。逆転した範囲で取った足は `runTick` の窓（`fromMs = min(lastTickAt, now)` 以上 `now` 以下）から全部外れて 1 本も約定しないので、**取得自体を飛ばし `tick: lastTickAt "..." is ahead of now "..."; skipping candle fetch` を warn で出す**（以前は逆転した範囲で問い合わせ、警告もエラーも無いまま約定が止まっていた）。この後 `SessionStore.tick()` は tick の最後で `lastTickAt` を現在時刻で上書きするので、未来へ進めた時計はそこで巻き戻り、次の tick は今までどおり取得して約定する（警告が出るのは 1 回）。この回だけは約定が 0 でも状態ファイルへ書く（書かないと再起動でファイルから未来の時計を読み直し、同じ空振りを繰り返すため）。24 時間の上限があるので、`lastTickAt` が `8.64e15 − 9 時間` を超えて market モードの足取得の日付が `NaNNaNNaN` になる経路は `/_control/tick` からは届かない
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物の取引所には対応する概念がない
+- **推測**: はい
+- **利用側への含意**: **24 時間の根拠**: `runTick` が 1 回の tick で遡る上限（`MAX_LOOKBACK_MS`）と同じ幅で、1 分足なら 1 日分（1440 本）。合成の tick を 1440 回重ねるまでは今までどおり通る。#20 / #21 で入れた `timestamp` の上限（`Date` の表現範囲 − JST オフセット = `8.64e15 − 9 時間`。同じ表の「control の fill / tick 検証」節）とは別の、その内側にある制約。利用側は `lastTickAt` を実時間と見なさない
+
+### control の fill / tick 検証
+
+存在しない注文 404、終端 409。`POST /_control/tick` の `pair` は互換ルートと同じ検証（`pairAssets`）を通らなければ 400 `INVALID_PAIR`。`amount` が非正・残量超過・桁溢れは 400 `INVALID_AMOUNT`。`price` が非正・非有限は 400 `INVALID_PRICE`。足は `0 < low <= open <= high` かつ `low <= close <= high` の有限値で、`timestamp` は `Date` の表現範囲から下流の加算分を引いた範囲（`-8.64e15 <= t <= 8.64e15 − 9 時間`。上側だけ JST オフセット分の余裕を取るので非対称）に収まること。さらに `timestamp` が `現在時刻 + 24 時間` を超えるものは 400 `CANDLE_TOO_FAR_AHEAD`、60 秒の単調前進だけでその幅を超える tick は 400 `CLOCK_TOO_FAR_AHEAD`（同じ表の「control の時計」節）。`POST /_control/clock` の `lastTickAt` は ISO 文字列かエポックミリ秒で、同じ 2 つの範囲を外れると 400 `INVALID_CLOCK` / 400 `CLOCK_TOO_FAR_AHEAD`。`POST /_control/reset` の `balances` のキーは互換ルートと同じ文字種（`[a-z0-9]+`、`pairAssets` のセグメント）に限り、外れるものは 400 `INVALID_BALANCES`。拒否時は状態を変えない（`fill` / `tick` / `clock` / `reset` の全拒否経路で確認済み）
+
+- **根拠**: 本モック固有（不変量 1 の防御）
+- **本物との差異**: 本物には無い
+- **推測**: はい
+- **利用側への含意**: 実験用の部分約定は control からのみ起こす。利用側の通常経路では使わない
+
+### 状態の永続化
+
+発注・取消・約定のたびに `PaperState` 全体を状態ファイルへ書き出す。書き出しは一時ファイル（`state.json.<pid>.<乱数>.tmp` を `wx` で作り、`fsync` してから `rename`、その後に**親ディレクトリを fsync**。`mkdir -p` が階層を新しく作った回は、**作った段の親まで遡って fsync** する。葉だけだと階層自身のエントリが親に残らず、OS ごと落ちれば階層ごと消えて `state.json` も失われるため）で原子的なので、読み手が途中の内容を見ることはない。ディレクトリの fsync はどの環境でも通るとは限らないので（ファイルシステムによっては `EINVAL`）、失敗しても書き込みの失敗へは昇格させず、`state dir fsync failed for ...` を warn に出して成功のまま返す（対象のパスと fs のエラーメッセージはどちらも JSON で包む。fs のエラーはパスを生のまま含み、パスは `BITBANK_MOCK_STATE_PATH` 由来なので、包まないと改行でログ行を割られる）。書き込みに失敗したときは自分が作った一時ファイルだけ消す。**`rename` の前にプロセスが落ちると一時ファイルが残るが、次の起動が片付ける**（v0.1.0 からの改訂。以前は起動も以後の書き込みも片付けず、状態ディレクトリに溜まり続けた）。掃除は**起動時の排他を取ったあと**に行う（ロックが無いと、他プロセスが書いている最中の一時ファイルを消しかねない）。消すのは `<状態ファイル>.<数字>.<英小文字と数字>.tmp` に一致するものだけで、状態ディレクトリは利用者が `BITBANK_MOCK_STATE_PATH` で指す場所なので、`.tmp` で終わるというだけでは消さない。**掃除の失敗は起動を止めない**（見た目の問題で、残っていても読むのは `state.json` だけなので動作に影響しない）。同一プロセス内の書き込みは `SessionStore.persist()` で直列化する。`await store.persist()` が返った時点で、ファイルは**呼び出し時点の状態と同じか、それより新しい状態**を反映する。重なった書き込みは 1 本にまとめ、途中のスナップショットは捨てるが、最後の 1 本は必ず着地する
+
+- **根拠**: 本モック固有（`src/store/session.ts` / `src/engine/persist.ts`）
+- **本物との差異**: 本物の取引所はクライアント側に口座状態の永続化を持たせない
+- **推測**: はい
+- **利用側への含意**: 書き込みが成功していれば、2xx を受け取った注文は再起動後も状態ファイルに残る。**ただし 2xx だけでは書き込みの成否を判定できない。** 書き込みに失敗したとき（ディスク不足・権限など）、`persist()` は `persist failed: ...` を warn ログへ出すだけで throw せず、ルートは 2xx を返す。応答を返した注文が再起動後に消える経路がここに残る。**一度でも書き出しに失敗すると、以後は状態を変える要求を断る**（`BITBANK_MOCK_PERSIST_FAILURE`、既定 `degrade`。**v0.1.0 からの変更**。`docs/plan-lab-mock.md` 10.5 の決定）。断るのは発注・取消・`/_control/` の fill / tick / clock / reset で、照会（`GET order` / `orders_info` / `active_orders` / `trade_history` / `assets` / `GET /_control/state`）は通す。失敗したシナリオを読み出せることを優先している。互換ルートは封筒 + `70001`（`INTERNAL`）、`/_control/` は素の JSON + 503 `PERSIST_DEGRADED`。**書き込みに失敗した当の要求も断るが、巻き戻さない**ので、その注文はメモリに残り照会から見つかる（応答は失敗・状態には在る、という非対称。巻き戻すと合流した書き込みの分まで捨てるため）。再送は断られるので二重注文にはならない。**劣化中は market モードの自動約定も止める**（読み取りは通すので、止めないと読むたびにメモリだけ進んで状態ファイルとの差が開く）。**復帰手段は用意していない**（ディスクを直す → `GET /_control/state` で読み出す → 再起動）。`BITBANK_MOCK_PERSIST_FAILURE=ignore` で v0.1.0 の挙動に戻る。判定には `GET /_control/state` の `persist` を使う（`lastError` が直近の失敗の時刻とメッセージ、`consecutiveFailures` が連続失敗数。`lastError` は成功しても消さないので「一度でも失敗したか」が残り、「今まさに失敗し続けているか」は `consecutiveFailures > 0` で見る）。警告のメッセージは JSON で包む（fs のエラーがパスを生のまま含むため。同じ行の `state dir fsync failed` と同じ扱い）。耐久性の範囲は `rename` の後に親ディレクトリを fsync するところまでで、**OS ごと落ちた場合も差し替えは残る**（v0.1.0 からの変更。`docs/plan-lab-mock.md` 10 節の PR 1）。ただしディレクトリの fsync が失敗する環境では warn を出して成功のまま返すので、**その環境に限っては保証がプロセスの再起動までに戻る**。実験中はこの warn も監視する
+
+### 同一状態ファイルの多重起動
+
+**起動時に排他する（v0.1.0 からの改訂）。** 状態ファイルに対して `<状態ファイル>.lock` を `wx` で作り、中身に保持プロセスの pid を 1 行書く。既にあれば `process.kill(pid, 0)` で生死を見て（**`ESRCH` だけを「居ない」の証拠にし、`EPERM` も判定できない失敗も生きている側に倒す**）、**生きていれば起動しない**（ロックのパスと `BITBANK_MOCK_STATE_PATH` を分ける旨を出して終了コード 1）。死んでいれば奪う（`SIGKILL` の後に二度と起動できないのを避けるため）。**pid を書けずに失敗した作りかけのロックは消してから投げる**（残すと中身が空になり、以後どの起動も奪わないので同じ行き止まりになる）。`SIGINT` / `SIGTERM` と `process.on("exit")` で手放す。**pid が読めないロックは奪わない**——空のロックファイルは他プロセスが `wx` で作った直後にも現れるので、`stale` と扱うと防ごうとしている二重起動をそこで作る。排他を取るのは `src/index.ts`（サーバの起動経路）だけで、`loadOrInitDefault()` は取らない（状態ファイルを読み直すだけの用途があるため）。**排他が無かったときに何が起きるかは実測済み**（2026-09-17）: 同じ状態ファイルへ 2 プロセスを向けて 3 本ずつ発注すると、両方が `order_id` 1・2・3 を 払い出して 6 本すべてに `success: 1` を返し、状態ファイルには後から書いた側の 3 本しか残らなかった。**競合を防ぎ切ってはいない**: 2 プロセスが同じ stale ロックを同時に奪いに行くと、消した直後に作る順序で 両方が取得しうる。取得後に pid を読み直して窓を狭めているが、消すには `flock` が要り Node は標準で持たない
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物は口座状態を取引所側が単一に持つ
+- **推測**: いいえ（実測に基づく。旧版は「ロックを足さない」を既決事項としていたが、その根拠「書き込みロックを入れても採番が分かれるので消失と重複は防げない」は**書き込みロックについての議論**だった。起動時の排他は状況そのものを作らせない別の機構であり、実測した消失・重複は起きなくなる。残る競合の窓は上記のとおり未解消で、そこは「保証する」とは書かない）
+- **利用側への含意**: 並列にシナリオを流すときは `BITBANK_MOCK_STATE_PATH` をシナリオごとに分ける（同じパスは**黙って壊れる**のではなく起動しない）。`SIGKILL` の直後は stale ロックが残るが、次の起動が奪うので手で消す必要はない
+
+### 状態ファイルのパス解決
+
+`BITBANK_MOCK_STATE_PATH` があればそれを、無ければ `BITBANK_MOCK_HOME`（既定 `~/.bitbank-mock`）の下の `sessions/<session>/state.json` を使う（`src/engine/persist.ts` の `defaultStatePath()`）。**空文字の env は「未設定」として扱い、次の候補へ落とす**（`BITBANK_MOCK_STATE_PATH=""` は `BITBANK_MOCK_HOME` へ落ちるので、`BITBANK_MOCK_HOME="/srv/x"` があれば `/srv/x/sessions/<session>/state.json` になる。`BITBANK_MOCK_HOME=""` は `~/.bitbank-mock` へ落ちる。両方が空か未設定のときだけ `~/.bitbank-mock/sessions/<session>/state.json`）。`src/server/config.ts` の `controlToken()` / `listenHost()` / `fillMode()` も空文字を未設定として落とすので、env の読み取りはこの 1 つの規則で揃っている。**相対パスはどちらの env でも通り、作業ディレクトリ基準で解決する**（`BITBANK_MOCK_STATE_PATH="rel.json"` は `rel.json`、`BITBANK_MOCK_HOME="rel"` は `rel/sessions/<session>/state.json`）。相対パスを弾かないのは、利用者が明示的に渡した値を黙って書き換えないため。書き出すファイルの許可は `0600`、途中のディレクトリは `mkdir -p` の既定（umask 次第。`umask 022` なら `0755`）で、同一ホストの他ユーザからディレクトリは辿れる
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物はクライアント側に口座状態のファイルを持たない
+- **推測**: はい（空文字を未設定として扱うこと、ディレクトリの許可を明示的に絞らないこと）
+- **利用側への含意**: 並列にシナリオを流すときは `BITBANK_MOCK_STATE_PATH` に**絶対パス**を渡す。env を空で置いても（`BITBANK_MOCK_HOME=`）作業ディレクトリ配下へは逃げないが、**相対パスを値として渡すと起動ディレクトリごとに状態が分かれる**ので、実験を回す環境では両 env とも絶対パスで揃える
+
+### 壊れた状態ファイル
+
+fail-closed。不正な JSON・スキーマ違反・途中で切れたファイル・空ファイルはいずれも `loadState` が失敗を返し、`loadOrInitDefault` が throw して起動しない。黙って初期状態へ戻さず、壊れたファイルも消さない。ファイルが存在しないときだけ初期状態で始める
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物には対応する概念がない
+- **推測**: はい
+- **利用側への含意**: 「残高が初期値に戻っている」状態でシナリオが進むことはない。起動しなかったこと自体を state 破損の合図として扱える
+
+### 不変量を破る状態ファイル
+
+fail-closed。zod スキーマは通るが「状態の不変量」を破る v3 の状態ファイル（`executedAmount > startAmount`、負の残高など）は、`loadState` が移行の直後に `invariantViolations()` を走らせて失敗を返し、`loadOrInitDefault` が throw して起動しない。同じ場所で不変量の**前提**（注文 id / trade id の一意性、採番と既存 id の整合、`startAmount > 0`）も `preconditionViolations()` が検査し、破れていれば `paper state violates invariant preconditions: ...` で同じく起動しない（下の「不変量の前提」）。失敗のメッセージには違反した不変量の番号と、対象を特定する識別子と値をそのまま載せる（不変量 1〜3・5 は注文 ID、注文の無い trade は trade ID、不変量 6 は資産キー `balance[<asset>]` / `locked[<asset>]`）（例: `paper state violates invariants: 6 violation(s): 1: order 1 executedAmount=0.005 startAmount=0.001; ...`）。状態は自動修復せず、ファイルも消さない。**v1 / v2 から移行した結果が破っている場合は warn を出して起動する**（下の「不変量をどこで担保するか」を参照）
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物には対応する概念がない
+- **推測**: はい
+- **利用側への含意**: 負の `remaining_amount` や負の `free_amount` が Reconcile 経路へ出ない。ただし保証の範囲は 6 本すべてではない。warn なしで起動した v3 の state について読み込み時に検査済みなのは不変量 1〜3・5・6 で、不変量 4 は単一の状態からは判定できないため検査していない（遷移関数のガードとテストで担保）。移行の warn が出た state は違反したまま起動しているので、この検査済みの保証は付かない
+
+### 状態の移行の冪等性
+
+v1 / v2 の状態ファイルを v3 へ移行する変換は決定的で、移行後の v3 を書き戻してもう一度読んでも結果は変わらない
+
+- **根拠**: 本モック固有
+- **本物との差異**: 本物には対応する概念がない
+- **推測**: いいえ
+- **利用側への含意**: 旧 state から始めたシナリオでも、再起動のたびに注文・trade が動くことはない
+
+### private stream
+
+Phase 5 で PubNub ではなく素の WebSocket を提供する予定
+
+- **根拠**: private stream docs のメッセージ形
+- **本物との差異**: 接続・配信トランスポートが異なる
+- **推測**: はい
+- **利用側への含意**: 利用側は PubNub SDK ではなく WebSocket 接続層を使う
+
+### private stream の順序
+
+配信順序・重複なしを保証しない
+
+- **根拠**: private stream docs に順序保証の記載なし
+- **本物との差異**: Plan A では障害注入は提供しない
+- **推測**: はい
+- **利用側への含意**: 利用側は順不同・重複を許容して状態を解釈する
 
 ## ペア
 
@@ -91,11 +514,11 @@
 - **発注経路の `40017` は実測ではなく外挿である（推測）。** 一覧に無いペアで発注したとき実 API が何を返すかは**測っていない**——発注は実弾になるため。根拠は 2 つで、(1) この経路がペアを断るときのコードが `40017` であること自体は実測済み（`pair: "   "` を送って確認。`src/routes/create-order.ts` の `missingCreateOrderCode` の docstring）、(2) 素通しにすると**照会できない注文を作れてしまう**（作った直後の `GET order` が `40017` を返す）。モック内部の整合を優先した判断であって、実 API の再現ではない
 - **取消経路は意図的に一覧を見ない。** この規則より前に書かれた状態ファイルには一覧に無いペアの注文が残り得るので、**取り除く手段を塞がない**（下の「状態ファイル由来の不正なペア」と同じ理由）。実 API の挙動も実測していない
 - **発注停止（`stop_order`）はまだ発注の可否に使っていない。** 一覧が持つ 18 ペアの停止フラグは `PairSpec.orderSuspended` として表にあるが、**停止中のペアへ発注しても本モックは受け付ける**。停止中のペアに実 API が何を返すか実測しておらず、コードを推測で決めないための保留である。フラグを表に持っておくのは、決まったときに実装が 1 か所で済むようにするため
-- **精度の決定は変えていない。** 「数量・価格の精度」行の「未登録ペアも同じ桁を仮置きする」はそのままで、一覧に入った 61 ペア（`btc_jpy` 以外）は引き続き `btc_jpy` の桁（数量 4 桁・価格 0 桁）で動く。`/spot/pairs` はペアごとの `price_digits` / `amount_digits` を返すが、**取得するかどうかは別の判断**（下の `/spot/pairs` の項）。つまり `xrp_btc` の価格は今も整数しか通らない
+- **精度の決定は変えていない。** 「数量・価格の精度」節の「未登録ペアも同じ桁を仮置きする」はそのままで、一覧に入った 61 ペア（`btc_jpy` 以外）は引き続き `btc_jpy` の桁（数量 4 桁・価格 0 桁）で動く。`/spot/pairs` はペアごとの `price_digits` / `amount_digits` を返すが、**取得するかどうかは別の判断**（下の `/spot/pairs` の項）。つまり `xrp_btc` の価格は今も整数しか通らない
 - **一覧が古くなる方向の失敗は避けられない。** bitbank が新しいペアを足しても表は誰かが更新するまで古いままで、**本物なら通る発注をモックが `40017` で断る**。上場は上場廃止より頻繁なので、失敗はこの向きに倒れる。利用側は、モックが断ったペアが本物でも断られるとは限らないことを前提にする（**向きが逆になった**——直す前は「モックが受け付けたペアが本物でも受け付けられるとは限らない」だった）
 - **「照会できるペア」と「発注できるペア」は別の集合。これは公式ドキュメントに明記されている（挙動は変えていない）。** 公式のペア一覧 [`pairs.md`](https://github.com/bitbankinc/bitbank-api-docs/blob/master/pairs.md) は 62 ペアを載せ、各ペアに **"Order suspended flag (delisted)"** の列を持つ。この列が `true` なのは **18 ペア**で、内訳は `_btc` の 15 ペア全部と `mkr_jpy` / `matic_jpy` / `rndr_jpy`。したがって `_jpy` は 47 ペアあるが**新規発注できるのは 44 ペア**で、`_btc` は**一覧に載っていて照会もできるが 1 つも発注できない**（税計算などのために履歴取得だけ残されている）。2026-09-17 に `GET https://api.bitbank.cc/v1/spot/pairs`（**認証不要**）を 1 回叩いた結果は、この表と**ペアの集合も並び順も完全に一致**し、列に対応する API のフィールド名が **`stop_order`** であることまで確認できた。一方 **`is_enabled` は 62 ペアすべて `true` で、取引可否の判別には使えない**（判別しているのは `stop_order` の方）。公開ティッカー（`https://public.bitbank.cc/<pair>/ticker`）でも `_btc` は `sell` / `buy` が `null`（`open` / `high` / `low` は値を持つ）で、板が無いことが見える。**本モックはこの区別を表としては持つが、まだ発注の可否には使っていない**（停止中のペアにも発注できる）。一覧そのものは `src/engine/pairs.ts` に取り込んだ（上の「ペアの実在性は公式一覧で検査する」）。停止フラグを使わない理由は、停止中のペアへ発注したとき実 API が何を返すか実測していないためである
   - `stop_order` 以外に `stop_order_and_cancel` / `stop_market_order` / `stop_stop_order` / `stop_buy_order` / `stop_sell_order` といった停止の種類ごとのフラグがある、という話は**未確認**。出所は参考実装 [`bitbank-lab-mcp`](https://github.com/bitbankinc/bitbank-lab-mcp) の `lib/pairs.ts` の型定義だけで、**公式ドキュメントには無く、今回の観測でも中身を確認していない**（集計したのは `stop_order` だけ）
-- **`/spot/pairs` は他にも本モックが持っていない情報を返す（2026-09-17 実測）。** `unit_amount`（最小注文数量。`btc_jpy` は `"0.0001"`）、`limit_max_amount` / `market_max_amount`（最大注文数量）、ペアごとの `price_digits` / `amount_digits`、手数料率（上の「手数料」行）。**本モックは最小・最大数量を一切検査していない。** `60004` の公式の意味が "Order quantity has exceeded the lower threshold."（最小数量割れ）であることと合わせると、`/spot/pairs` を取得すれば `60004` を本来の意味で実装でき、桁溢れへの流用をやめられる。ただし**モックが起動時に外部へ出ることを受け入れるか**が前提になるので、ここでは決めていない。なお**「どのペアが実在し、どれが発注停止か」は外へ出なくても分かる**——その 2 つは公式 `pairs.md` の表に静的に載っていて実測と一致したので、**実在性の方は表を焼き込んで実装済み**（上の「ペアの実在性は公式一覧で検査する」）。外部取得が要るのは `unit_amount` と手数料率、それにペアごとの `price_digits` / `amount_digits` で、これらは `pairs.md` に無く `/spot/pairs` にしかない。**残っているのはこちらだけ**である
+- **`/spot/pairs` は他にも本モックが持っていない情報を返す（2026-09-17 実測）。** `unit_amount`（最小注文数量。`btc_jpy` は `"0.0001"`）、`limit_max_amount` / `market_max_amount`（最大注文数量）、ペアごとの `price_digits` / `amount_digits`、手数料率（上の「手数料」節）。**本モックは最小・最大数量を一切検査していない。** `60004` の公式の意味が "Order quantity has exceeded the lower threshold."（最小数量割れ）であることと合わせると、`/spot/pairs` を取得すれば `60004` を本来の意味で実装でき、桁溢れへの流用をやめられる。ただし**モックが起動時に外部へ出ることを受け入れるか**が前提になるので、ここでは決めていない。なお**「どのペアが実在し、どれが発注停止か」は外へ出なくても分かる**——その 2 つは公式 `pairs.md` の表に静的に載っていて実測と一致したので、**実在性の方は表を焼き込んで実装済み**（上の「ペアの実在性は公式一覧で検査する」）。外部取得が要るのは `unit_amount` と手数料率、それにペアごとの `price_digits` / `amount_digits` で、これらは `pairs.md` に無く `/spot/pairs` にしかない。**残っているのはこちらだけ**である
 - **文字種を弾く理由**: pair は外向きの足取得 URL のパスへ入る（`src/engine/candles.ts` の `fetchOneDay`）。`..` はベース URL のパス接頭辞を脱出し、`?` / `#` は以降をクエリ・フラグメントに変える。入口（`pairAssets`）と URL 組み立て（`encodeURIComponent` で 1 パスセグメントに閉じ込める）の 2 層で守る
 - **状態ファイル由来の不正なペア**: `PaperStateSchema` は pair の文字種を検証しないので、この規則より前に書かれた注文はそのまま読み込まれる（起動は落ちず、その注文も消えない）。`SessionStore.tick()` はそのペアを外向きに問い合わせずに読み飛ばし、`POST /_control/tick` は 400 `INVALID_PAIR` で弾く。`cancel_order` は今までどおり通るので、取り除く手段は残る
 
@@ -136,7 +559,7 @@
 | `POST /_control/orders/:id/fill` | 価格 | HTTP 400・素の JSON `{"error":"INVALID_PRICE"}` |
 
 桁の違反を 1 つのコードで判定せず、コードと HTTP ステータスの組で扱うこと。`/_control/` は
-そもそも封筒に包まない（対応表の「`/_control/`」行）。
+そもそも封筒に包まない（対応表の「`/_control/`」節）。
 
 engine の関数を直接呼ぶ経路では桁が検査されない。**現状そのような経路は無い**（`/_control/` も
 `fitsDigits` を routes 側で通す）ので、これは engine を別の口から使うときの注意である。
@@ -241,7 +664,7 @@ zod スキーマにも `invariantViolations()` にも混ぜなかった理由は
 
   なお移行が決める採番も「配り得る id の最大 + 1」なので、数値 id が `2^53` に届く v1 / v2 の
   state からは飽和した採番が出る**理屈**だが、実際の桁では届かない。v2 の id は
-  `Date.now() * 1000 + counter`（上の「注文 ID」の行）で、2026-09-14 時点の `Date.now()` は
+  `Date.now() * 1000 + counter`（上の「注文 ID」の節）で、2026-09-14 時点の `Date.now()` は
   `1789353937656`、`× 1000` で `1.789e15`。`2^53 = 9007199254740992 ≈ 9.007e15` なので
   **5.03 倍の余裕**がある。`Date.now() * 1000` が `2^53` に届くのは
   `Date.now() = 9007199254740.992 ms`、すなわち **2255-06-05T23:47:34Z（今から約 229 年後）**

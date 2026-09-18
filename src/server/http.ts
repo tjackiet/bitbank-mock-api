@@ -87,7 +87,7 @@ function registerDegradedGuard(fastify: FastifyInstance, store: SessionStore): v
  *
  * モックが返すのは `20003` の側（認証ヘッダを検証しないので「キーが無い」状態に当たる）。
  * `20001` との出し分けはヘッダを見ることになり、README の「認証は非目標」に触れるので
- * しない（`docs/fidelity.md` の「封筒に包まれない応答」行に未対応として記録）。
+ * しない（`docs/fidelity.md` の「封筒に包まれない応答」節に未対応として記録）。
  *
  * **`/_control/` は対象外**（bitbank API に存在しない実験用の口なので、封筒に包まず
  * Fastify の既定 404 のまま）。control を無効にして起動したときの `/_control/state` も
