@@ -85,7 +85,7 @@ v1 / v2 の状態ファイルを v3 へ移行した結果が不変量を破っ�
 
 **同じ状態ファイルを 2 プロセスから使うことはできません。** 起動時に `<状態ファイル>.lock` を取り、既に生きているプロセスが持っていれば起動しません（黙って壊れるのではなく、弾きます）。並列にシナリオを流すときは `BITBANK_MOCK_STATE_PATH` をシナリオごとに分けてください。
 
-`SIGKILL` などでロックが残った場合は、次の起動が保持プロセスの生死を見て奪うので手で消す必要はありません。**ロックは二重起動を弾くためのもので、競合を防ぎ切るものではありません**（2 プロセスが同じ残存ロックを同時に奪いに行く窓が残っています）。詳しくは [`docs/fidelity.md`](docs/fidelity.md) の「同一状態ファイルの多重起動」の行を見てください。
+`SIGKILL` などでロックが残った場合は、次の起動が保持プロセスの生死を見て奪うので手で消す必要はありません。**ロックは二重起動を弾くためのもので、競合を防ぎ切るものではありません**（2 プロセスが同じ残存ロックを同時に奪いに行く窓が残っています）。詳しくは [`docs/fidelity.md`](docs/fidelity.md) の「同一状態ファイルの多重起動」の節を見てください。
 
 ## `/_control/`
 
@@ -99,7 +99,7 @@ bitbank API には存在しません。本番クライアントから叩かな�
 | `POST` | `/_control/reset` | 状態を初期化 |
 | `GET` | `/_control/state` | `PaperState` に、状態ファイルへの書き出しの状況（`persist`）を添えて返す |
 
-`POST /_control/tick` が進める `lastTickAt`（control の時計）は、足の `timestamp` でも tick ごとの 60 秒の前進でも、実時刻より先へは 24 時間までしか動きません。超える要求は 400（`CANDLE_TOO_FAR_AHEAD` / `CLOCK_TOO_FAR_AHEAD`）で断り、状態は変えません。戻すのは `POST /_control/clock` です（`reset` と違って注文・約定・残高は残ります）。詳細は [`docs/fidelity.md`](docs/fidelity.md) の「control の時計」の行にあります。
+`POST /_control/tick` が進める `lastTickAt`（control の時計）は、足の `timestamp` でも tick ごとの 60 秒の前進でも、実時刻より先へは 24 時間までしか動きません。超える要求は 400（`CANDLE_TOO_FAR_AHEAD` / `CLOCK_TOO_FAR_AHEAD`）で断り、状態は変えません。戻すのは `POST /_control/clock` です（`reset` と違って注文・約定・残高は残ります）。詳細は [`docs/fidelity.md`](docs/fidelity.md) の「control の時計」の節にあります。
 
 無効時は 404。非ループバックはトークンが一致しない限り 403 です。状態ファイルへの書き出しに失敗した後は、状態を変える口（`fill` / `tick` / `clock` / `reset`）が 503 `PERSIST_DEGRADED` になります（`GET /_control/state` は通ります）。**ループバックからはトークン無しで通る**ので、同一ホスト上の他プロセスからの誤操作は防げません。接続元の判定には TCP の対向アドレスだけを使い、`X-Forwarded-For` は見ません（Fastify の `trustProxy` の設定に境界は左右されません。ただし判定を `request.ip` に変えると、`trustProxy` を有効にした瞬間にヘッダの詐称で迂回できるようになります）。`X-Control-Token` はヘッダ行がちょうど 1 本のときだけ受け付けます。
 

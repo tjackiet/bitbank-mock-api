@@ -81,7 +81,7 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
       // 到達するので、消さないこと。
       // 応答の `orders` が `order_ids` より短くなる理由はこれだけではない。上の
       // `if (!target) continue;` が、存在しない id と別のペアの id も飛ばす
-      // （3 つとも docs/fidelity.md の「取消済み・約定済みの取消」行に記録した）。
+      // （3 つとも docs/fidelity.md の「取消済み・約定済みの取消」節に記録した）。
       if (!r.success) continue;
       next = r.data.state;
       canceled.push(r.data.order);

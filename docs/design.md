@@ -9,7 +9,7 @@
 > | 本書の記述 | 実際 |
 > | --- | --- |
 > | 「スコープ外 / P1 以降」に**部分約定** | **実装済み**（`PARTIALLY_FILLED` / `CANCELED_PARTIALLY_FILLED`、`POST /_control/orders/:id/fill` の `amount` 指定） |
-> | 「MVP スコープ（P0）」の**認証**（ACCESS-KEY 等の存在チェック、固定値 `test` / `test`） | **非目標**。認証ヘッダは検証しない（[`README.md`](../README.md) の「非目標」、`fidelity.md` の「認証」行） |
+> | 「MVP スコープ（P0）」の**認証**（ACCESS-KEY 等の存在チェック、固定値 `test` / `test`） | **非目標**。認証ヘッダは検証しない（[`README.md`](../README.md) の「非目標」、`fidelity.md` の「認証」節） |
 > | 「アーキテクチャ概要」のファイル木 | **当時の予定**。`server/ws.ts`・`server/auth.ts`・`server/trace.ts`・`channels/`・`dashboard/`・`schemas/responses.ts`・`schemas/errors.ts`・`examples/*-bot.*` は存在しない。逆に `store/`（`lock.ts` / `session.ts`）・`engine/invariants.ts`・`transitions.ts`・`precision.ts`・`pairs.ts`・`routes/control.ts`・`format.ts`・`params.ts`・`server/config.ts`・`degraded.ts` は木に無い |
 > | 利用フローの `npx bitbank-mock serve --port 14000` | パッケージは未公開。起動は [`README.md`](../README.md) の「起動」節を見ること |
 >

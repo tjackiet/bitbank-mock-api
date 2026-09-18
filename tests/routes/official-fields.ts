@@ -65,7 +65,7 @@ export const OFFICIAL_ORDER_FIELDS: Record<string, FieldCheck> = {
  * ```
  *
  * `canceled_at` を応答表に持つのは `Cancel order` だけで、`Fetch order information` の
- * 表には無い。本モックの扱いは `docs/fidelity.md` の「注文の `canceled_at`」行を参照。
+ * 表には無い。本モックの扱いは `docs/fidelity.md` の「注文の `canceled_at`」節を参照。
  */
 export const OFFICIAL_ORDER_CONDITIONAL_FIELDS: Record<string, FieldCheck> = {
   price: isString,

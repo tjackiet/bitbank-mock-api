@@ -7,7 +7,7 @@ import { buildState } from "../engine/helpers.ts";
  * 経路が見つからない要求の応答。**実 API で 3 通りに分かれることを実測した**
  * （2026-09-17、認証ヘッダ無し / 有りの両方）。根拠と番号の出典は
  * `src/server/http.ts` の `registerNotFoundHandler` の docstring と
- * `docs/fidelity.md` の「封筒に包まれない応答」行。
+ * `docs/fidelity.md` の「封筒に包まれない応答」節。
  */
 async function build(controlEnabled: boolean) {
   const store = new SessionStore(buildState(), { path: null, fillMode: "manual" });

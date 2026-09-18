@@ -240,7 +240,7 @@ export class SessionStore {
    * `degradedResponse()`）。
    * メモリ上の注文は巻き戻さないので、応答は失敗・メモリには残る、という食い違いが残る。
    * `ignore` を選んだときだけ 2xx が返り、その注文は再起動後に消える。
-   * どちらも `docs/fidelity.md` の「状態の永続化」の行に記録してある。
+   * どちらも `docs/fidelity.md` の「状態の永続化」の節に記録してある。
    * 呼び出し側がそれを検知する手段が `persistHealth()` であり、`GET /_control/state` の
    * `persist` として出る。
    */

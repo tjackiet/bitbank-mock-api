@@ -25,7 +25,7 @@ describe("GET /v1/user/assets", () => {
   /**
    * 残高が無くても必ず出る資産の一覧を固定する（`src/routes/format.ts` の `KNOWN_ASSETS`）。
    *
-   * **この 10 個に公式の根拠は無い**（`docs/fidelity.md` の「assets に出る資産」行に
+   * **この 10 個に公式の根拠は無い**（`docs/fidelity.md` の「assets に出る資産」節に
    * 未確定として記録した）。根拠が無いものこそ黙って変わると気づけないので、
    * ここで並びごと固定しておく。実 API を測って変えるときは、この期待値も同じ PR で動かす。
    *
@@ -241,7 +241,7 @@ function unitsToFixed(units: bigint, digits: number): string {
  *
  * この観測は**同時に「拘束額が taker 料率の手数料を含む」ことも示している**
  * （差 1.1999 JPY = 建玉額の 0.12%）。指値（maker）注文なのに taker 料率だった。
- * 詳細は `docs/fidelity.md` の「拘束額」行と「残高の桁」行。
+ * 詳細は `docs/fidelity.md` の「拘束額」節と「残高の桁」節。
  *
  * 変更前は四捨五入だったが、**それを固定するテストは 1 つも無かった**
  * （切り捨てへ変えても 385 件すべて通ってしまった）ので、ここで塞ぐ。
