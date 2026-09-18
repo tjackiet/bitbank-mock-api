@@ -275,7 +275,7 @@ Plan A は maker / taker 表示に関わらず**単一の料率**で計算する
 
 ### trade_history の絞り込み
 
-`order_id` / `since` / `end` / `order(asc|desc)` を追加。既定は `desc`（新しい順）。`count` 指定時は最大 1000。未指定なら全件
+`order_id` / `since` / `end` / `order(asc|desc)` を追加。`since`/`end` は `executed_at` のミリ秒 inclusive。既定は `desc`（新しい順）。`count` 指定時は最大 1000。未指定なら全件
 
 - **根拠**: REST API: Fetch trade history
 - **本物との差異**: 公式の既定件数は未確認。モックは未指定で全件返す

@@ -52,6 +52,43 @@ describe("GET /v1/user/spot/active_orders", () => {
     expect(body.data.orders).toHaveLength(1);
     expect(body.data.orders[0]?.order_id).toBe(2);
   });
+
+  /**
+   * `end_id` と `end` が**実際に絞り込むこと**を見る。
+   *
+   * 不正値を断る側（下の「空文字は…」以降）は経路ごとに厚く見ているので、テスト名の
+   * 一覧では両方を見ているように読める。だが**絞り込みそのものは 1 件も見ていなかった**——
+   * この 2 つの `filter` を no-op に差し替えても 444 件が 1 件も落ちない（実測）。
+   *
+   * 境界を含むかまで固定する。`docs/fidelity.md` の「active_orders の絞り込み」節が
+   * `from_id`/`end_id` も `since`/`end` も inclusive と書いているので、端の 1 件が
+   * 残ることを期待値に入れる（`toHaveLength` だけだと境界の扱いが変わっても通る）。
+   */
+  it("filters by end_id and end", async () => {
+    const state = buildState({
+      orders: [
+        buildOrder({ id: "1", orderedAt: "2026-01-01T00:00:00.000Z" }),
+        buildOrder({ id: "2", price: 5_100_000, orderedAt: "2026-01-01T00:02:00.000Z" }),
+        buildOrder({ id: "3", price: 5_200_000, orderedAt: "2026-01-01T00:04:00.000Z" }),
+      ],
+    });
+    const { fastify } = await build(state);
+
+    const byId = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/active_orders?end_id=2",
+    });
+    const idBody = byId.json() as { data: { orders: { order_id: number }[] } };
+    expect(idBody.data.orders.map((o) => o.order_id)).toEqual([1, 2]);
+
+    // `end` は `ordered_at` のミリ秒。ちょうど境界の注文 2 が残る。
+    const byTime = await fastify.inject({
+      method: "GET",
+      url: `/v1/user/spot/active_orders?end=${Date.parse("2026-01-01T00:02:00.000Z")}`,
+    });
+    const timeBody = byTime.json() as { data: { orders: { order_id: number }[] } };
+    expect(timeBody.data.orders.map((o) => o.order_id)).toEqual([1, 2]);
+  });
 });
 
 describe("GET /v1/user/spot/active_orders official field set", () => {
