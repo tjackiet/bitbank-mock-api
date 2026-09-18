@@ -7,7 +7,7 @@
 - 挙動確認・検証目的で作成している bitbank Private REST API モック（パッケージ名 `bitbank-lab-mock`、リポジトリ名 `bitbank-mock-api`）。
 - **bitbank 公式のテスト環境ではない。** 公開ドキュメントに準拠した近似であり、動作保証はしない。bitbank バグバウンティプログラムの対象範囲外。
 - 本物との差分は [`docs/fidelity.md`](docs/fidelity.md) を正とする。挙動の根拠を確認するときは実装よりまずこの表を読む。
-- 計画の詳細は [`docs/plan-lab-mock.md`](docs/plan-lab-mock.md)、設計は [`docs/design.md`](docs/design.md)。
+- 計画と設計判断は [`docs/plan-lab-mock.md`](docs/plan-lab-mock.md)。[`docs/design.md`](docs/design.md) は Plan A 以前の MVP 設計メモ（**履歴**）で、実装と食い違う箇所がある（冒頭の注記に一覧）。根拠には使わない。
 
 ## コマンド
 
@@ -15,7 +15,7 @@
 | --- | --- |
 | `npm test` | `vitest run`（`tests/` 以下を 1 回実行） |
 | `npm run typecheck` | `tsc --noEmit`（`src/**/*` と `tests/**/*` を型検査） |
-| `npm run dev` | `tsx src/index.ts`（サーバを起動。既定 `http://127.0.0.1:14000`。`/_control/` を使うなら `BITBANK_MOCK_CONTROL=1`） |
+| `npm run dev` | `tsx src/index.ts`（サーバを起動。listen は control 有効時 `127.0.0.1:14000`、**control 無効時は `0.0.0.0:14000`**。`/_control/` を使うなら `BITBANK_MOCK_CONTROL=1`。ポートは `BITBANK_MOCK_PORT` か `serve --port`。**`--port` 単独は `unknown command` で落ちる**） |
 
 **lint と formatter は設定されていない。** ESLint / Prettier / Biome いずれの設定ファイルも依存もない。整形は既存コードのスタイルに合わせて手で揃える。
 
@@ -29,8 +29,8 @@
 
 ## コードの約束
 
-- **ESM**（`package.json` の `"type": "module"`）。**相対 import は拡張子 `.ts` を明示する**（`tsconfig.json` の `allowImportingTsExtensions: true`）。例: `import { ok } from "./envelope.ts";`
-- `tsconfig.json` は `strict: true` / `noEmit: true` / `moduleResolution: "Bundler"` / `target: "ES2022"`。
+- **ESM**（`package.json` の `"type": "module"`）。**相対 import は拡張子 `.ts` を明示する**。例: `import { ok } from "./envelope.ts";` 落とすと `npm run typecheck` が `TS2835` で落ちる（`moduleResolution: "NodeNext"` + `allowImportingTsExtensions: true`）。
+- `tsconfig.json` は `strict: true` / `noEmit: true` / `module` と `moduleResolution` が `"NodeNext"` / `target: "ES2022"`。
 - **`src/` と `tests/` はディレクトリ構成を対応させる。** `src/engine/match.ts` のテストは `tests/engine/match.test.ts`。`tests/` には固有のディレクトリとして `fixtures/`（テストデータ）と `scenarios/`（結合シナリオ）がある。
 - **bitbank 互換ルートは [`src/routes/envelope.ts`](src/routes/envelope.ts) の `ok()` / `err()` で bitbank 封筒に包む。** 成功は `{ success: 1, data }`、失敗は `{ success: 0, data: { code } }`。エラーは同ファイルの `ErrorCode` にある bitbank の error code を返す（例: 残高不足 `60001`、注文が見つからない `50009`）。
 - 互換ルートのパスは `/v1/user/...`（`src/routes/` の各ファイル）。登録は [`src/server/http.ts`](src/server/http.ts) の `buildServer()`。

@@ -1,6 +1,19 @@
 # bitbank-mock-api 設計（MVP）
 
-> **注記（Plan A / v0.1.0）**: 現行の開発計画は [`plan-lab-mock.md`](plan-lab-mock.md)、公開ドキュメントとの対応は [`fidelity.md`](fidelity.md)。本書は移管前の MVP 設計メモである。ダッシュボード・WS public プロキシ・サンプル bot などは Plan A の対象外。
+> **注記: 本書は履歴であって、現行の設計ではない。**
+>
+> 現行の計画と設計判断は [`plan-lab-mock.md`](plan-lab-mock.md)、挙動の正は [`fidelity.md`](fidelity.md)。
+> 本書は Plan A に入る前に書いた MVP 設計メモで、**以下は 2026-09 時点の実装と食い違う**。
+> 根拠には使わないこと。
+>
+> | 本書の記述 | 実際 |
+> | --- | --- |
+> | 「スコープ外 / P1 以降」に**部分約定** | **実装済み**（`PARTIALLY_FILLED` / `CANCELED_PARTIALLY_FILLED`、`POST /_control/orders/:id/fill` の `amount` 指定） |
+> | 「MVP スコープ（P0）」の**認証**（ACCESS-KEY 等の存在チェック、固定値 `test` / `test`） | **非目標**。認証ヘッダは検証しない（[`README.md`](../README.md) の「非目標」、`fidelity.md` の「認証」行） |
+> | 「アーキテクチャ概要」のファイル木 | **当時の予定**。`server/ws.ts`・`server/auth.ts`・`server/trace.ts`・`channels/`・`dashboard/`・`schemas/responses.ts`・`schemas/errors.ts`・`examples/*-bot.*` は存在しない。逆に `store/`（`lock.ts` / `session.ts`）・`engine/invariants.ts`・`transitions.ts`・`precision.ts`・`pairs.ts`・`routes/control.ts`・`format.ts`・`params.ts`・`server/config.ts`・`degraded.ts` は木に無い |
+> | 利用フローの `npx bitbank-mock serve --port 14000` | パッケージは未公開。起動は [`README.md`](../README.md) の「起動」節を見ること |
+>
+> ダッシュボード・WS public プロキシ・サンプル bot も Plan A の対象外。
 
 ## このドキュメントの目的
 

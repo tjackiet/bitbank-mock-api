@@ -43,7 +43,7 @@ npm ci
 BITBANK_MOCK_CONTROL=1 npm run dev
 ```
 
-既定は `http://127.0.0.1:14000`（control 有効時。無効時は `0.0.0.0:14000`）。ポートは `--port` または `BITBANK_MOCK_PORT`。
+既定は `http://127.0.0.1:14000`（control 有効時。無効時は `0.0.0.0:14000`）。ポートは `BITBANK_MOCK_PORT`、または `serve` に続けて `--port`（`npm run dev -- serve --port 14001`）。**`--port` だけを渡すと `unknown command: --port` で起動しません**——引数の 1 つ目はサブコマンドとして読むためです。
 
 再現シナリオ（発注 → 拘束 → control fill → 残高減）:
 

@@ -29,11 +29,24 @@ const STARTUP_TIMEOUT_MS = 20_000;
  * 残る**（実際に残り、後続の実行を壊した）。`--import` なら 1 プロセスなので、
  * `child.pid` がそのままサーバの pid になり、後始末も確実に効く。
  */
-function spawnServer(env: NodeJS.ProcessEnv): ChildProcess {
-  return spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
+function spawnServer(env: NodeJS.ProcessEnv, args: string[] = []): ChildProcess {
+  const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts", ...args], {
     env: { ...process.env, ...env },
-    stdio: ["ignore", "pipe", "ignore"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  // 標準エラーは `pipe` にしたまま誰も読まないと、出力がバッファを埋めた時点で
+  // 子が write で止まる。下の `collectStderr()` が必ず読み出す。
+  child.stderr?.setEncoding("utf8");
+  return child;
+}
+
+/** 子プロセスが標準エラーへ出したものを集める。読み捨てずに溜めるので詰まらない。 */
+function collectStderr(child: ChildProcess): () => string {
+  let text = "";
+  child.stderr?.on("data", (chunk: string) => {
+    text += chunk;
+  });
+  return () => text;
 }
 
 /** 空いている TCP ポートを 1 つ借りる。固定ポートは他の実行とぶつかる。 */
@@ -59,7 +72,7 @@ function freePort(): Promise<number> {
  * HTTP を叩いて待つと、**別のプロセスが同じポートで応答しているだけ**でも先へ進む
  * （固定ポートだった頃に実際に起きた）。自分が起こしたプロセスの標準出力で待てば取り違えない。
  */
-function waitUntilListening(child: ChildProcess): Promise<void> {
+function waitUntilListening(child: ChildProcess): Promise<string> {
   return new Promise((resolve, reject) => {
     let out = "";
     const timer = setTimeout(() => reject(new Error(`起動しなかった: ${out}`)), STARTUP_TIMEOUT_MS);
@@ -67,7 +80,7 @@ function waitUntilListening(child: ChildProcess): Promise<void> {
       clearTimeout(timer);
       child.stdout?.off("data", onData);
       if (e) reject(e);
-      else resolve();
+      else resolve(out);
     };
     const onData = (chunk: Buffer) => {
       out += chunk.toString();
@@ -124,5 +137,71 @@ describe("src/index.ts: 状態ファイルの排他", () => {
 
     const lock = await acquireStateLock(statePath);
     await lock.release();
+  }, 40_000);
+});
+
+/**
+ * 起動引数の契約を固定する。
+ *
+ * `src/index.ts` は引数の 1 つ目をサブコマンドとして読むので（`serve` 以外は拒否）、
+ * **`--port` を単独で渡すと起動しない**。README がこれを「`--port` または
+ * `BITBANK_MOCK_PORT`」とだけ書いていて実際と食い違っていたのは、**argv を通る経路に
+ * テストが 1 件も無かった**ためである（ポートを渡す既存のテストは環境変数を使う）。
+ *
+ * ここで固定するのは「どちらが正しいか」ではなく**現在の挙動**で、README はこれに
+ * 合わせてある。引数の読み方を変えるなら、このテストが先に落ちる。
+ */
+describe("src/index.ts: 起動引数", () => {
+  let dir: string | null = null;
+  let child: ChildProcess | null = null;
+
+  afterEach(async () => {
+    if (child && child.exitCode === null) {
+      child.kill("SIGKILL");
+      await waitForExit(child);
+    }
+    child = null;
+    if (dir) await rm(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  it("`--port` を単独で渡すと、状態ファイルに触れる前に終了コード 1 で断る", async () => {
+    dir = await mkdtemp(join(tmpdir(), "bitbank-mock-argv-"));
+    const statePath = join(dir, "state.json");
+
+    child = spawnServer({ BITBANK_MOCK_STATE_PATH: statePath }, ["--port", String(await freePort())]);
+    const stderr = collectStderr(child);
+
+    // 起動してしまった場合にタイムアウトまで待たない。listen ログが先に出たらその場で落とす。
+    // `waitUntilListening()` は起動前に終了すると reject するので、そちらも「終了した」に寄せる。
+    const outcome = await Promise.race([
+      waitForExit(child).then(() => "exited" as const),
+      waitUntilListening(child).then(
+        () => "listening" as const,
+        () => "exited" as const,
+      ),
+    ]);
+
+    expect(outcome).toBe("exited");
+    expect(child.exitCode).toBe(1);
+    expect(stderr()).toContain("unknown command: --port");
+    // サブコマンドの判定は排他より前なので、ロックも状態ファイルも作られない。
+    expect(existsSync(stateLockPath(statePath))).toBe(false);
+    expect(existsSync(statePath)).toBe(false);
+  }, 40_000);
+
+  it("`serve --port` は渡したポートで listen する", async () => {
+    dir = await mkdtemp(join(tmpdir(), "bitbank-mock-argv-"));
+    const port = await freePort();
+
+    child = spawnServer(
+      { BITBANK_MOCK_STATE_PATH: join(dir, "state.json"), BITBANK_MOCK_CONTROL: "1" },
+      ["serve", "--port", String(port)],
+    );
+    const out = await waitUntilListening(child);
+
+    // 既定の 14000 ではなく渡した値で上がっていること。
+    expect(out).toContain(`:${port}`);
+    expect(port).not.toBe(14000);
   }, 40_000);
 });
