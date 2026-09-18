@@ -114,6 +114,34 @@ describe("絞り込みパラメータの不正値（実 API 実測）", () => {
   });
 
   /**
+   * 同名のクエリが 2 本来ると値は配列になる。**要素数を数えて先頭を採ったりせず**、
+   * 空文字や空白と同じくパラメータ固有のコードで断る（`docs/fidelity.md` の
+   * 「同じ名前で複数来る値」行）。**実 API がどう扱うかは未実測**なので、ここで
+   * 固定しているのはモックの挙動であって本物との一致ではない。
+   *
+   * スキーマ側の判定は `tests/schemas/requests.test.ts` が見る。ここで見るのは
+   * それが wire 上どの code になるかである。
+   */
+  it("同名のクエリが 2 本来ても数値へ強制せず、固有のコードで断る", async () => {
+    const { fastify } = await build(stateWithTwoOrders());
+    const cases: Array<[string, number]> = [
+      ["count=1&count=2", 40006],
+      ["end=1&end=2", 40007],
+      ["end_id=1&end_id=2", 40008],
+      ["from_id=1&from_id=2", 40009],
+      ["since=1&since=2", 40022],
+    ];
+    for (const [query, code] of cases) {
+      const res = await fastify.inject({
+        method: "GET",
+        url: `/v1/user/spot/active_orders?${query}`,
+      });
+      expect(res.statusCode, query).toBe(200);
+      expect(res.json(), query).toEqual({ success: 0, data: { code } });
+    }
+  });
+
+  /**
    * 空白だけの値も空文字と同じ扱いにする。`Number()` は前後の空白を読み飛ばすので
    * `" "` / `"\t"` / `"\n"` / `"\u00a0"` はいずれも `0` になり、空文字と同じ抜け方をする。
    * 旧実装では `?end=%20` が **`success: 1` のまま 0 件**を返していた
