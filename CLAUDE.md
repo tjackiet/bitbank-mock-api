@@ -32,7 +32,7 @@
 
 - **ESM**（`package.json` の `"type": "module"`）。**相対 import は拡張子 `.ts` を明示する**。例: `import { ok } from "./envelope.ts";` 落とすと `npm run typecheck` が `TS2835` で落ちる（`moduleResolution: "NodeNext"` + `allowImportingTsExtensions: true`）。
 - `tsconfig.json` は `strict: true` / `noEmit: true` / `module` と `moduleResolution` が `"NodeNext"` / `target: "ES2022"`。
-- **`src/` と `tests/` はディレクトリ構成を対応させる。** `src/engine/match.ts` のテストは `tests/engine/match.test.ts`。`tests/` には固有のディレクトリとして `fixtures/`（テストデータ）と `scenarios/`（結合シナリオ）がある。
+- **`src/` と `tests/` はディレクトリ構成を対応させる**（`src/engine/match.ts` → `tests/engine/match.test.ts`）。例外は `tests/structure.test.ts` が理由つきで持ち、ずれると落ちる。
 - **bitbank 互換ルートは [`src/routes/envelope.ts`](src/routes/envelope.ts) の `ok()` / `err()` で bitbank 封筒に包む。** 成功は `{ success: 1, data }`、失敗は `{ success: 0, data: { code } }`。エラーは同ファイルの `ErrorCode` にある bitbank の error code を返す（例: 残高不足 `60001`、注文が見つからない `50009`）。
 - 互換ルートのパスは `/v1/user/...`（`src/routes/` の各ファイル）。登録は [`src/server/http.ts`](src/server/http.ts) の `buildServer()`。
 - **`/_control/` は bitbank API に存在しない実験用の口で、素の JSON を返す。** 封筒には包まず、HTTP ステータス（400 / 403 / 404 / 409。状態ファイルへの書き出しに失敗した後は、状態を変える口が 503）で失敗を表す。実装は [`src/routes/control.ts`](src/routes/control.ts)。`BITBANK_MOCK_CONTROL=1` のときだけ登録され、非ループバックからは `X-Control-Token` の一致を要求する。
