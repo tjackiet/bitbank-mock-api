@@ -86,7 +86,7 @@ private-stream.md より（R4 に直結）:
 | `security.yml`（gitleaks） | git 全履歴の秘密情報スキャン。バージョンと SHA256 を固定 | 入れる。このモックは API キーを扱わないが、移管先の bitbankinc では CLI と MCP が既にやっており、揃えておく |
 | lint（biome） | 整形と静的解析 | 任意。入れるなら Phase 0 で `biome.json` を足し、`ci.yml` に `biome check src/ tests/` を加える |
 
-CD（自動デプロイ・npm 公開・GitHub Release）は作らない。版の固定は git のタグで足りる。`.nvmrc` が無いので `ci.yml` の `node-version-file` は `package.json` の `engines`（Node 20 以上）に合わせて `node-version: 20` を直書きするか、`.nvmrc` を追加する。
+CD（自動デプロイ・npm 公開・GitHub Release）は作らない。版の固定は git のタグで足りる。`.nvmrc` が無いので `ci.yml` に `node-version` を直書きするか、`.nvmrc` を追加する。**実装では `node-version: 24` を直書きした**（`package.json` の `engines` は Node 20 以上なので、ローカルが 20 系でも CI は 24 で通す）。
 
 ```
 Phase 0  対応表の骨子 / 公式 doc との差分洗い出し / CI    9/15 週  （1〜2 日）
@@ -356,7 +356,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 ## 6. スケジュール（目安）
 
-今日 2026-09-11（木）。期日は厳密ではないので、以下は「何をどの順で終えるか」の目安として置く。押さえるべき点は 2 つだけになる。
+2026-09-11 時点。期日は厳密ではないので、以下は「何をどの順で終えるか」の目安として置く。押さえるべき点は 2 つだけになる。
 
 - **10/23 までに v0.1.0（R1 + R2 + R3 の 3 値到達分）を出す。** 10/01〜10/23 を実験環境の準備期間として見込む
 - **10/28 からの実装フェーズ最初の 1 週間（タスク 3.2）は現行のモックでも成立する**（分割回避シナリオは約定を要しない）。R2 が遅れてもここは止まらない
