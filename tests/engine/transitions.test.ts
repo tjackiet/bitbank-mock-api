@@ -81,6 +81,50 @@ describe("placeOrder", () => {
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toBe(TransitionError.INSUFFICIENT_FUNDS);
   });
+
+  /**
+   * 非正の数量・価格を engine でも断る。
+   *
+   * **互換ルートからは届かない組み合わせがある。** `amount` は
+   * `src/schemas/requests.ts` の `refine((n) => n > 0)` が先に落とすので、ここは
+   * engine を直接呼ぶ経路（`/_control/` や将来の呼び出し元）に対する防御であり、
+   * ルート側のテストでは覆えない。実際 `input.amount <= 0` を `< 0` に変えても
+   * 458 件が 1 件も落ちなかった（実測）。
+   *
+   * 数量 0 を通すと `startAmount === 0` の注文ができ、**遷移関数を通る限り不変量は
+   * 破れない**という前提（`preconditionViolations()` の `startAmount > 0`）が崩れて、
+   * 書き出した state を読み戻せなくなる。
+   */
+  it.each([
+    ["数量 0", { amount: 0 }, TransitionError.INVALID_AMOUNT],
+    ["数量が負", { amount: -0.001 }, TransitionError.INVALID_AMOUNT],
+    ["指値 0", { price: 0 }, TransitionError.LIMIT_PRICE_REQUIRED],
+    ["指値が負", { price: -1 }, TransitionError.LIMIT_PRICE_REQUIRED],
+  ])("placeOrder は %s を断り、状態を変えない", (_label, override, expected) => {
+    const state = buildState({ balances: { jpy: 10_000_000 } });
+    const before = JSON.stringify(state);
+    const r = placeOrder(
+      state,
+      { pair: "btc_jpy", side: "buy", type: "limit", amount: 0.001, price: 5_000_000, ...override },
+      NOW,
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toBe(expected);
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
+  it("成行の基準価格が 0 なら MARKET_PRICE_REQUIRED で断る", () => {
+    // 成行は `marketPrice` が基準になる。欠落（上の「rejects market without a price」）と
+    // 同じコードに寄せてある——どちらも「使える価格が無い」なので分けていない。
+    const r = placeOrder(
+      buildState({ balances: { jpy: 10_000_000 } }),
+      { pair: "btc_jpy", side: "buy", type: "market", amount: 0.001 },
+      NOW,
+      0,
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toBe(TransitionError.MARKET_PRICE_REQUIRED);
+  });
 });
 
 describe("fillOrder", () => {
