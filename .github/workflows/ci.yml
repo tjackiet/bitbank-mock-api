@@ -21,4 +21,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      # カバレッジ込みで走らせる。閾値は vitest.config.ts が持つ。
+      - run: npm run coverage

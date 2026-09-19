@@ -21,6 +21,24 @@ describe("pair precision", () => {
     expect(fitsDigits(5_000_000.1, 0)).toBe(false);
   });
 
+  /**
+   * 許容幅（`DIGIT_FIT_EPS`）の**両側**を見る。
+   *
+   * 幅は倍精度の塵を吸うためのもので、桁そのものの緩和ではない。ところが上の反例は
+   * どちらもスケール後の差が `0.1` あり、**幅を 1e-8 から 1e-2 へ 100 万倍に緩めても
+   * 落ちなかった**（実測）。`0.1 + 0.2` の側も差は 4.5e-13 で、幅を 1e-12 へ締めても通る。
+   * つまり幅はどちらの向きへ動かしても検査に当たらなかった。
+   *
+   * 幅が緩めば「小数 5 桁の注文が受理される」、締まれば「普通の注文が `60004` で断られる」。
+   * 両側を挟んでおく。
+   */
+  it("holds both sides of the dust tolerance", () => {
+    // スケール後 10.001 → 整数との差 1e-3。塵ではなく 5 桁目を持っている値なので断る。
+    expect(fitsDigits(0.0010001, 4)).toBe(false);
+    // スケール後 10.0000000001 → 差 1e-10。倍精度の塵の側なので通す。
+    expect(fitsDigits(0.001 + 1e-14, 4)).toBe(true);
+  });
+
   it("formats amounts and prices to fixed decimals", () => {
     expect(formatAmount("btc_jpy", 0.001)).toBe("0.0010");
     expect(formatPrice("btc_jpy", 5_000_000.4)).toBe("5000000");
