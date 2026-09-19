@@ -7,12 +7,12 @@ import {
   DEFAULT_TAKER_FEE_RATE,
   freshState,
   nowIso,
-  pairAssets,
   type PaperState,
+  pairAssets,
 } from "../engine/state.ts";
 import type { FetchCandles, Logger } from "../engine/types.ts";
 import { noopLogger } from "../engine/types.ts";
-import { fillMode, persistFailureMode, type FillMode } from "../server/config.ts";
+import { type FillMode, fillMode, persistFailureMode } from "../server/config.ts";
 import type { PersistFailureMode } from "../server/degraded.ts";
 
 const LATEST_LOOKBACK_MS = 5 * 60_000;
@@ -167,13 +167,16 @@ export class SessionStore {
         continue;
       }
       result.set(pair, r.data);
-      const sr = runTick({ ...this._state, lastTickAt: tickFrom }, {
-        candles: r.data,
-        nowMs,
-        pair,
-        feeRate: this.feeRate,
-        logger: this.logger,
-      });
+      const sr = runTick(
+        { ...this._state, lastTickAt: tickFrom },
+        {
+          candles: r.data,
+          nowMs,
+          pair,
+          feeRate: this.feeRate,
+          logger: this.logger,
+        },
+      );
       if (!sr.success) {
         this.logger.warn(`tick: runTick failed for ${pair}: ${sr.error}`);
         continue;
@@ -215,11 +218,13 @@ export class SessionStore {
     // 予約済みの書き込みがあるなら、それを待てば自分より新しい状態が書かれる。
     if (this.persistPending) return this.persistPending;
     // 直前の書き込みが失敗しても連鎖は止めない（失敗は write() が warn 済み）。
-    const pending = this.persistTail.catch(() => {}).then(() => {
-      // 実書き込みへ移る前に予約を解除する。以降の persist() は次の 1 本を予約する。
-      if (this.persistPending === pending) this.persistPending = null;
-      return this.write();
-    });
+    const pending = this.persistTail
+      .catch(() => {})
+      .then(() => {
+        // 実書き込みへ移る前に予約を解除する。以降の persist() は次の 1 本を予約する。
+        if (this.persistPending === pending) this.persistPending = null;
+        return this.write();
+      });
     this.persistPending = pending;
     this.persistTail = pending;
     return pending;

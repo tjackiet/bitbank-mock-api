@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,10 +44,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
      */
     open: async (p: Parameters<typeof actual.open>[0], flags?: unknown, mode?: unknown) => {
       if (flags === "r" && dirFsync.failOpen) {
-        throw Object.assign(
-          new Error(`ENOENT: no such file or directory, open '${String(p)}'`),
-          { code: "ENOENT" },
-        );
+        throw Object.assign(new Error(`ENOENT: no such file or directory, open '${String(p)}'`), {
+          code: "ENOENT",
+        });
       }
       const fh = await actual.open(p, flags as never, mode as never);
       if (flags === "wx") tempOpens.paths.push(String(p));
@@ -58,7 +57,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
             return async () => {
               dirFsync.synced.push(String(p));
               if (dirFsync.fail) {
-                throw Object.assign(new Error("EINVAL: invalid argument, fsync"), { code: "EINVAL" });
+                throw Object.assign(new Error("EINVAL: invalid argument, fsync"), {
+                  code: "EINVAL",
+                });
               }
               return target.sync();
             };
@@ -241,7 +242,13 @@ describe("読み込み時の不変量検査", () => {
     const state = buildState({
       balances: { jpy: 1_000_000 },
       orders: [
-        buildOrder({ id: "1", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 }),
+        buildOrder({
+          id: "1",
+          side: "sell",
+          pair: "constructor_jpy",
+          price: 100,
+          startAmount: 999,
+        }),
       ],
     });
     await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
@@ -528,7 +535,10 @@ describe("状態の移行", () => {
 
   // 移行は冪等でなければならない。v1 / v2 を読んで v3 として書き戻し、
   // もう一度読んだときに結果が変わると、再起動のたびに状態が動いてしまう。
-  for (const [name, legacy] of [["v1", V1_STATE], ["v2", V2_STATE]] as const) {
+  for (const [name, legacy] of [
+    ["v1", V1_STATE],
+    ["v2", V2_STATE],
+  ] as const) {
     it(`${name} → v3 の移行は冪等`, async () => {
       await writeFile(path, `${JSON.stringify(legacy, null, 2)}\n`, "utf-8");
 
@@ -606,7 +616,10 @@ describe("状態の移行", () => {
     const r = await loadState(path);
     if (!r.success || !r.data) throw new Error("移行に失敗した");
     expect(r.data.orders.map((o) => o.id)).toEqual(["7", "1"]);
-    expect(r.data.trades.map((t) => [t.tradeId, t.orderId])).toEqual([["1", "7"], ["2", "1"]]);
+    expect(r.data.trades.map((t) => [t.tradeId, t.orderId])).toEqual([
+      ["1", "7"],
+      ["2", "1"],
+    ]);
     expect(preconditionViolations(r.data)).toEqual([]);
   });
 
@@ -713,7 +726,9 @@ describe("saveState", () => {
     const warnings: string[] = [];
     dirFsync.fail = true;
 
-    const r = await saveState(path, state, { logger: { warn: (m) => warnings.push(m), info: () => {} } });
+    const r = await saveState(path, state, {
+      logger: { warn: (m) => warnings.push(m), info: () => {} },
+    });
 
     expect(r).toEqual({ success: true, data: true });
     // 状態ファイルは置かれていて、そのまま読み戻せる。
@@ -733,7 +748,12 @@ describe("saveState", () => {
   it("warn が投げても書き込みは成功のまま返す", async () => {
     dirFsync.fail = true;
     const r = await saveState(path, buildState(), {
-      logger: { warn: () => { throw new Error("logger が壊れている"); }, info: () => {} },
+      logger: {
+        warn: () => {
+          throw new Error("logger が壊れている");
+        },
+        info: () => {},
+      },
     });
     expect(r).toEqual({ success: true, data: true });
     expect(existsSync(path)).toBe(true);
@@ -766,7 +786,9 @@ describe("saveState", () => {
     // 注文と trade は揃える（trade の合計 == executedAmount。不変量 5）。
     // 読み込みが不変量を検査するので、食い違った状態は読み戻せない。
     const state = buildState({
-      orders: [buildOrder({ status: "FULLY_FILLED", executedAmount: 0.001, executedNotional: 5_000 })],
+      orders: [
+        buildOrder({ status: "FULLY_FILLED", executedAmount: 0.001, executedNotional: 5_000 }),
+      ],
       trades: [buildTrade()],
     });
     expect(await saveState(path, state)).toEqual({ success: true, data: true });
@@ -817,9 +839,9 @@ describe("defaultStatePath", () => {
   });
 
   it("空文字の BITBANK_MOCK_STATE_PATH は未設定として BITBANK_MOCK_HOME へ落ちる", () => {
-    expect(defaultStatePath("s1", { BITBANK_MOCK_STATE_PATH: "", BITBANK_MOCK_HOME: "/tmp/y" })).toBe(
-      "/tmp/y/sessions/s1/state.json",
-    );
+    expect(
+      defaultStatePath("s1", { BITBANK_MOCK_STATE_PATH: "", BITBANK_MOCK_HOME: "/tmp/y" }),
+    ).toBe("/tmp/y/sessions/s1/state.json");
   });
 
   // 相対パスはどちらの env でも通す（明示的に渡した値を黙って書き換えない）。

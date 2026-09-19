@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadState } from "../../src/engine/persist.ts";
 import type { PaperState } from "../../src/engine/state.ts";
 import { persistFailureMode } from "../../src/server/config.ts";
+import type { PersistFailureMode } from "../../src/server/degraded.ts";
 import {
   assertRouteClassified,
   MUTATING_ROUTES,
@@ -13,7 +14,6 @@ import {
 } from "../../src/server/degraded.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
-import type { PersistFailureMode } from "../../src/server/degraded.ts";
 import { buildOrder, buildState, buildTrade, candle } from "../engine/helpers.ts";
 import { stubFetchCandles } from "../routes/helpers.ts";
 
@@ -53,12 +53,14 @@ describe("劣化モード（persist に失敗した後）", () => {
    * 書き出しが必ず失敗する store でサーバを建てる。状態ファイルのパスをディレクトリに
    * すると `rename` が `EISDIR` で落ちる（モックしない）。
    */
-  async function buildDegradable(opts: {
-    state?: PaperState;
-    mode?: PersistFailureMode;
-    fillMode?: "manual" | "market";
-    candles?: Parameters<typeof stubFetchCandles>[0];
-  } = {}) {
+  async function buildDegradable(
+    opts: {
+      state?: PaperState;
+      mode?: PersistFailureMode;
+      fillMode?: "manual" | "market";
+      candles?: Parameters<typeof stubFetchCandles>[0];
+    } = {},
+  ) {
     const path = join(dir, `s${Math.random().toString(36).slice(2, 8)}`, "state.json");
     await mkdir(path, { recursive: true });
     const store = new SessionStore(opts.state ?? seededState(), {

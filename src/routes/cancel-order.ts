@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { isActive, type OrderRecord } from "../engine/state.ts";
 import { cancelOrder } from "../engine/transitions.ts";
 import { CancelOrderRequestSchema, CancelOrdersRequestSchema } from "../schemas/requests.ts";
-import { err, ErrorCode, ok } from "./envelope.ts";
+import { ErrorCode, err, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
 

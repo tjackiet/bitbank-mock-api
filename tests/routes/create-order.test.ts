@@ -6,17 +6,15 @@ import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
   OFFICIAL_CREATE_ORDER_STATUSES,
-  UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
+  UNIMPLEMENTED_ORDER_FIELDS,
 } from "./official-fields.ts";
 
 describe("POST /v1/user/spot/order", () => {
   const build = setupBuildTestServer();
 
   it("creates a limit buy and adds to open orders", async () => {
-    const { fastify, store } = await build(
-      buildState({ balances: { jpy: 10_000_000 } }),
-    );
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }));
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",
@@ -55,7 +53,13 @@ describe("POST /v1/user/spot/order", () => {
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",
-      payload: { pair: "constructor_jpy", amount: "999", price: "100", side: "sell", type: "limit" },
+      payload: {
+        pair: "constructor_jpy",
+        amount: "999",
+        price: "100",
+        side: "sell",
+        type: "limit",
+      },
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
@@ -65,10 +69,9 @@ describe("POST /v1/user/spot/order", () => {
 
   it("fills market buy at latest candle close", async () => {
     const now = Date.now();
-    const { fastify, store } = await build(
-      buildState({ balances: { jpy: 10_000_000 } }),
-      { btc_jpy: [candle(now - 60_000, 4_990_000, 5_010_000, 4_980_000, 5_000_000)] },
-    );
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }), {
+      btc_jpy: [candle(now - 60_000, 4_990_000, 5_010_000, 4_980_000, 5_000_000)],
+    });
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",

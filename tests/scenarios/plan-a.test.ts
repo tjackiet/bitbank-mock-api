@@ -39,7 +39,9 @@ describe("plan A scenario: place then control fill", () => {
 
     const assetsBefore = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
     const jpyBefore = (
-      assetsBefore.json() as { data: { assets: { asset: string; locked_amount: string; onhand_amount: string }[] } }
+      assetsBefore.json() as {
+        data: { assets: { asset: string; locked_amount: string; onhand_amount: string }[] };
+      }
     ).data.assets.find((a) => a.asset === "jpy");
     expect(Number(jpyBefore?.locked_amount)).toBeGreaterThan(0);
 

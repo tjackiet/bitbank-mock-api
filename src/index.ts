@@ -1,6 +1,6 @@
-import { buildServer } from "./server/http.ts";
-import { fillMode, isControlEnabled, listenHost, persistFailureMode } from "./server/config.ts";
 import { defaultStatePath, sweepOrphanTempFiles } from "./engine/persist.ts";
+import { fillMode, isControlEnabled, listenHost, persistFailureMode } from "./server/config.ts";
+import { buildServer } from "./server/http.ts";
 import { acquireStateLock, StateLockedError } from "./store/lock.ts";
 import { loadOrInitDefault } from "./store/session.ts";
 
@@ -8,8 +8,7 @@ const DEFAULT_PORT = 14000;
 const DEFAULT_INITIAL_JPY = 1_000_000;
 
 function parsePort(argv: string[]): number {
-  const isValidPort = (n: number): boolean =>
-    Number.isInteger(n) && n >= 1 && n <= 65535;
+  const isValidPort = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= 65535;
   const i = argv.indexOf("--port");
   if (i >= 0 && argv[i + 1]) {
     const n = Number(argv[i + 1]);
@@ -78,7 +77,9 @@ async function main() {
       console.error(`サーバを停止できませんでした: ${e}`);
     } finally {
       // 解放の失敗で停止を止めない。残ったロックは次の起動が stale として奪う。
-      await lock.release().catch((e: unknown) => console.warn(`ロックを解放できませんでした: ${e}`));
+      await lock
+        .release()
+        .catch((e: unknown) => console.warn(`ロックを解放できませんでした: ${e}`));
       process.exit(exitCode);
     }
   };
@@ -92,7 +93,9 @@ async function main() {
     await fastify.listen({ port, host });
   } catch (e) {
     // 解放に失敗しても、投げ直すのは listen の失敗のほう。原因を後片付けで隠さない。
-    await lock.release().catch((re: unknown) => console.warn(`ロックを解放できませんでした: ${re}`));
+    await lock
+      .release()
+      .catch((re: unknown) => console.warn(`ロックを解放できませんでした: ${re}`));
     throw e;
   }
   // persistFailure は既定が degrade（v0.1.0 からの変更）なので、起動時に見えるようにしておく。

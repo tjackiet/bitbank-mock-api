@@ -4,8 +4,8 @@ import { buildOrder, buildState, buildTrade } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
   OFFICIAL_CANCEL_ORDER_STATUSES,
-  UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
+  UNIMPLEMENTED_ORDER_FIELDS,
 } from "./official-fields.ts";
 
 describe("POST /v1/user/spot/cancel_order", () => {
@@ -171,10 +171,7 @@ describe("POST /v1/user/spot/cancel_orders", () => {
   it("skips ids that do not resolve to an order of the requested pair", async () => {
     const state = buildState({
       balances: { jpy: 10_000_000 },
-      orders: [
-        buildOrder({ id: "1" }),
-        buildOrder({ id: "2", pair: "eth_jpy", price: 300_000 }),
-      ],
+      orders: [buildOrder({ id: "1" }), buildOrder({ id: "2", pair: "eth_jpy", price: 300_000 })],
     });
     const { fastify, store } = await build(state);
     const res = await fastify.inject({

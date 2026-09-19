@@ -52,7 +52,10 @@ describe("/_control routes", () => {
     for (const fn of cleanups.splice(0)) await fn();
   });
 
-  async function setup(state?: Parameters<typeof buildControl>[0], opts?: Parameters<typeof buildControl>[1]) {
+  async function setup(
+    state?: Parameters<typeof buildControl>[0],
+    opts?: Parameters<typeof buildControl>[1],
+  ) {
     const r = await buildControl(state, opts);
     cleanups.push(async () => {
       await r.fastify.close();
@@ -178,7 +181,10 @@ describe("/_control routes", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { order: { status: string; executed_amount: string }; trade: { amount: string } };
+    const body = res.json() as {
+      order: { status: string; executed_amount: string };
+      trade: { amount: string };
+    };
     expect(body.order.status).toBe("FULLY_FILLED");
     expect(body.order.executed_amount).toBe("0.0010");
     expect(body.trade.amount).toBe("0.0010");
@@ -194,7 +200,12 @@ describe("/_control routes", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      order: { status: string; executed_amount: string; remaining_amount: string; average_price: string };
+      order: {
+        status: string;
+        executed_amount: string;
+        remaining_amount: string;
+        average_price: string;
+      };
     };
     expect(body.order.status).toBe("PARTIALLY_FILLED");
     expect(body.order.executed_amount).toBe("0.0004");
@@ -204,7 +215,11 @@ describe("/_control routes", () => {
 
   it("returns 404 when the order does not exist", async () => {
     const { fastify } = await setup();
-    const res = await fastify.inject({ method: "POST", url: "/_control/orders/999/fill", payload: {} });
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/orders/999/fill",
+      payload: {},
+    });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "ORDER_NOT_FOUND" });
   });
@@ -221,7 +236,11 @@ describe("/_control routes", () => {
         ],
       }),
     );
-    const res = await fastify.inject({ method: "POST", url: "/_control/orders/1/fill", payload: {} });
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/orders/1/fill",
+      payload: {},
+    });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: "ORDER_NOT_ACTIVE", status: "CANCELED_UNFILLED" });
   });
@@ -313,9 +332,7 @@ describe("/_control routes", () => {
     const { fastify, store } = await setup(
       buildState({
         balances: { jpy: 10_000_000, btc: 1 },
-        orders: [
-          buildOrder({ id: "1", pair: "../../admin_jpy", side: "sell", price: 5_000_000 }),
-        ],
+        orders: [buildOrder({ id: "1", pair: "../../admin_jpy", side: "sell", price: 5_000_000 })],
       }),
     );
     const res = await fastify.inject({
@@ -333,7 +350,10 @@ describe("/_control routes", () => {
     const res = await fastify.inject({
       method: "POST",
       url: "/_control/tick",
-      payload: { pair: "btc_jpy", candle: { open: 1, high: Number.POSITIVE_INFINITY, low: 1, close: 1 } },
+      payload: {
+        pair: "btc_jpy",
+        candle: { open: 1, high: Number.POSITIVE_INFINITY, low: 1, close: 1 },
+      },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: "INVALID_CANDLE" });
@@ -479,14 +499,20 @@ describe("/_control routes", () => {
       }),
     );
     const tick = (price: number) =>
-      fastify.inject({ method: "POST", url: "/_control/tick", payload: { pair: "btc_jpy", price } });
+      fastify.inject({
+        method: "POST",
+        url: "/_control/tick",
+        payload: { pair: "btc_jpy", price },
+      });
     // 1 本目は注文 1 だけ、2 本目は注文 2 だけに当たる価格を選ぶ。
     const first = (await tick(4_500_000)).json() as { filled: unknown[]; lastTickAt: string };
     const second = (await tick(3_500_000)).json() as { filled: unknown[]; lastTickAt: string };
     expect(first.filled).toHaveLength(1);
     expect(second.filled).toHaveLength(1);
     // 2 本目の窓は 1 本目より必ず 60 秒以上先にある（同じ窓には落ちない）。
-    expect(Date.parse(second.lastTickAt) - Date.parse(first.lastTickAt)).toBeGreaterThanOrEqual(60_000);
+    expect(Date.parse(second.lastTickAt) - Date.parse(first.lastTickAt)).toBeGreaterThanOrEqual(
+      60_000,
+    );
     const [t1, t2] = store.state().trades;
     expect(Date.parse(t2!.executedAt) - Date.parse(t1!.executedAt)).toBeGreaterThanOrEqual(60_000);
   });
@@ -617,23 +643,25 @@ describe("/_control routes", () => {
 
   // 資産キーは互換ルートが作るペアのセグメントと同じ文字種だけ通す。通してしまうと
   // GET /v1/user/assets の asset にそのまま現れ、状態ファイルにも残る。
-  it.each([['{"balances":{"":1}}'], ['{"balances":{"BTC":1}}'], ['{"balances":{"btc jpy":1}}'],
-    ['{"balances":{"btc\\n2026-01-01 INFO injected":1}}'], ['{"balances":{"../../etc/passwd":1}}']])(
-    "rejects a malformed asset key without touching state: %s",
-    async (payload) => {
-      const { fastify, store } = await setup();
-      const before = JSON.stringify(store.state());
-      const res = await fastify.inject({
-        method: "POST",
-        url: "/_control/reset",
-        headers: { "content-type": "application/json" },
-        payload,
-      });
-      expect(res.statusCode).toBe(400);
-      expect(res.json()).toEqual({ error: "INVALID_BALANCES" });
-      expect(JSON.stringify(store.state())).toBe(before);
-    },
-  );
+  it.each([
+    ['{"balances":{"":1}}'],
+    ['{"balances":{"BTC":1}}'],
+    ['{"balances":{"btc jpy":1}}'],
+    ['{"balances":{"btc\\n2026-01-01 INFO injected":1}}'],
+    ['{"balances":{"../../etc/passwd":1}}'],
+  ])("rejects a malformed asset key without touching state: %s", async (payload) => {
+    const { fastify, store } = await setup();
+    const before = JSON.stringify(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/reset",
+      headers: { "content-type": "application/json" },
+      payload,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "INVALID_BALANCES" });
+    expect(JSON.stringify(store.state())).toBe(before);
+  });
 
   // __proto__ はルートへ届く前に Fastify の JSON パーサが本文ごと弾く。
   it("rejects a body carrying a __proto__ key before the route sees it", async () => {
@@ -658,7 +686,11 @@ describe("/_control routes", () => {
       payload: { initialJpy: 50_000, balances: { jpy: 50_000, btc: 1 } },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { orders: unknown[]; balances: { jpy: number; btc: number }; initialJpy: number };
+    const body = res.json() as {
+      orders: unknown[];
+      balances: { jpy: number; btc: number };
+      initialJpy: number;
+    };
     expect(body.orders).toEqual([]);
     expect(body.balances).toEqual({ jpy: 50_000, btc: 1 });
     expect(body.initialJpy).toBe(50_000);
@@ -710,11 +742,17 @@ describe("runTick が約定を適用できないとき", () => {
     const store = new SessionStore(stateWithSaturatedTradeSeq(), {
       path: null,
       fillMode: "market",
-      fetchCandles: async (pair) => ({ success: true, data: pair === "btc_jpy" ? candles.btc_jpy : [] }),
+      fetchCandles: async (pair) => ({
+        success: true,
+        data: pair === "btc_jpy" ? candles.btc_jpy : [],
+      }),
     });
     const fastify = await buildServer({ store, logger: false, controlEnabled: false });
 
-    const get = await fastify.inject({ method: "GET", url: "/v1/user/spot/order?pair=btc_jpy&order_id=1" });
+    const get = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/order?pair=btc_jpy&order_id=1",
+    });
     expect(get.statusCode).toBe(200);
     expect(get.json()).toMatchObject({ success: 1 });
 

@@ -6,12 +6,12 @@ import { invariantViolations, preconditionViolations } from "./invariants.ts";
 import {
   DEFAULT_TAKER_FEE_RATE,
   issuedSeqOf,
-  PaperStateSchema,
   type OrderRecord,
   type PaperState,
+  PaperStateSchema,
   type TradeRecord,
 } from "./state.ts";
-import { noopLogger, type Logger, type Result } from "./types.ts";
+import { type Logger, noopLogger, type Result } from "./types.ts";
 
 const PaperHistoryEntrySchemaV2 = z.object({
   id: z.string(),
@@ -210,10 +210,7 @@ export function migrateToLatest(parsed: z.infer<typeof PaperStateAnySchema>): Pa
 // `BITBANK_MOCK_HOME=""` を値として受けると `join("", ...)` が相対パス
 // `sessions/<id>/state.json` になり、同じ env でも起動した作業ディレクトリごとに
 // 別の状態ファイルを掴む（README が既定として書く `~/.bitbank-mock` からも黙って外れる）。
-export function defaultStatePath(
-  sessionId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
+export function defaultStatePath(sessionId: string, env: NodeJS.ProcessEnv = process.env): string {
   if (env.BITBANK_MOCK_STATE_PATH) return env.BITBANK_MOCK_STATE_PATH;
   const root = env.BITBANK_MOCK_HOME || join(homedir(), ".bitbank-mock");
   return join(root, "sessions", sessionId, "state.json");
@@ -317,7 +314,7 @@ export type SaveStateOptions = {
 function dirsToSync(path: string, created: string | undefined): string[] {
   const dirs = [dirname(path)];
   if (created === undefined) return dirs;
-  let dir = dirs[0]!;
+  let dir = dirs[0];
   while (dir !== created) {
     const parent = dirname(dir);
     // created が祖先でないときの保険（dirname が動かなくなったら打ち切る）。

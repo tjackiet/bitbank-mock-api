@@ -11,7 +11,9 @@ describe("server config", () => {
   it("defaults fillMode to manual when control is on", () => {
     expect(fillMode({})).toBe("market");
     expect(fillMode({ BITBANK_MOCK_CONTROL: "1" })).toBe("manual");
-    expect(fillMode({ BITBANK_MOCK_CONTROL: "1", BITBANK_MOCK_FILL_MODE: "market" })).toBe("market");
+    expect(fillMode({ BITBANK_MOCK_CONTROL: "1", BITBANK_MOCK_FILL_MODE: "market" })).toBe(
+      "market",
+    );
     expect(fillMode({ BITBANK_MOCK_FILL_MODE: "manual" })).toBe("manual");
   });
 

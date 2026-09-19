@@ -16,17 +16,21 @@
 | `npm test` | `vitest run`（**カバレッジは測らない**。速い内側の輪として使う） |
 | `npm run coverage` | `vitest run --coverage`。閾値は `vitest.config.ts` が持ち、**割れると終了コード 1**。`src/index.ts` は計測から外す（`tests/index.test.ts` が子プロセスで検証するので v8 が追えず 0% と出るため） |
 | `npm run typecheck` | `tsc --noEmit`（`src/**/*` と `tests/**/*` と `vitest.config.ts`） |
+| `npm run lint` | `biome ci . --error-on-warnings`。整形・lint・import の並びを見る。**警告もエラー扱い**なので、Biome が何か言ったら赤 |
+| `npm run format` | `biome check . --write`。整形と安全な自動修正を当てる。**`lint` が赤いときはまずこれ** |
 | `npm run dev` | `tsx src/index.ts`。listen は control 有効時 `127.0.0.1:14000`、**無効時 `0.0.0.0:14000`**。ポートは `BITBANK_MOCK_PORT` か `serve --port`（**`--port` 単独は `unknown command` で落ちる**） |
 
 `/_control/` を使うなら `BITBANK_MOCK_CONTROL=1`。環境変数の一覧は [`README.md`](README.md) の「環境変数」節。
 
-**lint と formatter は無い**（設定も依存もない）。整形は既存コードに合わせて手で揃える。
+**整形と lint は Biome**（`biome.json`）。**手で揃えない**——`npm run format` を当てる。字下げはスペース 2、行幅 100、クォートは二重、import は Biome が並べ替える。
+
+ルールは `recommended` のまま 1 つだけ狭めている: **`style/noNonNullAssertion` は `src/**` だけで有効**（`biome.json` の `overrides` が `tests/**` で切る）。src の `!` は実行時の `undefined` を隠すが、テストの `orders[0]!` は外すと `toBeDefined()` と絞り込みの 2 行に膨らむだけで、外れていれば TypeError で落ちる。意図して使う制御文字の正規表現などは、行の直前に `// biome-ignore lint/<ルール>: <理由>` を書いて個別に抑える。
 
 ## 必須の規約
 
 - **公式ドキュメントに明記されない挙動を決めたら、実装と同じ PR で `docs/fidelity.md` に追記する。** 挙動の前提を記録するという同ファイルの役割そのもので、PR テンプレートのチェックリスト項目でもある。
-- **`npm run coverage` と `npm run typecheck` を green にしてから PR を出す。**カバレッジの閾値はラチェットで、**下げるときは理由を PR に書く**（黙って下げられるなら無いのと同じ）。
-- PR では `ci.yml` が **Node 24** で `npm ci` → typecheck → **coverage**（`npm test` ではなく `npm run coverage`。テストの失敗と閾値割れのどちらでも赤くなる。`engines.node` が `>=20` なので、ローカルが 20 系でも CI は 24 で通ること）。**main 宛の PR ではさらに** `security.yml`（`npm audit --audit-level=high` と gitleaks）が走り、**CI が green でもこちらが赤いことがある**。
+- **`npm run lint` と `npm run typecheck` と `npm run coverage` を green にしてから PR を出す。**カバレッジの閾値はラチェットで、**下げるときは理由を PR に書く**（黙って下げられるなら無いのと同じ）。
+- PR では `ci.yml` が **Node 24** で `npm ci` → **lint** → typecheck → **coverage**（`npm test` ではなく `npm run coverage`。テストの失敗と閾値割れのどちらでも赤くなる。`engines.node` が `>=20` なので、ローカルが 20 系でも CI は 24 で通ること）。**main 宛の PR ではさらに** `security.yml`（`npm audit --audit-level=high` と gitleaks）が走り、**CI が green でもこちらが赤いことがある**。
 
 ## コードの約束
 

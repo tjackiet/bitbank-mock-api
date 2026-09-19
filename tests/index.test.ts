@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -169,7 +169,10 @@ describe("src/index.ts: 起動引数", () => {
     dir = await mkdtemp(join(tmpdir(), "bitbank-mock-argv-"));
     const statePath = join(dir, "state.json");
 
-    child = spawnServer({ BITBANK_MOCK_STATE_PATH: statePath }, ["--port", String(await freePort())]);
+    child = spawnServer({ BITBANK_MOCK_STATE_PATH: statePath }, [
+      "--port",
+      String(await freePort()),
+    ]);
     const stderr = collectStderr(child);
 
     // 起動してしまった場合にタイムアウトまで待たない。listen ログが先に出たらその場で落とす。

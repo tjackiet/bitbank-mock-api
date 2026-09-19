@@ -1,10 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
-import type { TradeRecord } from "../engine/state.ts";
 import { isKnownPair } from "../engine/pairs.ts";
+import type { TradeRecord } from "../engine/state.ts";
 import { TradeHistoryQuerySchema } from "../schemas/requests.ts";
-import { err, ErrorCode, ok } from "./envelope.ts";
-import { queryParamErrorCode } from "./params.ts";
+import { ErrorCode, err, ok } from "./envelope.ts";
 import { formatTrade } from "./format.ts";
+import { queryParamErrorCode } from "./params.ts";
 
 const TRADE_HISTORY_MAX = 1000;
 
@@ -25,11 +25,13 @@ function filterTrades(
     const want = String(q.order_id);
     out = out.filter((t) => t.orderId === want);
   }
-  if (q.since !== undefined) {
-    out = out.filter((t) => Date.parse(t.executedAt) >= q.since!);
+  // `active_orders` と同じ理由で closure の外へ出す。
+  const { since, end } = q;
+  if (since !== undefined) {
+    out = out.filter((t) => Date.parse(t.executedAt) >= since);
   }
-  if (q.end !== undefined) {
-    out = out.filter((t) => Date.parse(t.executedAt) <= q.end!);
+  if (end !== undefined) {
+    out = out.filter((t) => Date.parse(t.executedAt) <= end);
   }
   if ((q.order ?? "desc") === "desc") out = [...out].reverse();
   const limit = q.count === undefined ? out.length : Math.min(q.count, TRADE_HISTORY_MAX);

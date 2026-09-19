@@ -4,7 +4,10 @@ import * as requestSchemas from "../../src/schemas/requests.ts";
 import { buildOrder, buildState } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 
-type Envelope = { success: number; data: { code?: number; orders?: unknown[]; trades?: unknown[] } };
+type Envelope = {
+  success: number;
+  data: { code?: number; orders?: unknown[]; trades?: unknown[] };
+};
 
 /**
  * 公式一覧に無いペアを断る経路をまとめて見る。

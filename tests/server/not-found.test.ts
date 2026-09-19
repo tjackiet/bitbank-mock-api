@@ -20,16 +20,19 @@ describe("未登録パスの応答", () => {
     ["GET", "/v1/user/spot/ping"],
     ["POST", "/v1/user/spot/ping"],
     ["GET", "/v1/user/nope"],
-  ] as const)("%s %s は 200 + 封筒 20003（実 API は認可がルーティングより先）", async (method, url) => {
-    const { fastify, close } = await build(false);
-    try {
-      const res = await fastify.inject({ method, url });
-      expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ success: 0, data: { code: 20003 } });
-    } finally {
-      await close();
-    }
-  });
+  ] as const)(
+    "%s %s は 200 + 封筒 20003（実 API は認可がルーティングより先）",
+    async (method, url) => {
+      const { fastify, close } = await build(false);
+      try {
+        const res = await fastify.inject({ method, url });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ success: 0, data: { code: 20003 } });
+      } finally {
+        await close();
+      }
+    },
+  );
 
   it.each([
     ["GET", "/v1/nonexistent"],
@@ -48,16 +51,19 @@ describe("未登録パスの応答", () => {
 
   // `/_control/` は bitbank API に存在しない実験用の口なので封筒に包まない。
   // control を無効にしたときの `/_control/state` もここを通る。
-  it.each([[true], [false]])("`/_control/` は封筒に包まない（controlEnabled=%s）", async (enabled) => {
-    const { fastify, close } = await build(enabled);
-    try {
-      const res = await fastify.inject({ method: "GET", url: "/_control/nope" });
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).not.toHaveProperty("success");
-    } finally {
-      await close();
-    }
-  });
+  it.each([[true], [false]])(
+    "`/_control/` は封筒に包まない（controlEnabled=%s）",
+    async (enabled) => {
+      const { fastify, close } = await build(enabled);
+      try {
+        const res = await fastify.inject({ method: "GET", url: "/_control/nope" });
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).not.toHaveProperty("success");
+      } finally {
+        await close();
+      }
+    },
+  );
 
   it("control を無効にしたときの /_control/state も素の 404", async () => {
     const { fastify, close } = await build(false);

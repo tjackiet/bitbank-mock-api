@@ -1,4 +1,4 @@
-import { err, ErrorCode } from "../routes/envelope.ts";
+import { ErrorCode, err } from "../routes/envelope.ts";
 
 /**
  * 状態ファイルへの書き出しに失敗した後の振る舞い。

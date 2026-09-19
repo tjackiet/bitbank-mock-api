@@ -1,7 +1,12 @@
 import type { Candle } from "./candles.ts";
 import { isValidCandle } from "./candles.ts";
-import { remainingOf, type OrderRecord, type PaperState, type TradeRecord } from "./state.ts";
-import { DEFAULT_TAKER_FEE_RATE } from "./state.ts";
+import {
+  DEFAULT_TAKER_FEE_RATE,
+  type OrderRecord,
+  type PaperState,
+  remainingOf,
+  type TradeRecord,
+} from "./state.ts";
 import { fillOrder } from "./transitions.ts";
 import { type Logger, noopLogger, type Result } from "./types.ts";
 

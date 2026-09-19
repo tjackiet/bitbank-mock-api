@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { formatAveragePrice, formatOrder } from "../../src/routes/format.ts";
 import { priceUnit } from "../../src/engine/precision.ts";
 import { fillOrder } from "../../src/engine/transitions.ts";
+import { formatAveragePrice, formatOrder } from "../../src/routes/format.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
   IMPLEMENTED_ORDER_TYPES,
   OFFICIAL_FETCH_ORDER_STATUSES,
-  UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
+  UNIMPLEMENTED_ORDER_FIELDS,
 } from "./official-fields.ts";
 
 type OrderBody = {
@@ -253,7 +253,7 @@ describe("POST /v1/user/spot/orders_info", () => {
 
 describe("average_price rounding", () => {
   it("keeps the product within half a price unit on partial fills", () => {
-    let state = buildState({
+    const state = buildState({
       balances: { jpy: 10_000_000, btc: 0 },
       orders: [
         buildOrder({
@@ -473,9 +473,7 @@ describe("不正な id の error code（実測に合わせた）", () => {
     expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=true")).toBe(40013);
     expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=1.5")).toBe(40013);
     // 同名クエリが 2 本来ると値は配列になる。実 API はこれも 40013 を返す。
-    expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=1&order_id=2")).toBe(
-      40013,
-    );
+    expect(await get("/v1/user/spot/order?pair=btc_jpy&order_id=1&order_id=2")).toBe(40013);
   });
 
   it("GET order: 読めたが存在しない order_id は今までどおり 50009", async () => {

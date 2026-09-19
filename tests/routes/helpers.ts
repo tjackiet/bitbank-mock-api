@@ -1,11 +1,11 @@
 import { afterEach } from "vitest";
 import type { Candle } from "../../src/engine/candles.ts";
+import type { PaperState } from "../../src/engine/state.ts";
 import type { FetchCandles, Logger } from "../../src/engine/types.ts";
-import { buildState } from "../engine/helpers.ts";
+import type { FillMode } from "../../src/server/config.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
-import type { PaperState } from "../../src/engine/state.ts";
-import type { FillMode } from "../../src/server/config.ts";
+import { buildState } from "../engine/helpers.ts";
 
 export function stubFetchCandles(byPair: Record<string, Candle[]>): FetchCandles {
   return async (pair, fromMs, toMs) => {

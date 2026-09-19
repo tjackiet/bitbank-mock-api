@@ -104,26 +104,27 @@ describe("本文の数値（numStr）", () => {
   const base = { pair: "btc_jpy", side: "buy", type: "limit" } as const;
 
   it("数値でも文字列でも受ける", () => {
-    expect(CreateOrderRequestSchema.safeParse({ ...base, amount: "0.001", price: "5000000" }).success).toBe(
-      true,
-    );
-    expect(CreateOrderRequestSchema.safeParse({ ...base, amount: 0.001, price: 5_000_000 }).success).toBe(
-      true,
-    );
+    expect(
+      CreateOrderRequestSchema.safeParse({ ...base, amount: "0.001", price: "5000000" }).success,
+    ).toBe(true);
+    expect(
+      CreateOrderRequestSchema.safeParse({ ...base, amount: 0.001, price: 5_000_000 }).success,
+    ).toBe(true);
   });
 
   it("`amount` は 0 以下を落とす", () => {
     for (const v of ["0", "-1"]) {
-      expect(CreateOrderRequestSchema.safeParse({ ...base, amount: v, price: "1" }).success, v).toBe(
-        false,
-      );
+      expect(
+        CreateOrderRequestSchema.safeParse({ ...base, amount: v, price: "1" }).success,
+        v,
+      ).toBe(false);
     }
   });
 
   it("非有限を落とす", () => {
-    expect(CreateOrderRequestSchema.safeParse({ ...base, amount: "1e999", price: "1" }).success).toBe(
-      false,
-    );
+    expect(
+      CreateOrderRequestSchema.safeParse({ ...base, amount: "1e999", price: "1" }).success,
+    ).toBe(false);
   });
 
   it("`price` は任意（成行のため）", () => {

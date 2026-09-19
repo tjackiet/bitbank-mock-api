@@ -140,9 +140,13 @@ bitbank API には存在しません。本番クライアントから叩かな�
 npm test          # vitest run（カバレッジは測りません）
 npm run coverage  # vitest run --coverage（閾値割れで終了コード 1）
 npm run typecheck
+npm run lint      # biome ci（整形・lint・import の並び。警告もエラー扱い）
+npm run format    # biome check --write（整形と安全な自動修正を当てる）
 ```
 
-CI（`.github/workflows/ci.yml`）は Node 24 で `npm ci` → `npm run typecheck` → `npm run coverage` を走らせます。カバレッジの下限は `vitest.config.ts` が持ち、**現状値の少し下に置いたラチェット**です（未到達のコードが新しく入ったときに落ちる下限で、目標値ではありません）。`src/index.ts` は計測から外しています——`tests/index.test.ts` が子プロセスとして起こして検証するので、v8 のカバレッジが追えず 0% と出るためです。
+整形と lint は [Biome](https://biomejs.dev/) に寄せています（`biome.json`）。手で揃えず `npm run format` を当ててください。
+
+CI（`.github/workflows/ci.yml`）は Node 24 で `npm ci` → `npm run lint` → `npm run typecheck` → `npm run coverage` を走らせます。カバレッジの下限は `vitest.config.ts` が持ち、**現状値の少し下に置いたラチェット**です（未到達のコードが新しく入ったときに落ちる下限で、目標値ではありません）。`src/index.ts` は計測から外しています——`tests/index.test.ts` が子プロセスとして起こして検証するので、v8 のカバレッジが追えず 0% と出るためです。
 
 ## 免責事項
 

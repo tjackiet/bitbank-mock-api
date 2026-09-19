@@ -1,6 +1,6 @@
 import type { InjectOptions } from "fastify";
 import { describe, expect, it, vi } from "vitest";
-import { READ_ROUTES, MUTATING_ROUTES } from "../../src/server/degraded.ts";
+import { MUTATING_ROUTES, READ_ROUTES } from "../../src/server/degraded.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 

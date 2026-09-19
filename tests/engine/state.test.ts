@@ -10,8 +10,8 @@ import {
   DEFAULT_TAKER_FEE_RATE,
   genId,
   nowIso,
-  pairAssets,
   PaperStateSchema,
+  pairAssets,
 } from "../../src/engine/state.ts";
 import { placeOrder } from "../../src/engine/transitions.ts";
 import { buildOrder, buildState } from "./helpers.ts";
@@ -68,7 +68,15 @@ describe("pure helpers", () => {
   it("computeLocked: Object.prototype のキーと同名の資産でも数値で積む", () => {
     const state = buildState({
       balances: { jpy: 1_000_000 },
-      orders: [buildOrder({ id: "s", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 })],
+      orders: [
+        buildOrder({
+          id: "s",
+          side: "sell",
+          pair: "constructor_jpy",
+          price: 100,
+          startAmount: 999,
+        }),
+      ],
     });
     const locked = computeLocked(state, 0);
     expect(locked.constructor).toBe(999);
@@ -78,7 +86,15 @@ describe("pure helpers", () => {
   it("availableOf: Object.prototype のキーと同名の資産でも NaN にならない", () => {
     const state = buildState({
       balances: { jpy: 1_000_000 },
-      orders: [buildOrder({ id: "s", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 })],
+      orders: [
+        buildOrder({
+          id: "s",
+          side: "sell",
+          pair: "constructor_jpy",
+          price: 100,
+          startAmount: 999,
+        }),
+      ],
     });
     // 残高に constructor が無いので 0。拘束 999 を引いて -999。NaN だと発注ガードが素通りする。
     expect(availableOf(state, "constructor", 0)).toBe(-999);

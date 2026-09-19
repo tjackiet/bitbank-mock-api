@@ -4,10 +4,10 @@ import {
   DEFAULT_TAKER_FEE_RATE,
   isActive,
   isTerminal,
-  pairAssets,
-  remainingOf,
   type OrderRecord,
   type PaperState,
+  pairAssets,
+  remainingOf,
   type TradeRecord,
 } from "./state.ts";
 import type { Result } from "./types.ts";
@@ -190,8 +190,7 @@ export function fillOrder(
   const fillAmount = fully ? remaining : amount;
   if (!Number.isFinite(price) || price <= 0) return fail(TransitionError.INVALID_PRICE);
   if (current.type === "limit" && current.price != null) {
-    const worse =
-      current.side === "buy" ? price > current.price : price < current.price;
+    const worse = current.side === "buy" ? price > current.price : price < current.price;
     if (worse) return fail(TransitionError.INVALID_PRICE);
   }
 
@@ -253,11 +252,7 @@ export function fillOrder(
  * `!isActive` が残る `INACTIVE` を落とす。どちらも `ORDER_NOT_ACTIVE` を返す。
  * 不在は `ORDER_NOT_FOUND`。いずれも状態は変えない。
  */
-export function cancelOrder(
-  state: PaperState,
-  orderId: string,
-  at: string,
-): Result<TransitionOk> {
+export function cancelOrder(state: PaperState, orderId: string, at: string): Result<TransitionOk> {
   const current = state.orders.find((o) => o.id === orderId);
   if (!current) return fail(TransitionError.ORDER_NOT_FOUND);
   if (isTerminal(current)) return fail(TransitionError.ORDER_NOT_ACTIVE);
@@ -265,7 +260,8 @@ export function cancelOrder(
 
   const order: OrderRecord = {
     ...current,
-    status: current.status === "PARTIALLY_FILLED" ? "CANCELED_PARTIALLY_FILLED" : "CANCELED_UNFILLED",
+    status:
+      current.status === "PARTIALLY_FILLED" ? "CANCELED_PARTIALLY_FILLED" : "CANCELED_UNFILLED",
     canceledAt: at,
     updatedAt: at,
   };
@@ -282,11 +278,7 @@ export function cancelOrder(
  * （`PaperStateSchema` は status を enum で受けるので読み込みは通る）。
  * `src/routes/cancel-order.ts` が `REJECTED` を `ORDER_NOT_FOUND` に落とすのはその経路のため。
  */
-export function rejectOrder(
-  state: PaperState,
-  orderId: string,
-  at: string,
-): Result<TransitionOk> {
+export function rejectOrder(state: PaperState, orderId: string, at: string): Result<TransitionOk> {
   const current = state.orders.find((o) => o.id === orderId);
   if (!current) return fail(TransitionError.ORDER_NOT_FOUND);
   if (current.status !== "UNFILLED" && current.status !== "INACTIVE") {
