@@ -137,9 +137,12 @@ bitbank API には存在しません。本番クライアントから叩かな�
 ## 開発
 
 ```bash
-npm test
+npm test          # vitest run（カバレッジは測りません）
+npm run coverage  # vitest run --coverage（閾値割れで終了コード 1）
 npm run typecheck
 ```
+
+CI（`.github/workflows/ci.yml`）は Node 24 で `npm ci` → `npm run typecheck` → `npm run coverage` を走らせます。カバレッジの下限は `vitest.config.ts` が持ち、**現状値の少し下に置いたラチェット**です（未到達のコードが新しく入ったときに落ちる下限で、目標値ではありません）。`src/index.ts` は計測から外しています——`tests/index.test.ts` が子プロセスとして起こして検証するので、v8 のカバレッジが追えず 0% と出るためです。
 
 ## 免責事項
 

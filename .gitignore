@@ -14,5 +14,8 @@ dist/
 .idea/
 .DS_Store
 
+# coverage
+coverage/
+
 # logs
 *.log
