@@ -20,6 +20,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # Biome（整形 + lint + import の並び）。警告もエラー扱いにする。
+      - run: npm run lint
       - run: npm run typecheck
       # カバレッジ込みで走らせる。閾値は vitest.config.ts が持つ。
       - run: npm run coverage

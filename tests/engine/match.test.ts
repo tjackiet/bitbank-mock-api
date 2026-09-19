@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { RunTickOptions } from "../../src/engine/match.ts";
 import { applyFill, runTick } from "../../src/engine/match.ts";
+import type { PaperState } from "../../src/engine/state.ts";
 import { activeOrders } from "../../src/engine/state.ts";
 import type { Logger } from "../../src/engine/types.ts";
-import type { PaperState } from "../../src/engine/state.ts";
-import type { RunTickOptions } from "../../src/engine/match.ts";
 import { buildOrder, buildState, candle } from "./helpers.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00.000Z");

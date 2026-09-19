@@ -161,7 +161,12 @@ describe("fillOrder", () => {
   });
 
   it("treats a one-ulp overshoot of remaining as a full fill", () => {
-    const order = buildOrder({ startAmount: 0.3, price: 100, executedAmount: 0, executedNotional: 0 });
+    const order = buildOrder({
+      startAmount: 0.3,
+      price: 100,
+      executedAmount: 0,
+      executedNotional: 0,
+    });
     let state = buildState({ balances: { jpy: 10_000 }, orders: [order] });
     const first = fillOrder(state, order.id, 100, 0.1, NOW, 0);
     expect(first.success).toBe(true);
@@ -191,7 +196,12 @@ describe("fillOrder", () => {
   });
 
   it("rejects fill on a terminal order", () => {
-    const order = buildOrder({ status: "FULLY_FILLED", startAmount: 1, executedAmount: 1, executedNotional: 100 });
+    const order = buildOrder({
+      status: "FULLY_FILLED",
+      startAmount: 1,
+      executedAmount: 1,
+      executedNotional: 100,
+    });
     const snapshot = structuredClone(order);
     const r = fillOrder(buildState({ orders: [order] }), order.id, 100, 1, LATER, 0);
     expect(r.success).toBe(false);

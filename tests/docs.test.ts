@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -91,7 +91,10 @@ function matrixItems(): string[] {
   const lines = FIDELITY.split("\n");
   const start = lines.indexOf("## 対応表");
   const end = lines.findIndex((l, i) => i > start && l.startsWith("## ") && l !== "## 対応表");
-  return lines.slice(start, end).filter((l) => l.startsWith("### ")).map((l) => l.slice(4).trim());
+  return lines
+    .slice(start, end)
+    .filter((l) => l.startsWith("### "))
+    .map((l) => l.slice(4).trim());
 }
 
 describe("docs/fidelity.md への参照", () => {
@@ -164,7 +167,13 @@ describe("docs/fidelity.md 対応表の形", () => {
         if (!labels.includes(need)) broken.push(`${item}: 「${need}」が無い`);
       }
       // ラベル行より前が「モックの挙動」。ここが空だと項目名しか無い小節になる。
-      const lead = body.slice(0, body.findIndex((l) => l.startsWith("- **"))).join("").trim();
+      const lead = body
+        .slice(
+          0,
+          body.findIndex((l) => l.startsWith("- **")),
+        )
+        .join("")
+        .trim();
       if (lead === "") broken.push(`${item}: 本文が空`);
     }
     expect(broken, broken.join(" / ")).toEqual([]);
@@ -255,8 +264,7 @@ describe("docs/fidelity.md の見出しを指すリンク", () => {
    * リンクしようとしたらここで落とす。そのときは GitHub の描画でアンカーを確かめてから、
    * その文字を `slug()` とこの集合の両方へ足すこと（`・` はそうやって足した）。
    */
-  const ANCHOR_SAFE =
-    /^[0-9A-Za-z_\-./` \u3005\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+$/;
+  const ANCHOR_SAFE = /^[0-9A-Za-z_\-./` \u3005\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+$/;
 
   /** アンカー → 見出しの名前。 */
   const headingOf = new Map([...HEADINGS].map((h) => [`#${slug(h)}`, h]));

@@ -1,14 +1,14 @@
+import { formatAmount, formatPrice } from "../engine/precision.ts";
 import {
   amountOf,
   computeLocked,
   isActive,
-  remainingOf,
   type OrderRecord,
   type OrderStatus,
   type PaperState,
+  remainingOf,
   type TradeRecord,
 } from "../engine/state.ts";
-import { formatAmount, formatPrice } from "../engine/precision.ts";
 
 // このファイルは「レコード → wire の 1 オブジェクト」を作る。
 // 数値 → ペア桁の文字列にする `formatAmount()` / `formatPrice()` は engine 側
@@ -176,7 +176,10 @@ export type AssetShape = {
  * した状態で拘束 1,050,000 に対し応答は 1,001,200（既定 0.0012）を返していた。
  * typecheck もテスト 437 件も通ってしまうので、呼び出し側に必ず書かせる。
  */
-export function formatAssets(state: PaperState, feeRate: number): {
+export function formatAssets(
+  state: PaperState,
+  feeRate: number,
+): {
   assets: AssetShape[];
 } {
   const locked = computeLocked(state, feeRate);

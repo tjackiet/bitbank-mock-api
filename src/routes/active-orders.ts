@@ -1,10 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
-import { activeOrders, parseNumericId, type OrderRecord } from "../engine/state.ts";
 import { isKnownPair } from "../engine/pairs.ts";
+import { activeOrders, type OrderRecord, parseNumericId } from "../engine/state.ts";
 import { ActiveOrdersQuerySchema } from "../schemas/requests.ts";
-import { err, ErrorCode, ok } from "./envelope.ts";
-import { queryParamErrorCode } from "./params.ts";
+import { ErrorCode, err, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
+import { queryParamErrorCode } from "./params.ts";
 
 function filterActiveOrders(
   orders: OrderRecord[],
@@ -19,23 +19,26 @@ function filterActiveOrders(
 ): OrderRecord[] {
   let out = orders;
   if (q.pair) out = out.filter((o) => o.pair === q.pair);
-  if (q.from_id !== undefined) {
+  // 境界は closure の外で受け直す。`q.X` のままだと TS が closure の中まで絞り込めず、
+  // 非 null アサーションが要る（外へ出せば型でそのまま通る）。
+  const { from_id: fromId, end_id: endId, since, end } = q;
+  if (fromId !== undefined) {
     out = out.filter((o) => {
       const id = parseNumericId(o.id);
-      return id !== null && id >= q.from_id!;
+      return id !== null && id >= fromId;
     });
   }
-  if (q.end_id !== undefined) {
+  if (endId !== undefined) {
     out = out.filter((o) => {
       const id = parseNumericId(o.id);
-      return id !== null && id <= q.end_id!;
+      return id !== null && id <= endId;
     });
   }
-  if (q.since !== undefined) {
-    out = out.filter((o) => Date.parse(o.orderedAt) >= q.since!);
+  if (since !== undefined) {
+    out = out.filter((o) => Date.parse(o.orderedAt) >= since);
   }
-  if (q.end !== undefined) {
-    out = out.filter((o) => Date.parse(o.orderedAt) <= q.end!);
+  if (end !== undefined) {
+    out = out.filter((o) => Date.parse(o.orderedAt) <= end);
   }
   if (q.count !== undefined) out = out.slice(0, q.count);
   return out;

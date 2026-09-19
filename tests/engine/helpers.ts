@@ -1,16 +1,18 @@
 import type { Candle } from "../../src/engine/candles.ts";
-import { issuedSeqOf } from "../../src/engine/state.ts";
 import type { OrderRecord, PaperState, TradeRecord } from "../../src/engine/state.ts";
+import { issuedSeqOf } from "../../src/engine/state.ts";
 
 /**
  * 既に居る id のどれとも重ならない採番の初期値（配り得る id の最大 + 1）。
  * `migrateToV3()` と同じ決め方で、判定も同じ `issuedSeqOf()` を使う。
  */
 function nextSeqFor(ids: string[]): number {
-  return ids.reduce((max, id) => {
-    const n = issuedSeqOf(id);
-    return n != null && n > max ? n : max;
-  }, 0) + 1;
+  return (
+    ids.reduce((max, id) => {
+      const n = issuedSeqOf(id);
+      return n != null && n > max ? n : max;
+    }, 0) + 1
+  );
 }
 
 /**

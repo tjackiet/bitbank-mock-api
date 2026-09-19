@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OFFICIAL_PAIRS, isKnownPair } from "../../src/engine/pairs.ts";
+import { isKnownPair, OFFICIAL_PAIRS } from "../../src/engine/pairs.ts";
 import { pairAssets } from "../../src/engine/state.ts";
 
 /**

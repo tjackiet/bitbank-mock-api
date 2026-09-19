@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { defaultFetchCandles, isValidCandle, type FetchImpl } from "../../src/engine/candles.ts";
+import { defaultFetchCandles, type FetchImpl, isValidCandle } from "../../src/engine/candles.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -68,7 +68,10 @@ describe("isValidCandle", () => {
 
 describe("defaultFetchCandles", () => {
   it("parses bitbank candlestick response and returns Candle[]", async () => {
-    const fc = defaultFetchCandles({ baseUrl: "https://example.test", fetchImpl: mockFetch(FIXTURE) });
+    const fc = defaultFetchCandles({
+      baseUrl: "https://example.test",
+      fetchImpl: mockFetch(FIXTURE),
+    });
     const r = await fc("btc_jpy", T0, T0 + 2 * MIN);
     expect(r.success).toBe(true);
     if (!r.success) return;
@@ -84,7 +87,10 @@ describe("defaultFetchCandles", () => {
   });
 
   it("filters candles outside [fromMs, toMs]", async () => {
-    const fc = defaultFetchCandles({ baseUrl: "https://example.test", fetchImpl: mockFetch(FIXTURE) });
+    const fc = defaultFetchCandles({
+      baseUrl: "https://example.test",
+      fetchImpl: mockFetch(FIXTURE),
+    });
     const r = await fc("btc_jpy", T0 + MIN, T0 + MIN);
     expect(r.success).toBe(true);
     if (!r.success) return;
@@ -131,6 +137,7 @@ describe("defaultFetchCandles", () => {
     const at = Date.parse("2026-01-01T01:00:00.000Z");
     await fc("btc\r\nx_jpy", at, at);
     const raw = fetchImpl.mock.calls[0][0];
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: URL に制御文字が残らないことを見るのがこの検査の目的で、範囲指定そのものが意図である
     expect(raw).not.toMatch(/[\u0000-\u001f]/);
     expect(new URL(raw).pathname).toBe("/btc%0D%0Ax_jpy/candlestick/1min/20260101");
   });

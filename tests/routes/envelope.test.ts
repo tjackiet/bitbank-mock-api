@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { err, ErrorCode, ok } from "../../src/routes/envelope.ts";
+import { ErrorCode, err, ok } from "../../src/routes/envelope.ts";
 
 describe("envelope", () => {
   it("wraps success", () => {

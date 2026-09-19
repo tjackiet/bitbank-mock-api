@@ -85,7 +85,13 @@ describe("SessionStore.tick", () => {
       buildState({
         balances: { jpy: 10_000_000, btc: 1 },
         orders: [
-          buildOrder({ id: "1", pair: "../../admin_jpy", side: "sell", price: 100, startAmount: 1 }),
+          buildOrder({
+            id: "1",
+            pair: "../../admin_jpy",
+            side: "sell",
+            price: 100,
+            startAmount: 1,
+          }),
           buildOrder({ id: "2", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 }),
           buildOrder({ id: "3", pair: "btc\nevil_jpy", side: "sell", price: 100, startAmount: 1 }),
         ],
@@ -113,6 +119,7 @@ describe("SessionStore.tick", () => {
       'tick: skipping malformed pair "../../admin_jpy"',
       'tick: skipping malformed pair "btc\\nevil_jpy"',
     ]);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字が出ていないことを見るのがこの検査の目的で、範囲指定そのものが意図である
     expect(warnings.every((w) => !/[\u0000-\u001f]/.test(w))).toBe(true);
   });
 
@@ -149,6 +156,7 @@ describe("SessionStore.tick", () => {
       `tick: lastTickAt "${new Date(T0 + 5 * 60 * MIN).toISOString()}" is ahead of ` +
         `now "${new Date(T0 + 2 * MIN).toISOString()}"; skipping candle fetch`,
     ]);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字が出ていないことを見るのがこの検査の目的で、範囲指定そのものが意図である
     expect(warnings.every((w) => !/[\u0000-\u001f]/.test(w))).toBe(true);
   });
 
@@ -162,7 +170,9 @@ describe("SessionStore.tick", () => {
         buildState({
           lastTickAt: new Date(T0 + 5 * 60 * MIN).toISOString(),
           balances: { jpy: 10_000_000 },
-          orders: [buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 })],
+          orders: [
+            buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 }),
+          ],
         }),
         {
           path,
@@ -174,7 +184,9 @@ describe("SessionStore.tick", () => {
       await store.tick(T0 + 2 * MIN);
       const reloaded = await loadState(path, {});
       expect(reloaded.success).toBe(true);
-      expect(reloaded.success && reloaded.data?.lastTickAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+      expect(reloaded.success && reloaded.data?.lastTickAt).toBe(
+        new Date(T0 + 2 * MIN).toISOString(),
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -410,7 +422,12 @@ describe("SessionStore.persist", () => {
       const store = new SessionStore(buildState(), {
         path,
         fillMode: "manual",
-        logger: { warn: () => { throw new Error("logger が壊れている"); }, info: () => {} },
+        logger: {
+          warn: () => {
+            throw new Error("logger が壊れている");
+          },
+          info: () => {},
+        },
       });
 
       await expect(store.persist()).resolves.toBeUndefined();
@@ -430,7 +447,12 @@ describe("SessionStore.persist", () => {
         {
           path,
           fillMode: "manual",
-          logger: { warn: () => { throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" }); }, info: () => {} },
+          logger: {
+            warn: () => {
+              throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+            },
+            info: () => {},
+          },
         },
       );
       try {
@@ -500,7 +522,7 @@ describe("SessionStore.persist", () => {
       {},
       { path, fillMode: "manual", controlEnabled: true },
     );
-    let before;
+    let before: PaperState;
     try {
       const created = await fastify.inject({
         method: "POST",

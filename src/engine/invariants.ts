@@ -2,8 +2,8 @@ import {
   amountOf,
   computeLocked,
   DEFAULT_TAKER_FEE_RATE,
-  isTerminal,
   issuedSeqOf,
+  isTerminal,
   type PaperState,
 } from "./state.ts";
 
@@ -97,7 +97,9 @@ export function invariantViolations(
 
   for (const o of state.orders) {
     if (!(o.executedAmount >= 0 && o.executedAmount <= o.startAmount)) {
-      violations.push(`1: order ${o.id} executedAmount=${o.executedAmount} startAmount=${o.startAmount}`);
+      violations.push(
+        `1: order ${o.id} executedAmount=${o.executedAmount} startAmount=${o.startAmount}`,
+      );
     }
 
     if (o.status === "INACTIVE" || o.status === "UNFILLED") {
@@ -117,7 +119,9 @@ export function invariantViolations(
       violations.push(`2: order ${o.id} CANCELED_UNFILLED with executedAmount=${o.executedAmount}`);
     }
     if (o.status === "CANCELED_PARTIALLY_FILLED" && o.executedAmount <= 0) {
-      violations.push(`2: order ${o.id} CANCELED_PARTIALLY_FILLED with executedAmount=${o.executedAmount}`);
+      violations.push(
+        `2: order ${o.id} CANCELED_PARTIALLY_FILLED with executedAmount=${o.executedAmount}`,
+      );
     }
 
     if (o.status === "FULLY_FILLED" && o.executedAmount !== o.startAmount) {
@@ -240,8 +244,20 @@ export function preconditionViolations(state: PaperState): string[] {
     violations.push(`trade-id: duplicate trade id ${id} (${count} records)`);
   }
 
-  violations.push(...seqViolations("order", state.nextOrderSeq, state.orders.map((o) => o.id)));
-  violations.push(...seqViolations("trade", state.nextTradeSeq, state.trades.map((t) => t.tradeId)));
+  violations.push(
+    ...seqViolations(
+      "order",
+      state.nextOrderSeq,
+      state.orders.map((o) => o.id),
+    ),
+  );
+  violations.push(
+    ...seqViolations(
+      "trade",
+      state.nextTradeSeq,
+      state.trades.map((t) => t.tradeId),
+    ),
+  );
 
   for (const o of state.orders) {
     // `> 0` の否定なので 0・負・NaN をまとめて拾う（負は不変量 1 も捕まえる）。

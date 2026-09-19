@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
-import { isValidCandle, isValidCandleTimestamp, type Candle } from "../engine/candles.ts";
+import { type Candle, isValidCandle, isValidCandleTimestamp } from "../engine/candles.ts";
 import { runTick } from "../engine/match.ts";
 import { fitsDigits, precisionOf } from "../engine/precision.ts";
 import { freshState, isActive, pairAssets, remainingOf } from "../engine/state.ts";
@@ -43,9 +43,9 @@ export function controlTokenHeader(request: FastifyRequest): string | null {
   let found: string | null = null;
   let count = 0;
   for (let i = 0; i + 1 < raw.length; i += 2) {
-    if (raw[i]!.toLowerCase() !== "x-control-token") continue;
+    if (raw[i].toLowerCase() !== "x-control-token") continue;
     count += 1;
-    found = raw[i + 1]!;
+    found = raw[i + 1];
   }
   return count === 1 ? found : null;
 }
@@ -134,14 +134,22 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
     const current = fastify.store.state();
     let initialJpy = current.initialJpy;
     if (body.initialJpy !== undefined) {
-      if (typeof body.initialJpy !== "number" || !Number.isFinite(body.initialJpy) || body.initialJpy < 0) {
+      if (
+        typeof body.initialJpy !== "number" ||
+        !Number.isFinite(body.initialJpy) ||
+        body.initialJpy < 0
+      ) {
         return reply.code(400).send({ error: "INVALID_BALANCES" });
       }
       initialJpy = body.initialJpy;
     }
     let next = freshState(initialJpy);
     if (body.balances !== undefined) {
-      if (body.balances === null || typeof body.balances !== "object" || Array.isArray(body.balances)) {
+      if (
+        body.balances === null ||
+        typeof body.balances !== "object" ||
+        Array.isArray(body.balances)
+      ) {
         return reply.code(400).send({ error: "INVALID_BALANCES" });
       }
       const balances: Record<string, number> = {};

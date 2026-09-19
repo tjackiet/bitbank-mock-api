@@ -106,9 +106,7 @@ const QUERY_PARAM_CODES: Record<QueryParamName, ErrorCodeValue> = {
  * 外から来た名前は `bad.has(name)` の右辺にしか現れず、地図の鍵にはならない。鍵は
  * `QueryParamName` に締めてあるので、`QUERY_PARAM_CODES[name]` は必ず自分のキーに当たる。
  */
-export function queryParamErrorCode(
-  paths: Array<PropertyKey | undefined>,
-): ErrorCodeValue | null {
+export function queryParamErrorCode(paths: Array<PropertyKey | undefined>): ErrorCodeValue | null {
   const bad = new Set(paths.filter((p): p is string => typeof p === "string"));
   for (const name of QUERY_PARAM_ORDER) {
     if (bad.has(name)) return QUERY_PARAM_CODES[name];

@@ -4,12 +4,12 @@ import { assetsRoutes } from "../routes/assets.ts";
 import { cancelOrderRoutes } from "../routes/cancel-order.ts";
 import { controlRoutes } from "../routes/control.ts";
 import { createOrderRoutes } from "../routes/create-order.ts";
+import { ErrorCode, err } from "../routes/envelope.ts";
 import { orderInfoRoutes } from "../routes/order-info.ts";
 import { tradeHistoryRoutes } from "../routes/trade-history.ts";
+import type { SessionStore } from "../store/session.ts";
 import { controlToken, isControlEnabled } from "./config.ts";
 import { assertRouteClassified, degradedResponse, isReadRoute } from "./degraded.ts";
-import { err, ErrorCode } from "../routes/envelope.ts";
-import type { SessionStore } from "../store/session.ts";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -49,23 +49,28 @@ function registerDegradedGuard(fastify: FastifyInstance, store: SessionStore): v
 
   // 断るべき要求か。経路が決まっていない要求（未登録のパス）は触らない。触ると
   // 劣化中だけ 404 が別の応答に化ける（対応表の「封筒に包まれない応答」の (b)）。
-  const shouldRefuse = (request: FastifyRequest): boolean => {
+  // 断るなら**その経路の url**を返す。真偽値だけを返して呼び出し側が url を引き直すと、
+  // 同じ `routeOptions.url` を 2 度読むうえ、そちらでは型が `string | undefined` のままで
+  // 非 null アサーションが要る。判定と url を 1 つの返り値にすれば両方消える。
+  const refusalUrl = (request: FastifyRequest): string | undefined => {
     const url = request.routeOptions.url;
-    if (url === undefined) return false;
-    return store.isDegraded() && !isReadRoute(request.method, url);
+    if (url === undefined) return undefined;
+    return store.isDegraded() && !isReadRoute(request.method, url) ? url : undefined;
   };
 
   fastify.addHook("preHandler", async (request, reply) => {
-    if (!shouldRefuse(request)) return;
-    const { statusCode, body } = degradedResponse(request.routeOptions.url!);
+    const url = refusalUrl(request);
+    if (url === undefined) return;
+    const { statusCode, body } = degradedResponse(url);
     return reply.code(statusCode).send(body);
   });
 
   // preHandler が断った応答もここを通るが、同じ url から同じ本文を組み立てるので
   // 差し替えは no-op になる。目印を持ち回る必要はない。
   fastify.addHook("preSerialization", async (request, reply, payload) => {
-    if (!shouldRefuse(request)) return payload;
-    const { statusCode, body } = degradedResponse(request.routeOptions.url!);
+    const url = refusalUrl(request);
+    if (url === undefined) return payload;
+    const { statusCode, body } = degradedResponse(url);
     reply.code(statusCode);
     return body;
   });

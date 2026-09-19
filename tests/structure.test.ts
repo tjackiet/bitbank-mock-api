@@ -62,7 +62,8 @@ const TEST_WITHOUT_SRC: Record<string, string> = {
     "src の 1 モジュールに対応しない",
   "routes/pair-whitelist.test.ts": "ペアの実在性を検査する経路／しない経路を横断して見る",
   "routes/tick.test.ts": "互換ルートが必ず `SessionStore.tick()` を通ることを横断して見る",
-  "server/not-found.test.ts": "経路が見つからない要求の応答を、互換ルートと `/_control/` の両方で見る",
+  "server/not-found.test.ts":
+    "経路が見つからない要求の応答を、互換ルートと `/_control/` の両方で見る",
   "scenarios/plan-a.test.ts": "結合シナリオ。発注から約定までを複数モジュールにまたがって通す",
   "scenarios/large-amount-fill.test.ts": "結合シナリオ。大きな数量での約定を端から端まで通す",
 };
@@ -123,24 +124,32 @@ describe("src/ と tests/ の対応", () => {
     }
 
     const solved = Object.keys(SRC_WITHOUT_TEST).filter((f) => testFiles.includes(testNameOf(f)));
-    expect(solved, `テストが付いたので SRC_WITHOUT_TEST から消す: ${solved.join(", ")}`).toEqual([]);
+    expect(solved, `テストが付いたので SRC_WITHOUT_TEST から消す: ${solved.join(", ")}`).toEqual(
+      [],
+    );
 
     const gone = Object.keys(SRC_WITHOUT_TEST).filter((f) => !srcFiles.includes(f));
     expect(gone, `もう存在しないので SRC_WITHOUT_TEST から消す: ${gone.join(", ")}`).toEqual([]);
 
     const paired = Object.keys(TEST_WITHOUT_SRC).filter((f) => srcFiles.includes(srcNameOf(f)));
-    expect(paired, `対応する src ができたので TEST_WITHOUT_SRC から消す: ${paired.join(", ")}`).toEqual(
-      [],
-    );
+    expect(
+      paired,
+      `対応する src ができたので TEST_WITHOUT_SRC から消す: ${paired.join(", ")}`,
+    ).toEqual([]);
 
     const removed = Object.keys(TEST_WITHOUT_SRC).filter((f) => !testFiles.includes(f));
-    expect(removed, `もう存在しないので TEST_WITHOUT_SRC から消す: ${removed.join(", ")}`).toEqual([]);
+    expect(removed, `もう存在しないので TEST_WITHOUT_SRC から消す: ${removed.join(", ")}`).toEqual(
+      [],
+    );
   });
 
   it("`tests/` 固有のディレクトリは `src/` に対応物を持たない", () => {
     // `fixtures/` と `scenarios/` を `src/` に作ってしまったら、この規約の読み方が変わる。
     for (const d of TESTS_ONLY_DIRS) {
-      expect(srcFiles.some((f) => f.startsWith(`${d}/`)), `src/${d}/ ができている`).toBe(false);
+      expect(
+        srcFiles.some((f) => f.startsWith(`${d}/`)),
+        `src/${d}/ ができている`,
+      ).toBe(false);
     }
   });
 });

@@ -29,10 +29,10 @@ describe("large-amount partial fill then full fill", () => {
       await rm(dir, { recursive: true, force: true });
     });
 
-    const store = new SessionStore(
-      buildState({ balances: { jpy: 1_000_000, xrp: 100_000 } }),
-      { path, fillMode: "manual" },
-    );
+    const store = new SessionStore(buildState({ balances: { jpy: 1_000_000, xrp: 100_000 } }), {
+      path,
+      fillMode: "manual",
+    });
     const fastify = await buildServer({ store, controlEnabled: true });
     cleanups.push(async () => {
       await fastify.close();

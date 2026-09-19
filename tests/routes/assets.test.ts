@@ -9,18 +9,7 @@ describe("GET /v1/user/assets", () => {
    * 残高が無くても必ず出る資産と、その並び。**実装（`KNOWN_ASSETS`）からは導かない。**
    * 実装から組み立てると、実装が変わったときに期待値も一緒に変わって検査にならない。
    */
-  const BASELINE_ASSETS = [
-    "jpy",
-    "btc",
-    "eth",
-    "xrp",
-    "ltc",
-    "bcc",
-    "mona",
-    "xlm",
-    "qtum",
-    "bat",
-  ];
+  const BASELINE_ASSETS = ["jpy", "btc", "eth", "xrp", "ltc", "bcc", "mona", "xlm", "qtum", "bat"];
 
   /**
    * 残高が無くても必ず出る資産の一覧を固定する（`src/routes/format.ts` の `KNOWN_ASSETS`）。
@@ -57,14 +46,22 @@ describe("GET /v1/user/assets", () => {
   it("returns assets with locked/free split", async () => {
     const state = buildState({
       balances: { jpy: 1_000_000, btc: 0.5 },
-      orders: [
-        buildOrder({ id: "1", side: "buy", price: 5_000_000, startAmount: 0.1 }),
-      ],
+      orders: [buildOrder({ id: "1", side: "buy", price: 5_000_000, startAmount: 0.1 })],
     });
     const { fastify } = await build(state);
     const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { success: number; data: { assets: { asset: string; free_amount: string; locked_amount: string; onhand_amount: string }[] } };
+    const body = res.json() as {
+      success: number;
+      data: {
+        assets: {
+          asset: string;
+          free_amount: string;
+          locked_amount: string;
+          onhand_amount: string;
+        }[];
+      };
+    };
     expect(body.success).toBe(1);
     const jpy = body.data.assets.find((a) => a.asset === "jpy");
     const btc = body.data.assets.find((a) => a.asset === "btc");
@@ -115,7 +112,14 @@ describe("GET /v1/user/assets", () => {
     const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      data: { assets: { asset: string; free_amount: string; locked_amount: string; onhand_amount: string }[] };
+      data: {
+        assets: {
+          asset: string;
+          free_amount: string;
+          locked_amount: string;
+          onhand_amount: string;
+        }[];
+      };
     };
     const asset = body.data.assets.find((a) => a.asset === "constructor");
     expect(asset).toBeDefined();
@@ -135,7 +139,8 @@ describe("GET /v1/user/assets", () => {
           side: "buy",
           price: 15_000_000,
           startAmount: 0.001,
-        })),
+        }),
+      ),
     });
     const { fastify } = await build(state);
     const res = await fastify.inject({ method: "GET", url: "/v1/user/assets" });

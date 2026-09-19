@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildState, buildTrade } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
-import { UNIMPLEMENTED_TRADE_FIELDS, tradeShape } from "./official-fields.ts";
+import { tradeShape, UNIMPLEMENTED_TRADE_FIELDS } from "./official-fields.ts";
 
 describe("GET /v1/user/spot/trade_history", () => {
   const build = setupBuildTestServer();
@@ -215,9 +215,10 @@ describe("GET /v1/user/spot/trade_history official field set", () => {
       expect(t.fee_occurred_amount_quote).toBe(t.fee_amount_quote);
     }
     // 手数料の桁は jpy の 4 桁。実装とは独立に期待値を書く。
-    expect(body.data.trades.map((t) => t.fee_occurred_amount_quote).sort()).toEqual(
-      ["12.3450", "6.0000"],
-    );
+    expect(body.data.trades.map((t) => t.fee_occurred_amount_quote).sort()).toEqual([
+      "12.3450",
+      "6.0000",
+    ]);
   });
 });
 

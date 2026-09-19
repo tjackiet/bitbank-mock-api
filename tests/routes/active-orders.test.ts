@@ -3,8 +3,8 @@ import { buildOrder, buildState } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
   OFFICIAL_FETCH_ORDER_STATUSES,
-  UNIMPLEMENTED_ORDER_FIELDS,
   orderShape,
+  UNIMPLEMENTED_ORDER_FIELDS,
 } from "./official-fields.ts";
 
 describe("GET /v1/user/spot/active_orders", () => {
@@ -97,9 +97,7 @@ describe("GET /v1/user/spot/active_orders official field set", () => {
   it("returns objects identical in shape to the official order response", async () => {
     // 公式は「Fetch order information のレスポンスオブジェクトのリスト」と定義する。
     // active_orders 専用の形は存在しないので、注文照会と同じ集合で固定する。
-    const { fastify } = await build(
-      buildState({ orders: [buildOrder({ id: "1" })] }),
-    );
+    const { fastify } = await build(buildState({ orders: [buildOrder({ id: "1" })] }));
     const res = await fastify.inject({ method: "GET", url: "/v1/user/spot/active_orders" });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { data: Record<string, unknown> };

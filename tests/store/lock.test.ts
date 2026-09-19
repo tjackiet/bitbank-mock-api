@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 // ディスクの失敗は実際には起こせない（埋めるわけにいかず、root ではパーミッションも
 // 効かない）ので、失敗させたい口だけを差し替える。**既定はすべて素通し**で、
 // 各テストが必要なフラグだけを立てる（`afterEach` が戻す）。
@@ -81,9 +82,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 import {
   acquireStateLock,
+  type StateLock,
   StateLockedError,
   stateLockPath,
-  type StateLock,
 } from "../../src/store/lock.ts";
 
 /**

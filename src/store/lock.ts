@@ -1,6 +1,6 @@
-import { mkdir, open, readFile, unlink, type FileHandle } from "node:fs/promises";
-import { dirname } from "node:path";
 import { unlinkSync } from "node:fs";
+import { type FileHandle, mkdir, open, readFile, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
 
 /**
  * 状態ファイルの起動時排他。
@@ -91,7 +91,7 @@ async function readHolderPid(lockPath: string): Promise<number | null> {
  * 掃除は best effort で、消せなくても元の例外を返す（そちらが原因だから）。
  */
 async function tryCreate(lockPath: string): Promise<boolean> {
-  let fh;
+  let fh: FileHandle;
   try {
     fh = await open(lockPath, "wx");
   } catch (e) {

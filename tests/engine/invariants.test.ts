@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { invariantViolations, preconditionViolations } from "../../src/engine/invariants.ts";
-import { activeOrders, isTerminal, remainingOf, type PaperState } from "../../src/engine/state.ts";
+import { activeOrders, isTerminal, type PaperState, remainingOf } from "../../src/engine/state.ts";
 import { cancelOrder, fillOrder, placeOrder, rejectOrder } from "../../src/engine/transitions.ts";
 import { buildOrder, buildState, buildTrade } from "./helpers.ts";
 
@@ -66,7 +66,14 @@ function applyRandomOp(state: PaperState, kind: number, a: number, b: number): P
     const frac = 0.25 + (Math.abs(b) % 4) * 0.25;
     const amount = Math.round(rem * frac * 10000) / 10000;
     const px = picked.price ?? 1000;
-    const r = fillOrder(state, picked.id, px, amount > 0 ? Math.min(amount, rem) : rem, at, feeRate);
+    const r = fillOrder(
+      state,
+      picked.id,
+      px,
+      amount > 0 ? Math.min(amount, rem) : rem,
+      at,
+      feeRate,
+    );
     return r.success ? r.data.state : state;
   }
   if (k === 3) {
@@ -103,7 +110,9 @@ function largeFilledState(): PaperState {
 
 describe("invariants", () => {
   it("hold on a fresh state", () => {
-    expect(invariantViolations(buildState({ balances: { jpy: 10_000_000, btc: 1 } }), 0)).toEqual([]);
+    expect(invariantViolations(buildState({ balances: { jpy: 10_000_000, btc: 1 } }), 0)).toEqual(
+      [],
+    );
   });
 
   it("flags canceled statuses that do not match executed amount", () => {
@@ -117,7 +126,9 @@ describe("invariants", () => {
       orders: [unfilled],
       trades: [buildTrade({ orderId: unfilled.id, amount: 0.1, price: 5_000_000, feeQuote: 0 })],
     });
-    expect(invariantViolations(unfilledState).some((v) => v.includes("CANCELED_UNFILLED"))).toBe(true);
+    expect(invariantViolations(unfilledState).some((v) => v.includes("CANCELED_UNFILLED"))).toBe(
+      true,
+    );
     const partial = buildOrder({
       status: "CANCELED_PARTIALLY_FILLED",
       executedAmount: 0,
@@ -142,7 +153,13 @@ describe("invariants", () => {
     const state = buildState({
       balances: { jpy: 1_000_000 },
       orders: [
-        buildOrder({ id: "1", side: "sell", pair: "constructor_jpy", price: 100, startAmount: 999 }),
+        buildOrder({
+          id: "1",
+          side: "sell",
+          pair: "constructor_jpy",
+          price: 100,
+          startAmount: 999,
+        }),
       ],
     });
     expect(invariantViolations(state, 0)).toContain("6: locked[constructor]=999 exceeds balance=0");
@@ -241,7 +258,13 @@ describe("invariants", () => {
    * 大きさが小さい側の検査の厳しさは変えていない。
    */
   it("still flags a 1e-11 drift on a small order", () => {
-    const order = buildOrder({ id: "1", startAmount: 0.001, executedAmount: 0.001, status: "FULLY_FILLED", executedNotional: 5_000 });
+    const order = buildOrder({
+      id: "1",
+      startAmount: 0.001,
+      executedAmount: 0.001,
+      status: "FULLY_FILLED",
+      executedNotional: 5_000,
+    });
     const state = buildState({
       orders: [order],
       trades: [buildTrade({ orderId: "1", amount: 0.001 + 1e-11, price: 5_000_000, feeQuote: 0 })],
@@ -264,7 +287,9 @@ describe("invariants", () => {
           let state = buildState({ balances: { jpy: 10_000_000_000, btc: 1_000_000 } });
           const terminals = new Map<string, string>();
           for (const [kind, a, b] of ops) {
-            const before = new Map(state.orders.filter(isTerminal).map((o) => [o.id, JSON.stringify(o)]));
+            const before = new Map(
+              state.orders.filter(isTerminal).map((o) => [o.id, JSON.stringify(o)]),
+            );
             state = applyRandomOp(state, kind, a, b);
             expect(invariantViolations(state, 0)).toEqual([]);
             for (const [id, snap] of before) {
@@ -322,7 +347,9 @@ describe("invariant preconditions", () => {
 
   it("flag duplicate trade ids", () => {
     const state = buildState({
-      orders: [buildOrder({ status: "FULLY_FILLED", executedAmount: 0.002, executedNotional: 10_000 })],
+      orders: [
+        buildOrder({ status: "FULLY_FILLED", executedAmount: 0.002, executedNotional: 10_000 }),
+      ],
       trades: [buildTrade(), buildTrade()],
     });
     expect(preconditionViolations(state)).toEqual(["trade-id: duplicate trade id 1 (2 records)"]);
@@ -340,7 +367,9 @@ describe("invariant preconditions", () => {
     ]);
 
     const trades = buildState({
-      orders: [buildOrder({ status: "FULLY_FILLED", executedAmount: 0.001, executedNotional: 5_000 })],
+      orders: [
+        buildOrder({ status: "FULLY_FILLED", executedAmount: 0.001, executedNotional: 5_000 }),
+      ],
       trades: [buildTrade({ tradeId: "2" })],
       nextTradeSeq: 1,
     });

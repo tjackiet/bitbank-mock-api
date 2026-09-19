@@ -1,10 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
-import { fitsDigits, precisionOf } from "../engine/precision.ts";
 import { isKnownPair } from "../engine/pairs.ts";
+import { fitsDigits, precisionOf } from "../engine/precision.ts";
 import { pairAssets } from "../engine/state.ts";
 import { placeOrder, TransitionError } from "../engine/transitions.ts";
 import { CreateOrderRequestSchema } from "../schemas/requests.ts";
-import { err, ErrorCode, ok } from "./envelope.ts";
+import { ErrorCode, err, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
 
@@ -85,7 +85,13 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     if (type === "market") {
       const fillPrice = await store.getLatestPrice(pair);
       if (fillPrice === null) return err(ErrorCode.INTERNAL);
-      const r = placeOrder(store.state(), { pair, side, type, amount }, now, fillPrice, store.feeRate);
+      const r = placeOrder(
+        store.state(),
+        { pair, side, type, amount },
+        now,
+        fillPrice,
+        store.feeRate,
+      );
       if (!r.success) return mapPlaceError(r.error);
       await store.commit(r.data.state);
       return ok(formatOrder(r.data.order));

@@ -1,6 +1,4 @@
-export type Envelope<T> =
-  | { success: 1; data: T }
-  | { success: 0; data: { code: number } };
+export type Envelope<T> = { success: 1; data: T } | { success: 0; data: { code: number } };
 
 export function ok<T>(data: T): Envelope<T> {
   return { success: 1, data };
