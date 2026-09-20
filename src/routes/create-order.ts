@@ -1,12 +1,26 @@
 import type { FastifyPluginAsync } from "fastify";
 import { isKnownPair, isOrderSuspendedPair } from "../engine/pairs.ts";
 import { fitsDigits, precisionOf } from "../engine/precision.ts";
-import { pairAssets } from "../engine/state.ts";
+import { activeOrders, pairAssets } from "../engine/state.ts";
 import { placeOrder, TransitionError } from "../engine/transitions.ts";
 import { CreateOrderRequestSchema } from "../schemas/requests.ts";
 import { ErrorCode, err, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
+
+/**
+ * 同時に持てる未約定注文の本数の上限。公式のエラー定義が持つ値そのもの
+ * （`errors.md:202` "Too many Simultaneous orders, current limit is 30."、
+ * `errors_JP.md:202`「同時発注制限件数(30件)を上回っています」。コミット `0badd680`）。
+ *
+ * **公式が固定値として文言に埋めているので、設定可能にしない。**
+ *
+ * **`cancel_orders` の `MAX_CANCEL_ORDER_IDS` とは別の制限で、同じ 30 でも数える対象が違う。**
+ * あちらは 1 要求あたりの `order_ids` の件数（超過は `40015`）、こちらは口座が同時に持てる
+ * 未約定注文の本数（超過は `60011`）。**値が揃っているのは偶然なので、片方を動かすときに
+ * もう片方を追従させない**（`docs/fidelity.md` の「同時未約定注文の上限」節）。
+ */
+export const MAX_ACTIVE_ORDERS = 30;
 
 /**
  * 欠落しているパラメータに対応するコード。無ければ `null`。
@@ -93,6 +107,27 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const store = fastify.store;
+    // 未約定注文の本数の上限。**`store.tick()` より前**に見るので、断ったときに状態は
+    // 一切変わらない（`isOrderSuspendedPair()` と `cancel_orders` の件数上限と同じ位置づけ）。
+    //
+    // 数え方は `activeOrders()` をそのまま使う——`STATUS_KIND` が `"active"` に分類する
+    // `UNFILLED` と `PARTIALLY_FILLED` だけを数え、`INACTIVE`（`"pending"`）と終端は数えない
+    // （新しい「active の定義」を作らないため。`src/engine/state.ts` の `STATUS_KIND`）。
+    // **単位は口座全体で、ペアで分けない。** 公式の文言が "Simultaneous orders" でペアに
+    // 言及せず、口座全体の方が制限が強く fail-closed 側に倒れるためである。**推測であり、
+    // Plan A の契約範囲（`btc_jpy` の指値）ではペア単位と区別が付かない。**
+    //
+    // 位置を桁の検査より**後ろ**にしたのは、`cancel_orders` の件数上限をスキーマ検証の後に
+    // 置いたのと同じ理由で、既存の（実測済みの）優先順を動かさないため。**桁や停止ペアと
+    // 同時に上限へ当たったときどちらのコードが勝つかは実測していない。**
+    //
+    // `tick()` の前で数えるので、**その tick が埋めたはずの注文はまだ active のまま数える**。
+    // market モードで 31 本目の直前に枠が空く局面では、本物より厳しく断る側へ倒れる（fail-closed）。
+    // **成行の新規発注もこの検査を通る**（その場で全量約定して active に残らないが、
+    // 受ける時点では 1 本の新規注文である）。実 API が成行を数から除くかは分からない。
+    if (activeOrders(store.state()).length >= MAX_ACTIVE_ORDERS) {
+      return err(ErrorCode.TOO_MANY_SIMULTANEOUS_ORDERS);
+    }
     await store.tick();
 
     const now = new Date().toISOString();

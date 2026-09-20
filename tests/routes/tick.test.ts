@@ -43,6 +43,25 @@ const REQUESTS: Record<string, { query?: string; payload?: InjectOptions["payloa
   "POST /v1/user/spot/cancel_orders": { payload: { pair: "btc_jpy", order_ids: [1] } },
 };
 
+/**
+ * **`tick()` より前に `state` を読むことを許すルートと、その理由。**
+ *
+ * 既定は「`tick()` がハンドラが最初に行うストア操作である」——状態を読んでから tick すると、
+ * そのルートは 1 回古い状態を返す。ただし**断るための読み出しは別物**で、応答を組み立てる
+ * 読み出しではない。`tick()` の後ろへ動かすと、**断ったのに（market モードの約定で）
+ * 状態が変わる**方の壊れ方になる（`docs/fidelity.md` の「同時未約定注文の上限」節）。
+ *
+ * **許可リストは緩めるためではなく、例外を 1 か所に集めて古くならせないために持つ。**
+ * 載せたルートには下で「`tick()` より前の読み出しはちょうど 1 回」と「応答を組み立てる
+ * 読み出しは `tick()` の後にある」を要求するので、**判定を消せばここのエントリを外すまで
+ * 落ちる**（`tests/structure.test.ts` の許可リストと同じ考え方）。
+ */
+const READS_STATE_BEFORE_TICK: Record<string, string> = {
+  "POST /v1/user/spot/order":
+    "同時未約定注文の上限（`60011`）を `activeOrders(store.state()).length` で見る。" +
+    "断るときに状態を一切変えないため、判定は `tick()` より前に置いてある",
+};
+
 /** 直前に置いた指値と、それを満たす足。`tick()` が走れば注文 1 が全量約定する。 */
 function seeded() {
   const nowMs = Date.now();
@@ -64,6 +83,10 @@ describe("互換ルートは tick を通る", () => {
     expect(COMPAT_ROUTE_KEYS.length).toBeGreaterThan(0);
     // 片方にだけ足すと落ちる。落ちたら REQUESTS を直す（一覧の側は手で触らない）。
     expect(Object.keys(REQUESTS).sort()).toEqual(COMPAT_ROUTE_KEYS);
+    // 許可リストが実在しないルートを指していないこと（ルート名を変えたら落ちる）。
+    for (const key of Object.keys(READS_STATE_BEFORE_TICK)) {
+      expect(COMPAT_ROUTE_KEYS).toContain(key);
+    }
   });
 
   it.each(COMPAT_ROUTE_KEYS)("%s", async (key) => {
@@ -101,8 +124,17 @@ describe("互換ルートは tick を通る", () => {
 
     // 検証で弾かれていないこと。弾かれていると tick より手前で返るので、何も測れない。
     expect(res.statusCode).toBe(200);
-    expect(calls[0]).toBe("tick");
-    expect(calls).toContain("state");
+    const firstTick = calls.indexOf("tick");
+    expect(firstTick, `${key} が tick() を呼んでいない`).toBeGreaterThanOrEqual(0);
+    const reason = READS_STATE_BEFORE_TICK[key];
+    if (reason === undefined) {
+      expect(calls[0]).toBe("tick");
+    } else {
+      // 許すのは「断るための読み出し」1 回だけ。判定を消したらここで落ちる。
+      expect(calls.slice(0, firstTick), reason).toEqual(["state"]);
+    }
+    // 応答を組み立てる読み出しは tick の**後**にある（1 回古い状態を返していない）。
+    expect(calls.slice(firstTick + 1)).toContain("state");
     // 効果まで見る。呼ばれたが約定が state へ入っていない、を通さない。
     expect(realState().orders[0].status).toBe("FULLY_FILLED");
   });
