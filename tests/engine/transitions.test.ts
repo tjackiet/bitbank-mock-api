@@ -242,6 +242,34 @@ describe("fillOrder", () => {
     expect(invariantViolations(r.data.state, 0)).toEqual([]);
   });
 
+  /**
+   * 非正の約定価格を `fillOrder` 自身が断る。
+   *
+   * `/_control/orders/:id/fill` も同じ検査を持つが、**失敗を同一の応答へ写している**
+   * ため（どちらの経路でも `{ error: "INVALID_PRICE" }`）、wire からはこの層を
+   * 区別できない。実際 `src/routes/control.ts` の `price <= 0` を外しても応答は
+   * 変わらない（実測）。engine 側を独立に押さえるにはここで見るしかない。
+   *
+   * 買いの指値に対して価格 0 は「不利な価格」ではない（下の worse 判定では落ちない）
+   * ので、非正の検査だけを通る形になっている。
+   */
+  it.each([
+    ["価格 0", 0],
+    ["価格が負", -1],
+  ])("fillOrder は %s を断り、状態を変えない", (_label, price) => {
+    const state = buildState({
+      balances: { jpy: 10_000_000 },
+      orders: [buildOrder({ id: "1", side: "buy", price: 5_000_000, startAmount: 0.001 })],
+    });
+    const before = JSON.stringify(state);
+
+    const r = fillOrder(state, "1", price, 0.001, LATER);
+
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toBe(TransitionError.INVALID_PRICE);
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
   it("rejects a worse-than-limit fill price", () => {
     const buy = buildOrder({ side: "buy", price: 100, startAmount: 1 });
     const buyR = fillOrder(buildState({ orders: [buy] }), buy.id, 101, 1, LATER, 0);

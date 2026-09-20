@@ -286,6 +286,38 @@ describe("/_control routes", () => {
     expect(store.state().trades).toHaveLength(0);
   });
 
+  /**
+   * `fill` の `price` / `amount` の **0 と負**。
+   *
+   * 既存は `amount` が残量超過（`0.002`）と桁溢れ（`0.00001`）、`price` が桁溢れと
+   * `Infinity` だけで、**0 と負をどちらも通っていなかった**。そのため
+   * `price <= 0` を `< 0` に、`amount <= 0` を `< 0` に変えても 1 件も落ちない（実測）。
+   *
+   * 0 を通すと、約定価格 0 の trade や数量 0 の trade が state に残る。
+   * `docs/fidelity.md` の「control の fill / tick 検証」節が
+   * 「`amount` が非正…は 400 `INVALID_AMOUNT`」「`price` が非正・非有限は 400
+   * `INVALID_PRICE`」と明記している挙動である。
+   */
+  it.each([
+    ["price が 0", { price: 0 }, "INVALID_PRICE"],
+    ["price が負", { price: -1 }, "INVALID_PRICE"],
+    ["amount が 0", { amount: 0 }, "INVALID_AMOUNT"],
+    ["amount が負", { amount: -0.001 }, "INVALID_AMOUNT"],
+  ])("fill は %s を断り、状態を変えない", async (_label, payload, error) => {
+    const { fastify, store } = await setup();
+    const before = JSON.stringify(store.state());
+
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/orders/1/fill",
+      payload,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error });
+    expect(JSON.stringify(store.state())).toBe(before);
+  });
+
   it("returns 400 when price is not a finite positive number", async () => {
     const { fastify } = await setup();
     const res = await fastify.inject({
@@ -775,6 +807,46 @@ describe("/_control routes", () => {
     expect(res.statusCode).toBe(400);
     expect(JSON.stringify(store.state())).toBe(before);
     expect(Object.getPrototypeOf(store.state().balances)).toBe(Object.prototype);
+  });
+
+  /**
+   * `reset` の **0 は妥当な値**なので通す。ここだけ他の 0 境界と向きが逆である。
+   *
+   * 既存の「resets state」は `initialJpy: 50_000` / `balances: { jpy: 50_000, btc: 1 }`
+   * しか渡していないので、`initialJpy < 0` を `<= 0` に、`balances` の値の
+   * `amount < 0` を `<= 0` に変えても 1 件も落ちない（実測）。**残高 0 の口座から
+   * 始めるシナリオが黙って断られるようになる**——発注が残高不足で弾かれることを
+   * 確かめる筋では普通に使う値である。
+   */
+  it("reset は initialJpy 0 と残高 0 を受け付ける", async () => {
+    const { fastify, store } = await setup();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/_control/reset",
+      payload: { initialJpy: 0, balances: { jpy: 0, btc: 0 } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { initialJpy: number; balances: Record<string, number> };
+    expect(body.initialJpy).toBe(0);
+    expect(body.balances).toEqual({ jpy: 0, btc: 0 });
+    // 応答だけでなく、書き込まれた状態も 0 になっていること。
+    expect(store.state().initialJpy).toBe(0);
+    expect(store.state().balances).toEqual({ jpy: 0, btc: 0 });
+  });
+
+  it.each([
+    ["initialJpy が負", { initialJpy: -1 }],
+    ["balances の値が負", { balances: { jpy: -1 } }],
+  ])("reset は %s を断り、状態を変えない", async (_label, payload) => {
+    const { fastify, store } = await setup();
+    const before = JSON.stringify(store.state());
+
+    const res = await fastify.inject({ method: "POST", url: "/_control/reset", payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "INVALID_BALANCES" });
+    expect(JSON.stringify(store.state())).toBe(before);
   });
 
   it("resets state", async () => {
