@@ -34,10 +34,14 @@ export type PairSpec = {
    * 全部と `mkr_jpy` / `matic_jpy` / `rndr_jpy`。`_btc` が一覧に残っているのは、税計算などの
    * ために約定履歴を取れるようにするためである。
    *
-   * **本モックはこのフラグをまだ発注の可否に使っていない。** 停止中のペアへ発注したとき
-   * 実 API が何を返すかを実測していないためで、コードを推測で決めないための保留である
-   * （`docs/fidelity.md` の「ペア」節）。表に持っておくのは、決まったときに実装が
-   * この 1 か所で済むようにするため。
+   * **本モックはこのフラグで新規発注を断る**（`isOrderSuspendedPair()` → `POST
+   * /v1/user/spot/order` が `70017`。**v0.1.0 からの改訂**。改訂前は成功させていた）。
+   * **断るのは新規発注だけで、照会と既存注文の取消は今までどおり通す。** 公式は
+   * `stop_order`（"order suspended flag"）と `stop_order_and_cancel`（"order **and cancel**
+   * suspended flag"）を書き分けているので（`rest-api.md:1696-1697`）、この列が立っている
+   * ことから取消の禁止は読めない。**静的なペア表が持つのは `orderSuspended` だけで、
+   * `stop_order_and_cancel` の値は持っていない。** 取消経路にこのフラグを機械的に
+   * 当てないこと（`docs/fidelity.md` の「ペア」節）。
    */
   readonly orderSuspended: boolean;
 };
@@ -110,7 +114,22 @@ export const OFFICIAL_PAIRS: readonly PairSpec[] = [
 
 const KNOWN_PAIRS: ReadonlySet<string> = new Set(OFFICIAL_PAIRS.map((p) => p.pair));
 
+const ORDER_SUSPENDED_PAIRS: ReadonlySet<string> = new Set(
+  OFFICIAL_PAIRS.filter((p) => p.orderSuspended).map((p) => p.pair),
+);
+
 /** 公式一覧にあるペアか。 */
 export function isKnownPair(pair: string): boolean {
   return KNOWN_PAIRS.has(pair);
+}
+
+/**
+ * 新規発注が停止されているペアか（公式表の "Order suspended flag (delisted)" 列）。
+ *
+ * **問うのは「新規発注してよいか」だけ。** 照会も既存注文の取消も、この関数で断らない
+ * （上の `PairSpec.orderSuspended` と `docs/fidelity.md` の「ペア」節）。一覧に無いペアは
+ * ここでは `false` になる——実在性は `isKnownPair()` が別に見るので、2 つを混ぜない。
+ */
+export function isOrderSuspendedPair(pair: string): boolean {
+  return ORDER_SUSPENDED_PAIRS.has(pair);
 }

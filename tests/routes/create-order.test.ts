@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OFFICIAL_PAIRS } from "../../src/engine/pairs.ts";
 import { activeOrders } from "../../src/engine/state.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
@@ -235,14 +236,13 @@ describe("POST /v1/user/spot/order", () => {
   });
 
   // 一覧にあるペアは通る（上の拒否が「全部断っている」わけではないことの対照）。
-  // 発注停止フラグが立っているペア（`xrp_btc` など）も、現時点では発注できる。
-  // 停止中のペアへ発注したとき実 API が何を返すか実測していないため、フラグは
-  // 表に持つだけで使っていない（`src/engine/pairs.ts` の `PairSpec.orderSuspended`）。
-  it("accepts a pair in the official list, including one flagged order-suspended", async () => {
+  // **発注停止のペアは対照に使えない**——`70017` で断るようになったので、ここは
+  // 停止していないペアだけを並べる（停止ペアの側は下の「発注停止のペア」の describe が見る）。
+  it("accepts pairs in the official list that are not order-suspended", async () => {
     const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000, btc: 100 } }));
-    for (const pair of ["xrp_jpy", "xrp_btc"]) {
+    for (const pair of ["xrp_jpy", "ltc_jpy"]) {
       // 価格は既定桁（btc_jpy の 0 桁）に合わせる。未登録ペアの桁を仮置きする決定は
-      // 今回変えていないので、`xrp_btc` の価格も整数でないと 20003 で弾かれる。
+      // 今回変えていないので、`xrp_jpy` の価格も整数でないと 20003 で弾かれる。
       const res = await fastify.inject({
         method: "POST",
         url: "/v1/user/spot/order",
@@ -250,7 +250,7 @@ describe("POST /v1/user/spot/order", () => {
       });
       expect((res.json() as { success: number }).success).toBe(1);
     }
-    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual(["xrp_jpy", "xrp_btc"]);
+    expect(activeOrders(store.state()).map((o) => o.pair)).toEqual(["xrp_jpy", "ltc_jpy"]);
   });
 
   it("rejects a malformed pair on market before looking up a price", async () => {
@@ -444,5 +444,116 @@ describe("POST /v1/user/spot/order official field set", () => {
     expect(s.actual).toEqual(s.expected);
     expect(OFFICIAL_CREATE_ORDER_STATUSES).toContain(body.data.status);
     for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(body.data).not.toHaveProperty(f);
+  });
+});
+
+/**
+ * 発注停止のペア（公式 `pairs.md` の "Order suspended flag (delisted)" が `true` の 18 ペア）
+ * への新規発注を `70017` で断る（`docs/fidelity.md` の「ペア」節）。
+ *
+ * **fail-closed であることが要点。** 停止ペアへ実際に発注したとき実 API が何を返すかは
+ * 実測していないが、成功させると本番で成立しない注文について利用側が「成功する」という
+ * 契約を学習してしまう。断る側に倒した（**v0.1.0 からの改訂**。改訂前は成功させていた）。
+ *
+ * **断るのは新規発注だけ。** 照会は `tests/routes/pair-whitelist.test.ts`、既存注文の取消は
+ * `tests/routes/cancel-order.test.ts` が、停止ペアでも通ることを固定している。公式が
+ * `stop_order` と `stop_order_and_cancel` を書き分けているためで（`rest-api.md:1696-1697`）、
+ * **この非対称を「揃っている方が自然だから」で崩さないこと。**
+ */
+describe("発注停止のペア", () => {
+  const build = setupBuildTestServer();
+
+  /** 停止ペアと非停止ペアを表から導く。手で書くと表を直したときに食い違う。 */
+  const suspended = OFFICIAL_PAIRS.filter((p) => p.orderSuspended).map((p) => p.pair);
+  const allowed = OFFICIAL_PAIRS.filter((p) => !p.orderSuspended).map((p) => p.pair);
+
+  it("導出が空振りしていない（18 ペアが停止、残りは発注できる）", () => {
+    expect(suspended).toHaveLength(18);
+    expect(allowed).toHaveLength(OFFICIAL_PAIRS.length - 18);
+    // Plan A の `btc_jpy` は停止側に入らない（入ったらシナリオが丸ごと止まる）。
+    expect(suspended).not.toContain("btc_jpy");
+  });
+
+  it("停止ペアへの指値は 70017 で断り、状態を変えない", async () => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000, btc: 100 } }));
+    const before = structuredClone(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "xrp_btc", amount: "1", price: "1", side: "sell", type: "limit" },
+    });
+    // 互換ルートなので HTTP は 200 + 封筒（`src/routes/envelope.ts` の `err`）。
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(70017);
+    expect(store.state()).toEqual(before);
+    expect(activeOrders(store.state())).toHaveLength(0);
+  });
+
+  /**
+   * 成行でも断る。**価格を引きに行く前**に断ることを、足を 1 本も渡さないことで示す
+   * （引きに行っていれば `getLatestPrice()` が `null` を返して `70001` になる）。
+   */
+  it("停止ペアへの成行も 70017 で断る（価格を引く前）", async () => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000, btc: 100 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "xrp_btc", amount: "1", side: "sell", type: "market" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(70017);
+    expect(activeOrders(store.state())).toHaveLength(0);
+  });
+
+  it.each(suspended)("%s は発注できない", async (pair) => {
+    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000, btc: 100 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair, amount: "1", price: "1", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(70017);
+  });
+
+  /**
+   * 断る側だけ見ていると「全部断っている」実装でも通る。非停止ペアが通ることを併せて見る。
+   *
+   * 数量・価格は既定桁（`btc_jpy` の数量 4 桁・価格 0 桁）に合わせる。61 ペアの桁を
+   * 仮置きする決定は今回変えていない（`docs/fidelity.md` の「数量・価格の精度」節）。
+   */
+  it.each(allowed)("%s は従来どおり発注できる", async (pair) => {
+    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000, btc: 100 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair, amount: "1", price: "1", side: "buy", type: "limit" },
+    });
+    expect((res.json() as { success: number }).success).toBe(1);
+  });
+
+  /**
+   * **停止ペアの active な注文を持つ state を壊さない。** この規則より前に書かれた状態
+   * ファイルには停止ペアの注文が残り得る。発注時の検査であって状態の妥当性検査ではない
+   * ので、読み込みも照会も通る（取り除く手段は `cancel-order.test.ts` が見る）。
+   */
+  it("停止ペアの active な注文を持つ state を読み込める", async () => {
+    const state = buildState({
+      balances: { jpy: 1_000_000, btc: 100 },
+      orders: [buildOrder({ id: "7", pair: "xrp_btc", side: "buy", price: 1, startAmount: 1 })],
+    });
+    const { fastify, store } = await build(state);
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["7"]);
+    const res = await fastify.inject({
+      method: "GET",
+      url: "/v1/user/spot/order?pair=xrp_btc&order_id=7",
+    });
+    const body = res.json() as { success: number; data: { status: string } };
+    expect(body.success).toBe(1);
+    expect(body.data.status).toBe("UNFILLED");
   });
 });

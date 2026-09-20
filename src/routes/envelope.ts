@@ -96,6 +96,24 @@ export const ErrorCode = {
   INSUFFICIENT_FUNDS: 60001,
   AMOUNT_PRECISION: 60004,
   INTERNAL: 70001,
+  /**
+   * "Orders on pair have been suspended." **発注停止のペアへの新規発注**に返す
+   * （`errors.md:225`）。公式 `pairs.md` の "Order suspended flag (delisted)" 列が `true` の
+   * 18 ペアが対象で、判定は `src/engine/pairs.ts` の `isOrderSuspendedPair()`。
+   *
+   * **停止ペアへ実際に発注したとき実 API がこの番号を返すことは実測していない**（発注は
+   * 実弾になるため測れない）。errors.md の意味が一致するので選んだ**推測**である。
+   * 成功させる方が危ない——本番で成立しない注文について、利用側が「成功する」という契約を
+   * 学習してしまう。だから fail-closed に倒した（**v0.1.0 からの改訂**。改訂前は成功させていた）。
+   *
+   * **取消には使わない。** 公式は `stop_order`（"order suspended flag"）と
+   * `stop_order_and_cancel`（"order **and cancel** suspended flag"）を書き分けており
+   * （`rest-api.md:1696-1697`）、前者だけから取消の禁止は読めない。隣の
+   * `70018`「Order and cancel on pair have been suspended.」が後者に対応するが、
+   * **静的なペア表は `stop_order_and_cancel` の値を持たない**ので `70018` は置かない
+   * （`docs/fidelity.md` の「ペア」節）。
+   */
+  PAIR_ORDER_SUSPENDED: 70017,
 } as const;
 
 /**

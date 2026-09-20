@@ -295,6 +295,60 @@ describe("POST /v1/user/spot/cancel_orders", () => {
   });
 });
 
+/**
+ * **発注停止のペアでも既存注文の取消は通る**（`docs/fidelity.md` の「ペア」節）。
+ *
+ * 新規発注は `70017` で断るようになったが（`tests/routes/create-order.test.ts` の
+ * 「発注停止のペア」）、取消はその対象ではない。根拠は固定コミットの公式ドキュメントに
+ * ある——`rest-api.md:1696-1697` が `stop_order`（"order suspended flag"）と
+ * `stop_order_and_cancel`（"order **and cancel** suspended flag"）を**書き分けている**ので、
+ * 前者だけが立っている状態から取消の禁止は読めない。**静的なペア表が持つのは
+ * `orderSuspended`（= `stop_order` に対応する列）だけで、`stop_order_and_cancel` の値は
+ * 持っていない。**
+ *
+ * 取り除く手段を塞がないという既存の判断とも噛み合う（取消経路はそもそも公式一覧を
+ * 見ない。`tests/routes/pair-whitelist.test.ts` の `COVERED_ELSEWHERE`）。
+ */
+describe("発注停止のペアの取消", () => {
+  const build = setupBuildTestServer();
+
+  /** 停止ペア（`_btc` の 15 ペアのうちの 1 つ）の未約定の指値。 */
+  const suspendedPairState = () =>
+    buildState({
+      balances: { jpy: 1_000_000, btc: 100 },
+      orders: [
+        buildOrder({ id: "1", pair: "xrp_btc", side: "buy", price: 1, startAmount: 1 }),
+        buildOrder({ id: "2", pair: "xrp_btc", side: "buy", price: 1, startAmount: 1 }),
+      ],
+    });
+
+  it("cancel_order は停止ペアの注文を取り消せる", async () => {
+    const { fastify, store } = await build(suspendedPairState());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "xrp_btc", order_id: 1 },
+    });
+    const body = res.json() as { success: number; data: { status: string } };
+    expect(body.success).toBe(1);
+    expect(body.data.status).toBe("CANCELED_UNFILLED");
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+  });
+
+  it("cancel_orders も停止ペアの注文を取り消せる", async () => {
+    const { fastify, store } = await build(suspendedPairState());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "xrp_btc", order_ids: [1, 2] },
+    });
+    const body = res.json() as { success: number; data: { orders: unknown[] } };
+    expect(body.success).toBe(1);
+    expect(body.data.orders).toHaveLength(2);
+    expect(activeOrders(store.state())).toHaveLength(0);
+  });
+});
+
 describe("cancel official field set", () => {
   const build = setupBuildTestServer();
 

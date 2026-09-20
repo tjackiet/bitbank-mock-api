@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { isKnownPair } from "../engine/pairs.ts";
+import { isKnownPair, isOrderSuspendedPair } from "../engine/pairs.ts";
 import { fitsDigits, precisionOf } from "../engine/precision.ts";
 import { pairAssets } from "../engine/state.ts";
 import { placeOrder, TransitionError } from "../engine/transitions.ts";
@@ -71,6 +71,20 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     // ここを素通しにすると、照会できない注文を作れてしまう（`GET order` は `40017` を返す）。
     // 詳しくは `docs/fidelity.md` の「ペア」節。
     if (!pairAssets(pair) || !isKnownPair(pair)) return err(ErrorCode.INVALID_ASSET);
+    // 発注停止のペア（公式 `pairs.md` の "Order suspended flag (delisted)" が `true` の
+    // 18 ペア）は新規発注を断る。**fail-closed である**——本番で成立しない注文を成功させると、
+    // 利用側が「成功する」という契約を学習してしまう。コードは `errors.md:225` の
+    // `70017`「Orders on pair have been suspended.」で、**停止ペアへ実際に発注したときの
+    // コードは実測していない**（発注は実弾になるため）。
+    //
+    // **取消経路には同じ検査を置かない。** 公式は `stop_order`（"order suspended flag"）と
+    // `stop_order_and_cancel`（"order **and cancel** suspended flag"）を書き分けており
+    // （`rest-api.md:1696-1697`）、前者だけから取消の禁止は読めない。照会も従来どおり通す。
+    //
+    // 位置は実在性の検査の直後（どちらもペアそのものの可否）で、桁の検査より前。
+    // **桁と同時に不正なときどちらのコードが勝つかは実測していない**（`docs/fidelity.md` の
+    // 「ペア」節）。`store.tick()` より前なので、断ったときに状態は一切変わらない。
+    if (isOrderSuspendedPair(pair)) return err(ErrorCode.PAIR_ORDER_SUSPENDED);
 
     const digits = precisionOf(pair);
     if (!fitsDigits(amount, digits.amountDigits)) return err(ErrorCode.AMOUNT_PRECISION);
