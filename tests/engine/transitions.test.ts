@@ -72,6 +72,54 @@ describe("placeOrder", () => {
     if (!r.success) expect(r.error).toBe(TransitionError.INVALID_PAIR);
   });
 
+  /**
+   * 残高が**ちょうど**足りるときに通るか。
+   *
+   * 下の「rejects insufficient funds」は残高 100 に対し 5,000 を要求する形で境界から遠い。
+   * `availableOf(...) < need` を `<=` に変えても 1 件も落ちない（実測）——つまり
+   * **ちょうど買える残高で断られる**退行が素通りする。利用側が発注可能量を算出して
+   * 枠を使い切る設計にしていると、そこで踏む。
+   *
+   * `feeRate` に 0 を渡し、`price × amount` が倍精度で厳密に一致する値を選んでいる
+   * （`5,000,000 × 0.0625 = 312,500`。0.0625 は 2 進で厳密で、桁 4 にも収まる）。
+   * これで境界が 1 ulp ずれない。手数料を含めた側の境界は
+   * `tests/scenarios/plan-a.test.ts` が見ている。
+   */
+  it("買いは代金ちょうどの残高で通り、1 円足りなければ断る", () => {
+    const placeWithJpy = (jpy: number) =>
+      placeOrder(
+        buildState({ balances: { jpy } }),
+        { pair: "btc_jpy", side: "buy", type: "limit", amount: 0.0625, price: 5_000_000 },
+        NOW,
+        undefined,
+        0,
+      );
+
+    expect(placeWithJpy(312_500).success).toBe(true);
+
+    const short = placeWithJpy(312_499);
+    expect(short.success).toBe(false);
+    if (!short.success) expect(short.error).toBe(TransitionError.INSUFFICIENT_FUNDS);
+  });
+
+  it("売りは数量ちょうどの base 残高で通り、足りなければ断る", () => {
+    // 売りが拘束するのは base の数量そのもの（`need = input.amount`）。
+    const placeWithBtc = (btc: number) =>
+      placeOrder(
+        buildState({ balances: { jpy: 0, btc } }),
+        { pair: "btc_jpy", side: "sell", type: "limit", amount: 0.0625, price: 5_000_000 },
+        NOW,
+        undefined,
+        0,
+      );
+
+    expect(placeWithBtc(0.0625).success).toBe(true);
+
+    const short = placeWithBtc(0.0624);
+    expect(short.success).toBe(false);
+    if (!short.success) expect(short.error).toBe(TransitionError.INSUFFICIENT_FUNDS);
+  });
+
   it("rejects insufficient funds", () => {
     const r = placeOrder(
       buildState({ balances: { jpy: 100 } }),
