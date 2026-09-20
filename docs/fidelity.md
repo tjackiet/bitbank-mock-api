@@ -265,7 +265,7 @@ Plan A は maker / taker 表示に関わらず**単一の料率**で計算する
 `post_only: false` は `type == limit` のときだけ出す（成行では省略。`price` の有無とは独立で、`price` を持たない指値でも出る）。`expire_at: null`。`user_cancelable` はアクティブ注文だけ `true`。成行の `price` は省略し `average_price` に約定値を載せる
 
 - **根拠**: REST API: Fetch order information の応答表（`price` は「type = `limit` または `stop_limit` 時のみ」、`post_only` は「type = `limit` 時のみ」と別条件で定義される）
-- **本物との差異**: post only・期限・注文訂正を実装しない。`post_only` を `true` にする経路は無い
+- **本物との差異**: post only・期限・注文訂正を実装しない。`post_only` を `true` にする経路は無い。**実 API には `post_only` の扱いが変わる条件がある**——`circuit_break_info.mode` が `NONE` 以外のとき `false` として扱われる（`rest-api.md:405`。下の「サーキットブレーカー時の成行制限」節。本モックは常に `false` なので今は差が出ないが、`post_only` を実装するときはこの Caveat が効く）
 - **推測**: はい（値が常に false であること）。いいえ（出現条件は公式どおり）
 - **利用側への含意**: 利用側はこれらの値で分岐しない前提
 
@@ -376,6 +376,15 @@ Plan A は maker / taker 表示に関わらず**単一の料率**で計算する
 - **本物との差異**: 指値だけに価格制約を適用する
 - **推測**: はい
 - **利用側への含意**: 価格上限が必要な実験は指値で行う
+
+### サーキットブレーカー時の成行制限
+
+**実装しない。** 本モックはサーキットブレーカーの状態を表す入れ物を持たず、成行注文を**無条件に受ける**。実 API は `circuit_break_info.mode` が `NONE` 以外のとき成行注文を受け付けず `70020` で断る。**同じ条件で `post_only` の扱いも変わる**（`NONE` 以外では `false` として扱われる。本モックは `post_only` を未実装で、値は常に `false`。上の「注文の固定フィールド」節）
+
+- **根拠**: `rest-api.md:403-405`（`#### Create new order` の `**Caveat:**`）に**2 項目**ある。(1) `rest-api.md:404` "Except for `circuit_break_info.mode` is `NONE`, market order are restricted. If restricted, it returns **70020** error code."、(2) `rest-api.md:405` "`post_only` option is treated as `false` except, `circuit_break_info.mode` is `NONE`."。日本語版 `rest-api_JP.md:411-413` も同じ内容（「circuit_break_info.mode が `NONE` 以外の場合は成行注文を行うことができず、`70020`エラーが返ります」「…`post_only` オプションは `false` として扱われます」）。コードの定義は `errors.md:228` の `70020`「Market order has been temporarily restricted.」（日本語版 `errors_JP.md:228`「現在成行注文停止中のため、注文を承ることができません」）。いずれも固定コミット `0badd680`。**`circuit_break_info` 自体は公開 API 側にある**——`public-api.md:353` の `GET /{pair}/circuit_break_info` が `mode` を `NONE` / `CIRCUIT_BREAK` / `FULL_RANGE_CIRCUIT_BREAK` / `RESUMPTION` / `LISTING` の 5 値で定義するので、**制限が掛かるのは `NONE` 以外の 4 モード**である。同じモードで**板情報（Depth）の応答形も変わる**（`public-api.md:186` / `191`。`NONE` 以外かつ見積価格があるときは「見積価格の周辺 200 件ずつ・最大 400 件」「asks と bids の価格が交差し得る」）
+- **本物との差異**: **モックは成行を常に受ける。** 実 API がサーキットブレーカー作動中に断る条件を再現しない。実装しない理由は 3 つで、(1) **Plan A の契約範囲は指値だけで、成行はその外側にある**（モックが成行を持っていること自体は事実だが、Plan A で踏む経路ではない）、(2) **忠実に再現するには公開 API の取得が要る**——`circuit_break_info` は公開 API 側にあり、本モックは公開 API を実装せず起動時も要求処理中も外へ出ない（下の「`/spot/pairs` は他にも本モックが持っていない情報を返す」と同じ、記録済みの設計方針である。この 1 件のために崩す話ではない）、(3) `/_control/` にモードの注入口を足すのは**新しい実験面の追加**にあたり、Plan A で誰も踏まない条件のために制御面を広げない。**`post_only` 側の Caveat も未実装**だが、`post_only` を実装するときはこの Caveat が効く（`NONE` 以外では送った `true` が `false` として扱われる）ので、そのとき両方を併せて読むこと
+- **推測**: いいえ（**公式の Caveat 2 項目とも明記されている**。`rest-api.md:404-405` / `rest-api_JP.md:412-413`）。実装しないという**選択**が本モックの判断で、挙動の推測ではない。`70020` を返す経路は存在しないので、コードの当てはめの推測も無い
+- **利用側への含意**: **本モックで成行が常に通ることを、実 API の契約として読まないこと。** サーキットブレーカー作動中は実 API が `70020` で断る。成行の可否を検証したい利用側は、この条件を本モックでは再現できない（実験能力の候補として `docs/plan-lab-mock.md` のプラン B 側に残した。`/_control/` からモードを注入する案もそこにある）。`post_only` を送る利用側も同じで、**`NONE` 以外では `post_only` が効かない**ことを本モックでは観測できない
 
 ### 認証
 
