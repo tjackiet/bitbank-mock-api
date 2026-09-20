@@ -337,6 +337,77 @@ describe("POST /v1/user/spot/order", () => {
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(60004);
   });
+
+  /**
+   * 非正の `price` / `amount` を断ることを wire の応答で固定する。
+   *
+   * **`price` を守っているのは `placeOrder` の `refPrice <= 0` 1 行だけである。**
+   * `src/schemas/requests.ts` は `amount` に `refine((n) => n > 0)` を持つのに
+   * `price` には持たないので（`price: numStr.optional()`）、0 はスキーマを素通りする。
+   * その 1 行を `< 0` に変えると**価格 0 の注文が `success: 1` で通り、拘束額も 0 になる**
+   * ——それでも 458 件が 1 件も落ちなかった（隔離コピーで実測）。
+   *
+   * 欠落（`30012` / `30001`）とは別のコードになることも併せて見る。0 を「未指定」と
+   * 同じ扱いに寄せると、利用側はこの 2 つを区別できなくなる。
+   */
+  it.each([
+    ["price が 0", { price: 0 }],
+    ["price が負", { price: -1 }],
+    ["amount が 0", { amount: 0 }],
+    ["amount が負", { amount: -0.001 }],
+  ])("%s なら 20003 で断り、注文を作らない", async (_label, override) => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: {
+        pair: "btc_jpy",
+        amount: 0.001,
+        price: 5_000_000,
+        side: "buy",
+        type: "limit",
+        ...override,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(20003);
+    // 応答だけでなく状態も見る。断ったのに注文が残っていたら意味がない。
+    expect(store.state().orders).toEqual([]);
+  });
+
+  it("0 と欠落は別のコードで断る（20003 と 30012 / 30001）", async () => {
+    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000 } }));
+    const post = async (payload: Record<string, unknown>) => {
+      const res = await fastify.inject({ method: "POST", url: "/v1/user/spot/order", payload });
+      return (res.json() as { data: { code: number } }).data.code;
+    };
+    const base = { pair: "btc_jpy", side: "buy", type: "limit" };
+
+    expect(await post({ ...base, amount: 0.001, price: 0 })).toBe(20003);
+    expect(await post({ ...base, amount: 0.001 })).toBe(30012);
+    expect(await post({ ...base, amount: 0, price: 5_000_000 })).toBe(20003);
+    expect(await post({ ...base, price: 5_000_000 })).toBe(30001);
+  });
+
+  it("market の 0 数量も 20003 で断る（価格は市場から取る経路）", async () => {
+    // market は `price` を送らず `marketPrice` を使うので、`amount` 側だけが残る。
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }), {
+      btc_jpy: [
+        candle(Date.parse("2026-01-01T00:01:00.000Z"), 5_000_000, 5_000_000, 5_000_000, 5_000_000),
+      ],
+    });
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: 0, side: "buy", type: "market" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(20003);
+    expect(store.state().orders).toEqual([]);
+  });
 });
 
 describe("POST /v1/user/spot/order official field set", () => {
