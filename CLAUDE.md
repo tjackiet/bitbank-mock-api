@@ -13,7 +13,7 @@
 
 | コマンド | 実行内容 |
 | --- | --- |
-| `npm test` | `vitest run`（**カバレッジは測らない**。速い内側の輪として使う） |
+| `npm test` | `vitest run`（**カバレッジは測らない**。速い内側の輪として使う）。`examples/scenario-plan-a.sh` を実プロセスのサーバへ流す回があるので、**`bash` と `curl` が要る** |
 | `npm run coverage` | `vitest run --coverage`。閾値は `vitest.config.ts` が持ち、**割れると終了コード 1**。`src/index.ts` は計測から外す（`tests/index.test.ts` が子プロセスで検証するので v8 が追えず 0% と出るため） |
 | `npm run typecheck` | `tsc --noEmit`（`src/**/*` と `tests/**/*` と `vitest.config.ts`） |
 | `npm run lint` | `biome ci . --error-on-warnings`。整形・lint・import の並びを見る。**警告もエラー扱い**なので、Biome が何か言ったら赤 |
@@ -37,6 +37,7 @@
 - **ESM**。**相対 import は拡張子 `.ts` を明示する**（例: `import { ok } from "./envelope.ts";`）。落とすと typecheck が `TS2835` で落ちる。
 - `tsconfig.json` は `strict` / `noEmit` / `module` と `moduleResolution` が `NodeNext` / `target: ES2022`。
 - **`src/` と `tests/` はディレクトリ構成を対応させる**（`src/engine/match.ts` → `tests/engine/match.test.ts`）。例外は `tests/structure.test.ts` が理由つきで持ち、ずれると落ちる。
+- **テストから外へ要求を出さない。** `SessionStore` は `fetchCandles` を渡し忘れると本物の公開 API へ落ちるので、テストではスタブ（`tests/routes/helpers.ts` の `stubFetchCandles()` など）を渡すか `fillMode: "manual"` にする。忘れても `tests/network-guard.ts` が `undici` の口を塞いで**そのテストを落とす**（`fetch failed` ではなく「テストから外向きの fetch が呼ばれました」が出たらこれ）。ローカルのサーバへ話す必要があるときは `tests/server-process.ts` で起こして子プロセスから叩く。
 - **互換ルート（`/v1/user/...`）は `src/routes/envelope.ts` の `ok()` / `err()` で封筒に包む。** 成功は `{ success: 1, data }`、失敗は `{ success: 0, data: { code } }`。code は同ファイルの `ErrorCode` から選ぶ（残高不足 `60001`、注文が見つからない `50009`）。登録は `src/server/http.ts` の `buildServer()`。
 - **`/_control/` は bitbank API に無い実験用の口で、封筒に包まず素の JSON。** 失敗は HTTP ステータス（400 / 403 / 404 / 409、劣化後は 503）。`BITBANK_MOCK_CONTROL=1` のときだけ登録し、非ループバックには `X-Control-Token` を要求する。実装は `src/routes/control.ts`。
 - **注文の単一の真実は `src/engine/state.ts` の `OrderRecord`。** 状態全体は `PaperState`（zod、`version: 3`）。

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -11,6 +12,37 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
+    /**
+     * テストの間だけ `undici` を番人へ差し替える（`tests/network-guard.ts`）。
+     *
+     * `src/engine/candles.ts` が持つ外向きの口はここ 1 つで、`SessionStore` は
+     * スタブを渡し忘れるとそこへ落ちる。差し替えておけば、忘れた経路が**外へ出る前に**
+     * 捕まる。`tests/no-network.ts` がそれをテストの失敗に変える。
+     *
+     * `resolve.alias` ではなく `test.alias` に置くのは、効き目をテストの実行中に限るため。
+     */
+    alias: {
+      undici: fileURLToPath(new URL("./tests/network-guard.ts", import.meta.url)),
+    },
+
+    setupFiles: ["tests/no-network.ts"],
+
+    /**
+     * 番人をすり抜けたときの**宛先側の歯止め**。到達しないループバックへ向けておく。
+     *
+     * 番人（上の `alias`）は口を塞ぐが、塞ぐ仕掛けそのものが外れると素の `undici` に
+     * 戻り、`defaultFetchCandles()` の既定は公開 API になる。実際に `alias` を外して
+     * 試したとき、テストから公開 API へ向かう要求がそのまま走った。**大声で落ちる仕掛けと、
+     * 黙って届かない宛先の 2 枚**にしておけば、片方が外れても外には出ない。
+     *
+     * 明示的に `baseUrl` を渡すテスト（`tests/engine/candles.test.ts`）はこれに影響されない
+     * （`opts.baseUrl ?? process.env.BITBANK_PUBLIC_BASE_URL ?? DEFAULT_BASE_URL` の順）。
+     * 既定が外向きであること自体は `tests/network-guard.test.ts` がこの値を外して確かめる。
+     */
+    env: {
+      BITBANK_PUBLIC_BASE_URL: "http://127.0.0.1:9",
+    },
+
     coverage: {
       provider: "v8",
 
@@ -34,8 +66,9 @@ export default defineConfig({
 
       /**
        * 下限は計測値の少し下に置く**ラチェット**で、目標値ではない。
-       * 2026-09-20 の実測は Stmt 94.03 / Branch 88.61 / Func 97.96 / Line 96.01
-       * （92.49 / 86.87 / 97.46 / 94.53 → 93.59 / 87.85 / 97.96 / 95.60 と上げてきた）。
+       * 2026-09-20 の実測は Stmt 94.28 / Branch 88.73 / Func 97.96 / Line 96.31
+       * （92.49 / 86.87 / 97.46 / 94.53 → 93.59 / 87.85 / 97.96 / 95.60 → 94.03 / 88.61 /
+       * 97.96 / 96.01 と上げてきた）。
        *
        * **上げ直す理由は「上がったから」ではなく「効かなくなったから」である。**
        * 下限を据え置いたまま計測値が上がると、その差のぶんだけ退行を通す。実際
@@ -47,7 +80,11 @@ export default defineConfig({
        *
        * **どれだけの退行で落ちるかを実測して決めた**（未テストのコードを足して確認）。
        * この 4 つの下限では、新しく入った未到達のものが
-       * 文 7 つ / 行 6 つに達した時点で落ちる。
+       * 文 11 / 行 9 に達した時点で落ちる。実測した 2 点は
+       * **文 4・行 3・関数 1 の素朴な補助関数は通り、文 18・行 10・関数 1 は文と行の 2 本で落ちる**。
+       *
+       * 計測値が上がった回でも、この投入が落ちるなら下限は据え置く。上の規則どおり、
+       * 上げ直す理由は上がったことではなく**効かなくなったこと**である。
        *
        * `branches` を 87 のままにしているのは、分岐は粒度が粗く「効かせる」と
        * 「余白を残す」が両立しないためである（88.5 まで上げると余白が分岐 1 つになる）。
