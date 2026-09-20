@@ -36,10 +36,12 @@ bitbank Private REST API に対応する互換ルートは次の 7 パス・8 �
 | `GET` | `/v1/user/spot/active_orders` | `pair`（任意。省略で全ペア）/ `count` / `from_id` / `end_id` / `since` / `end` |
 | `GET` | `/v1/user/spot/trade_history` | `pair`（任意。省略で全ペア）/ `count` / `order_id` / `since` / `end` / `order`（`asc` \| `desc`） |
 | `POST` | `/v1/user/spot/cancel_order` | `pair` / `order_id` |
-| `POST` | `/v1/user/spot/cancel_orders` | `pair` / `order_ids`（1 件以上） |
+| `POST` | `/v1/user/spot/cancel_orders` | `pair` / `order_ids`（1 件以上 30 件以下） |
 | `GET` | `/v1/user/assets` | なし |
 
 **この表はパラメータの名前までで、契約そのものではありません。** 値をどう解釈するか・何を返すか・どの入力をどの error code で断るかの正は [`docs/fidelity.md`](docs/fidelity.md) です。本物との差分の記録であると同時に、**このモックの契約書でもあります**。読む順は同ファイルの「[v0.1.0 からの改訂](docs/fidelity.md#v010-からの改訂)」で今の版を把握してから、対応表の該当する節へ。
+
+**`order_ids` の 30 件上限は `cancel_orders` にだけあります**（公式 `rest-api.md` の `cancel_orders` のパラメータ表が "Up to 30 ids can be specified" と書き、`orders_info` の表には上限の記載がありません）。超えると `40015` で断り、**1 件も取り消しません**。`orders_info` には上限を設けていません（非対称は公式どおりです。[`docs/fidelity.md`](docs/fidelity.md) の「一括取消の件数上限」の節）。
 
 **`trade_history` は `from_id` / `end_id` を持ちません**（公式 `rest-api.md` のパラメータ表に無いため。送られても黙って無視します。実 API は絞り込みに使うので、同じ要求で結果が変わります。経緯は [`docs/fidelity.md`](docs/fidelity.md) の「絞り込みパラメータの不正値」の節）。
 

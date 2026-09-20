@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { priceUnit } from "../../src/engine/precision.ts";
 import { fillOrder } from "../../src/engine/transitions.ts";
+import { MAX_CANCEL_ORDER_IDS } from "../../src/routes/cancel-order.ts";
 import { formatAveragePrice, formatOrder } from "../../src/routes/format.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
@@ -248,6 +249,35 @@ describe("POST /v1/user/spot/orders_info", () => {
     const body = res.json() as Envelope<{ orders: unknown[] }>;
     expect(body.success).toBe(1);
     expect(body.data.orders).toEqual([]);
+  });
+
+  /**
+   * **`orders_info` の `order_ids` には件数の上限が無い。**
+   *
+   * `cancel_orders` には公式の 30 件上限があり（`rest-api.md:548` "Up to 30 ids can be
+   * specified"）、モックも `40015` で断る。一方 `orders_info`（Fetch multiple orders）の
+   * パラメータ表には上限の記載が**無い**（`rest-api.md:600` / `rest-api_JP.md:608` は
+   * どちらも `order ids` / 「注文ID」だけ）。
+   *
+   * **この非対称は公式の仕様なので、「揃っている方が自然だから」で上限を足さないこと。**
+   * ここは回帰を固定するテストである（`docs/fidelity.md` の「一括取消の件数上限」節）。
+   */
+  it("`cancel_orders` の 30 件上限を持ち込まない（31 件でも受け付ける）", async () => {
+    const ids = Array.from({ length: MAX_CANCEL_ORDER_IDS + 1 }, (_, i) => i + 1);
+    const state = buildState({
+      balances: { jpy: 10_000_000 },
+      orders: ids.map((id) => buildOrder({ id: String(id) })),
+    });
+    const { fastify } = await build(state);
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/orders_info",
+      payload: { pair: "btc_jpy", order_ids: ids },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Envelope<{ orders: unknown[] }>;
+    expect(body.success).toBe(1);
+    expect(body.data.orders).toHaveLength(ids.length);
   });
 });
 

@@ -72,6 +72,21 @@ export const ErrorCode = {
    * **空配列も弾かれる**点に注意。モックは以前 `success: 1` と空の一覧を返していた。
    */
   INVALID_ORDER_ID_ARRAY: 40014,
+  /**
+   * "Too many orders are specified." **`cancel_orders` の `order_ids` が 30 件を超えたとき**に
+   * 返す。上限そのものは公式のパラメータ表に書かれている（`rest-api.md:548`
+   * "order ids. Up to 30 ids can be specified"、`rest-api_JP.md:556`
+   * 「注文ID。最大30個まで指定可能」。いずれもコミット `0badd680`）。
+   *
+   * **超過したとき実 API がこの番号を返すことは実測していない。** 取消の実測には実弾の注文が
+   * 要るため測れず、`errors.md:111` の番号と意味（「指定された注文が多すぎる」）から選んだ。
+   *
+   * **この上限は `cancel_orders` にだけある。** `orders_info`（Fetch multiple orders）の
+   * `order_ids` には公式に上限の記載が無い（`rest-api.md:600` / `rest-api_JP.md:608` は
+   * どちらも "order ids" / 「注文ID」だけ）。揃えたくなっても足さないこと
+   * （`docs/fidelity.md` の「一括取消の件数上限」節）。
+   */
+  TOO_MANY_ORDERS: 40015,
   /** "Invalid asset." 実 API は不正なペアにこれを返す（2026-09-17 実測）。絞り込み群ではない。 */
   INVALID_ASSET: 40017,
   INVALID_SINCE: 40022, // "Invalid trading start time."
@@ -81,6 +96,24 @@ export const ErrorCode = {
   INSUFFICIENT_FUNDS: 60001,
   AMOUNT_PRECISION: 60004,
   INTERNAL: 70001,
+  /**
+   * "Orders on pair have been suspended." **発注停止のペアへの新規発注**に返す
+   * （`errors.md:225`）。公式 `pairs.md` の "Order suspended flag (delisted)" 列が `true` の
+   * 18 ペアが対象で、判定は `src/engine/pairs.ts` の `isOrderSuspendedPair()`。
+   *
+   * **停止ペアへ実際に発注したとき実 API がこの番号を返すことは実測していない**（発注は
+   * 実弾になるため測れない）。errors.md の意味が一致するので選んだ**推測**である。
+   * 成功させる方が危ない——本番で成立しない注文について、利用側が「成功する」という契約を
+   * 学習してしまう。だから fail-closed に倒した（**v0.1.0 からの改訂**。改訂前は成功させていた）。
+   *
+   * **取消には使わない。** 公式は `stop_order`（"order suspended flag"）と
+   * `stop_order_and_cancel`（"order **and cancel** suspended flag"）を書き分けており
+   * （`rest-api.md:1696-1697`）、前者だけから取消の禁止は読めない。隣の
+   * `70018`「Order and cancel on pair have been suspended.」が後者に対応するが、
+   * **静的なペア表は `stop_order_and_cancel` の値を持たない**ので `70018` は置かない
+   * （`docs/fidelity.md` の「ペア」節）。
+   */
+  PAIR_ORDER_SUSPENDED: 70017,
 } as const;
 
 /**

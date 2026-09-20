@@ -96,6 +96,12 @@ export const UNIMPLEMENTED_ORDER_FIELDS = ["position_side", "triggered_at", "tri
  * ```
  * status | string | status enum: `INACTIVE`, `UNFILLED`, `PARTIALLY_FILLED`, `FULLY_FILLED`, `CANCELED_UNFILLED`, `CANCELED_PARTIALLY_FILLED`, `REJECTED`
  * ```
+ *
+ * **写したのは英語版（`rest-api.md:310`）で、日本語版の同じ節は 6 値である**
+ * （`rest-api_JP.md:318` に `REJECTED` が無い）。**`REJECTED` が英語版にしか無いという
+ * ことではない**——日本語版は `Create new order` の側に載せている（`rest-api_JP.md:409`）。
+ * 節ごとの列挙の完全性が公式文書の中で揺れているので、**どちらかの言語版を「採用した」と
+ * 読まないこと**（`docs/fidelity.md` の「注文状態」節に 3 節 × 2 言語の表がある）。
  */
 export const OFFICIAL_FETCH_ORDER_STATUSES = [
   "INACTIVE",
@@ -113,6 +119,10 @@ export const OFFICIAL_FETCH_ORDER_STATUSES = [
  * ```
  * status | string | status enum: `INACTIVE`, `UNFILLED`, `PARTIALLY_FILLED`, `FULLY_FILLED`, `CANCELED_UNFILLED`, `CANCELED_PARTIALLY_FILLED`
  * ```
+ *
+ * **ここも英語版（`rest-api.md:401`）で、日本語版の同じ節は `REJECTED` を含む 7 値である**
+ * （`rest-api_JP.md:409`）。上の `OFFICIAL_FETCH_ORDER_STATUSES` とは**揺れの向きが逆**で、
+ * どちらが正かは実測していない（`docs/fidelity.md` の「注文状態」節）。
  */
 export const OFFICIAL_CREATE_ORDER_STATUSES = [
   "INACTIVE",
@@ -127,6 +137,9 @@ export const OFFICIAL_CREATE_ORDER_STATUSES = [
  * `Cancel order`（`Cancel multiple orders` もこの節を参照する）。`REJECTED` を
  * 含まない 6 値。`Create new order` と同じ並びだが、別の節の別の表なので
  * 独立に写す（一方だけが変わりうる）。
+ *
+ * **この節だけは英日で揃っている**——`REJECTED` は `rest-api.md:487` にも
+ * `rest-api_JP.md:495` にも無い（`docs/fidelity.md` の「注文状態」節）。
  *
  * ```
  * status | string | status enum: `INACTIVE`, `UNFILLED`, `PARTIALLY_FILLED`, `FULLY_FILLED`, `CANCELED_UNFILLED`, `CANCELED_PARTIALLY_FILLED`

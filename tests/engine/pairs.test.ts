@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isKnownPair, OFFICIAL_PAIRS } from "../../src/engine/pairs.ts";
+import { isKnownPair, isOrderSuspendedPair, OFFICIAL_PAIRS } from "../../src/engine/pairs.ts";
 import { pairAssets } from "../../src/engine/state.ts";
 
 /**
@@ -69,5 +69,44 @@ describe("isKnownPair", () => {
     expect(isKnownPair("")).toBe(false);
     expect(isKnownPair("BTC_JPY")).toBe(false);
     expect(isKnownPair("btc_jpy ")).toBe(false);
+  });
+});
+
+/**
+ * `isOrderSuspendedPair()` は**新規発注の可否だけ**を答える。
+ *
+ * 実在性（`isKnownPair()`）とは別の問いなので、2 つを混ぜない。一覧に無いペアは
+ * ここでは `false`（「停止していない」）になる——発注経路はどちらも見るので、
+ * 一覧に無いペアは実在性の側で `40017` に落ちる（`src/routes/create-order.ts`）。
+ */
+describe("isOrderSuspendedPair", () => {
+  it("表の停止フラグと一致する", () => {
+    for (const { pair, orderSuspended } of OFFICIAL_PAIRS) {
+      expect(isOrderSuspendedPair(pair), pair).toBe(orderSuspended);
+    }
+  });
+
+  it("停止ペアを true、発注できるペアを false と答える", () => {
+    expect(isOrderSuspendedPair("xrp_btc")).toBe(true);
+    expect(isOrderSuspendedPair("mkr_jpy")).toBe(true);
+    expect(isOrderSuspendedPair("btc_jpy")).toBe(false);
+    expect(isOrderSuspendedPair("xrp_jpy")).toBe(false);
+  });
+
+  // 実在性とは別の問い。一覧に無いペアを「停止」と答えてしまうと、発注経路が
+  // `40017` ではなく `70017` を返すようになる。
+  it("一覧に無いペアは false（実在性の判定を兼ねない）", () => {
+    expect(isOrderSuspendedPair("foo_jpy")).toBe(false);
+    expect(isOrderSuspendedPair("xxx_yyy")).toBe(false);
+  });
+
+  // 一覧と同じく Set で引く。継承したキーを掴まないこと。
+  it("Object.prototype のキーや形の壊れた入力を通さない", () => {
+    expect(isOrderSuspendedPair("constructor")).toBe(false);
+    expect(isOrderSuspendedPair("toString")).toBe(false);
+    expect(isOrderSuspendedPair("__proto__")).toBe(false);
+    expect(isOrderSuspendedPair("")).toBe(false);
+    expect(isOrderSuspendedPair("XRP_BTC")).toBe(false);
+    expect(isOrderSuspendedPair("xrp_btc ")).toBe(false);
   });
 });
