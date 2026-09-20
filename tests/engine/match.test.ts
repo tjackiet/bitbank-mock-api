@@ -127,6 +127,71 @@ describe("runTick fill judgment", () => {
     expect(r.filled).toHaveLength(1);
   });
 
+  /**
+   * 指値に「触った」だけで約定するか。
+   *
+   * 上の 3 件は足の価格が指値から必ず離れている（買いは指値 100 に対し `low: 99`、
+   * 売りは指値 100 に対し `high: 101`）ので、`matches()` の
+   * `candle.low <= order.price` を `<` に、`candle.high >= order.price` を `>` に
+   * 変えても 1 件も落ちない（実測）。**btc_jpy の価格桁は 0 なので、足の価格と指値の
+   * ちょうど一致は例外ではなく普通に起きる。**
+   *
+   * 「触ったら約定する」を利用側が仮定して設計する境界なので、両側を対で固定する。
+   */
+  it("買いは low が指値と同値で約定し、1 つ上なら約定しない", () => {
+    const tickWithLow = (low: number) =>
+      tickOk(
+        buildState({
+          orders: [buildOrder({ side: "buy", price: 100, startAmount: 1 })],
+          balances: { jpy: 10_000 },
+        }),
+        { candles: [candle(T0 + MIN, 110, 120, low, 115)], nowMs: T0 + 2 * MIN, feeRate: 0 },
+      );
+
+    expect(tickWithLow(100).filled).toHaveLength(1);
+    expect(tickWithLow(101).filled).toHaveLength(0);
+  });
+
+  it("売りは high が指値と同値で約定し、1 つ下なら約定しない", () => {
+    const tickWithHigh = (high: number) =>
+      tickOk(
+        buildState({
+          balances: { jpy: 0, btc: 1 },
+          orders: [buildOrder({ side: "sell", price: 100, startAmount: 1 })],
+        }),
+        { candles: [candle(T0 + MIN, 90, high, 80, 95)], nowMs: T0 + 2 * MIN, feeRate: 0 },
+      );
+
+    expect(tickWithHigh(100).filled).toHaveLength(1);
+    expect(tickWithHigh(99).filled).toHaveLength(0);
+  });
+
+  /**
+   * 足と**同時刻**に置かれた注文が対象に入るか。下の
+   * 「ignores candles older than order.orderedAt」は注文が足より 4 分後という形なので、
+   * `Date.parse(o.orderedAt) <= candle.timestamp` を `<` に変えても落ちない（実測）。
+   */
+  it("足と同時刻に置かれた注文は対象になり、1 ミリ秒後なら対象外", () => {
+    const tickWithOrderedAt = (orderedAtMs: number) =>
+      tickOk(
+        buildState({
+          orders: [
+            buildOrder({
+              orderedAt: new Date(orderedAtMs).toISOString(),
+              side: "buy",
+              price: 100,
+              startAmount: 1,
+            }),
+          ],
+          balances: { jpy: 10_000 },
+        }),
+        { candles: [candle(T0 + MIN, 110, 110, 50, 105)], nowMs: T0 + 10 * MIN, feeRate: 0 },
+      );
+
+    expect(tickWithOrderedAt(T0 + MIN).filled).toHaveLength(1);
+    expect(tickWithOrderedAt(T0 + MIN + 1).filled).toHaveLength(0);
+  });
+
   it("ignores candles older than order.orderedAt", () => {
     const state = buildState({
       orders: [
