@@ -66,6 +66,12 @@ const TEST_WITHOUT_SRC: Record<string, string> = {
     "経路が見つからない要求の応答を、互換ルートと `/_control/` の両方で見る",
   "scenarios/plan-a.test.ts": "結合シナリオ。発注から約定までを複数モジュールにまたがって通す",
   "scenarios/large-amount-fill.test.ts": "結合シナリオ。大きな数量での約定を端から端まで通す",
+  "scenarios/example-script.test.ts":
+    "`examples/scenario-plan-a.sh` を実プロセスのサーバへ流す。見る対象が src ではなく" +
+    "リポジトリに置いた例のスクリプトそのもの",
+  "network-guard.test.ts":
+    "テスト基盤（`tests/network-guard.ts` と `tests/no-network.ts`）の検査。" +
+    "外向きの fetch を止める番人が空振りしていないことを見る",
 };
 
 /** ディレクトリ配下の相対パスを再帰で集める。 */

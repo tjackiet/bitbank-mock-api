@@ -1,11 +1,17 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { acquireStateLock, StateLockedError, stateLockPath } from "../src/store/lock.ts";
+import {
+  collectStderr,
+  freePort,
+  spawnServer,
+  waitForExit,
+  waitUntilListening,
+} from "./server-process.ts";
 
 /**
  * `src/index.ts` が状態ファイルの排他を取っていることを、実プロセスで固定する。
@@ -18,84 +24,6 @@ import { acquireStateLock, StateLockedError, stateLockPath } from "../src/store/
  * 見るほうが直接的だが、弾かれた側の標準エラーを読む形になる。「走っているサーバが状態
  * ファイルのロックを持っている」を確かめれば同じことが言える。
  */
-
-const STARTUP_TIMEOUT_MS = 20_000;
-
-/**
- * `npx tsx` や `node_modules/.bin/tsx` ではなく `node --import tsx` で起こす。
- *
- * 前者はラッパが子の node を産むので、`child.pid` はラッパのもので、`SIGKILL` は子へ
- * 届かない。テストが途中で落ちたときに**サーバがポートとロックを握ったまま孤児として
- * 残る**（実際に残り、後続の実行を壊した）。`--import` なら 1 プロセスなので、
- * `child.pid` がそのままサーバの pid になり、後始末も確実に効く。
- */
-function spawnServer(env: NodeJS.ProcessEnv, args: string[] = []): ChildProcess {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts", ...args], {
-    env: { ...process.env, ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  // 標準エラーは `pipe` にしたまま誰も読まないと、出力がバッファを埋めた時点で
-  // 子が write で止まる。下の `collectStderr()` が必ず読み出す。
-  child.stderr?.setEncoding("utf8");
-  return child;
-}
-
-/** 子プロセスが標準エラーへ出したものを集める。読み捨てずに溜めるので詰まらない。 */
-function collectStderr(child: ChildProcess): () => string {
-  let text = "";
-  child.stderr?.on("data", (chunk: string) => {
-    text += chunk;
-  });
-  return () => text;
-}
-
-/** 空いている TCP ポートを 1 つ借りる。固定ポートは他の実行とぶつかる。 */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (typeof address === "string" || address === null) {
-        probe.close(() => reject(new Error("ポートを取れなかった")));
-        return;
-      }
-      const { port } = address;
-      probe.close(() => resolve(port));
-    });
-  });
-}
-
-/**
- * fastify の listen ログが出るまで待つ。
- *
- * HTTP を叩いて待つと、**別のプロセスが同じポートで応答しているだけ**でも先へ進む
- * （固定ポートだった頃に実際に起きた）。自分が起こしたプロセスの標準出力で待てば取り違えない。
- */
-function waitUntilListening(child: ChildProcess): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let out = "";
-    const timer = setTimeout(() => reject(new Error(`起動しなかった: ${out}`)), STARTUP_TIMEOUT_MS);
-    const done = (e?: Error) => {
-      clearTimeout(timer);
-      child.stdout?.off("data", onData);
-      if (e) reject(e);
-      else resolve(out);
-    };
-    const onData = (chunk: Buffer) => {
-      out += chunk.toString();
-      if (out.includes("Server listening at")) done();
-    };
-    child.stdout?.on("data", onData);
-    child.once("exit", (code) => done(new Error(`起動前に終了した (code ${code}): ${out}`)));
-  });
-}
-
-/** 子プロセスが終わるまで待つ。既に終わっていれば即座に解決する。 */
-function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolve) => child.once("exit", () => resolve()));
-}
 
 describe("src/index.ts: 状態ファイルの排他", () => {
   let dir: string | null = null;
