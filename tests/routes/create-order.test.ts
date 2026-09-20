@@ -817,6 +817,61 @@ describe("同時未約定注文の上限", () => {
   });
 
   /**
+   * **並行要求でも上限を超えない**（CodeRabbit の指摘で足した。PR #78 のレビュー）。
+   *
+   * 上限の判定は 1 段目を `store.tick()` より前に置いている。**その `await` をまたいで
+   * 並行要求が割り込むと、2 本とも 1 段目を通ってしまう。** 実測すると、29 本の状態へ
+   * 4 本同時に投げて **33 本**になった（`fillMode: "market"` で足取得を遅らせた隔離コピー）。
+   * だから `placeOrder()` の直前に 2 段目を置いた。`SessionStore.commit()` は `replace()` を
+   * **同期に**実行してから `persist()` を待つので、数え直しから `commit()` の呼び出しまでに
+   * `await` を挟まない限り他の要求は割り込めない。
+   *
+   * **窓を広げるために足取得を遅らせる。** 既定の速い store では 4 本投げても割り込みが
+   * 起きず、2 段目を外しても通ってしまう（実測した）。`fetchCandles` を 20ms 待たせると
+   * `tick()` の `await` が実際に待つので、2 段目を外せばこのテストが落ちる。
+   */
+  it("並行要求でも上限を超えない（tick の await をまたいでも）", async () => {
+    const orders = Array.from({ length: MAX_ACTIVE_ORDERS - 1 }, (_, i) =>
+      buildOrder({ id: String(i + 1), price: 5_000_000, startAmount: 0.001 }),
+    );
+    const store = new SessionStore(buildState({ balances: { jpy: 10_000_000 }, orders }), {
+      path: null,
+      fillMode: "market",
+      fetchCandles: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { success: true, data: [] };
+      },
+    });
+    const fastify = await buildServer({ store, logger: false, controlEnabled: false });
+    try {
+      const responses = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          fastify.inject({
+            method: "POST",
+            url: "/v1/user/spot/order",
+            payload: {
+              pair: "btc_jpy",
+              amount: "0.001",
+              price: "5000000",
+              side: "buy",
+              type: "limit",
+            },
+          }),
+        ),
+      );
+      const bodies = responses.map((r) => r.json() as { success: number; data: { code?: number } });
+      // 空いている枠は 1 つなので、通るのは 1 本だけ。残りは 60011。
+      expect(bodies.filter((b) => b.success === 1)).toHaveLength(1);
+      for (const b of bodies.filter((x) => x.success === 0)) {
+        expect(b.data.code).toBe(60011);
+      }
+      expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+    } finally {
+      await fastify.close();
+    }
+  });
+
+  /**
    * **上限は発注だけの検査で、状態の妥当性検査ではない。** この規則より前に書かれた状態
    * ファイルには 31 本以上の未約定注文が残り得る。読み込みも照会も取消も通す
    * （`docs/fidelity.md` の「同時未約定注文の上限」節。停止ペアの注文を消せるようにして

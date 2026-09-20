@@ -107,8 +107,10 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const store = fastify.store;
-    // 未約定注文の本数の上限。**`store.tick()` より前**に見るので、断ったときに状態は
-    // 一切変わらない（`isOrderSuspendedPair()` と `cancel_orders` の件数上限と同じ位置づけ）。
+    // 未約定注文の本数の上限は **2 段で見る**。ここが 1 段目で、**`store.tick()` より前**に
+    // 置くので、断ったときに状態は一切変わらない（`isOrderSuspendedPair()` と
+    // `cancel_orders` の件数上限と同じ位置づけ）。2 段目は `placeOrder()` の直前にあり、
+    // **並行要求で上限を超えないため**に要る（下の `atLimit()` の呼び出し位置を見ること）。
     //
     // 数え方は `activeOrders()` をそのまま使う——`STATUS_KIND` が `"active"` に分類する
     // `UNFILLED` と `PARTIALLY_FILLED` だけを数え、`INACTIVE`（`"pending"`）と終端は数えない
@@ -125,15 +127,22 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     // market モードで 31 本目の直前に枠が空く局面では、本物より厳しく断る側へ倒れる（fail-closed）。
     // **成行の新規発注もこの検査を通る**（その場で全量約定して active に残らないが、
     // 受ける時点では 1 本の新規注文である）。実 API が成行を数から除くかは分からない。
-    if (activeOrders(store.state()).length >= MAX_ACTIVE_ORDERS) {
-      return err(ErrorCode.TOO_MANY_SIMULTANEOUS_ORDERS);
-    }
+    //
+    // **`store.state()` を `await` の前で読むのはこの 1 段目だけである。** 互換ルートの他の
+    // 経路は必ず `tick()` の後で状態を読むので、`tests/routes/tick.test.ts` の許可リストに
+    // 理由つきで載せてある。
+    const atLimit = () => activeOrders(store.state()).length >= MAX_ACTIVE_ORDERS;
+    if (atLimit()) return err(ErrorCode.TOO_MANY_SIMULTANEOUS_ORDERS);
     await store.tick();
 
     const now = new Date().toISOString();
     if (type === "market") {
       const fillPrice = await store.getLatestPrice(pair);
       if (fillPrice === null) return err(ErrorCode.INTERNAL);
+      // 2 段目。**`getLatestPrice()` の `await` より後**に置く（前に置くと、その await を
+      // またいで並行要求が割り込める）。ここから `commit()` までに `await` を挟まないので、
+      // 数え直しと状態の差し替えの間に他の要求は割り込めない。
+      if (atLimit()) return err(ErrorCode.TOO_MANY_SIMULTANEOUS_ORDERS);
       const r = placeOrder(
         store.state(),
         { pair, side, type, amount },
@@ -146,6 +155,13 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
       return ok(formatOrder(r.data.order));
     }
 
+    // 2 段目。`tick()` の `await` をまたいで並行要求が割り込むと、1 段目を 2 本とも
+    // 通ってしまう（隔離コピーで実測: 29 本の状態へ 4 本同時に投げると 33 本になった）。
+    // `SessionStore.commit()` は `replace()` を**同期に**実行してから `persist()` を待つので、
+    // **数え直し → `placeOrder()` → `commit()` の呼び出し**までに `await` を挟まない限り、
+    // 他の要求は割り込めない。だから 2 段目はここで、1 段目の位置とは別の役目を持つ
+    // （`docs/fidelity.md` の「同時未約定注文の上限」節）。
+    if (atLimit()) return err(ErrorCode.TOO_MANY_SIMULTANEOUS_ORDERS);
     const r = placeOrder(
       store.state(),
       { pair, side, type, amount, price },
