@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadState } from "../../src/engine/persist.ts";
 import { activeOrders } from "../../src/engine/state.ts";
 import { controlRoutes, controlTokenHeader } from "../../src/routes/control.ts";
@@ -467,6 +467,105 @@ describe("/_control routes", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(Date.parse(store.state().lastTickAt)).toBe(timestamp);
+  });
+
+  /**
+   * 上限（実時刻 + 24 時間）の**ちょうど**を踏む。
+   *
+   * 上の 3 件はいずれも境界から 60 秒離れている（`lastTickAt` を上限に置いて 60 秒の
+   * 前進で越える形、`+ MAX_CLOCK_AHEAD_MS - 60_000`、`+ MAX_CLOCK_AHEAD_MS + 60_000`）。
+   * そのため `nowMs > maxMs` / `candle.timestamp > maxMs` / `ms > maxMs` の 3 箇所を
+   * すべて `>=` に変えても 1 件も落ちない（実測）。README と対応表が「24 時間まで」と
+   * 明記している挙動なので、その "まで" が inclusive か exclusive かは契約である。
+   *
+   * `maxMs` はハンドラ内の `Date.now()` から作るので、実時刻のままでは 1 ミリ秒を
+   * 狙えない。**`Date` だけを固定して踏む**——`toFake` を絞らずに `useFakeTimers()` と
+   * すると下の 3 件が揃って失敗し、このファイルの実行が 1.5 秒から 16.5 秒へ伸びる
+   * （タイマまで偽物になって fastify 内部の待ちが進まず、テストのタイムアウトに
+   * 当たる。実測）。
+   */
+  describe("上限ちょうどの境界", () => {
+    const FIXED = Date.parse("2026-06-01T00:00:00.000Z");
+    const maxMs = FIXED + MAX_CLOCK_AHEAD_MS;
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(FIXED);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("tick: 60 秒の前進が上限ちょうどに着くなら通し、1 ミリ秒超えたら断る", async () => {
+      // `nowMs = max(realNow, lastMs + 60_000)` なので、`lastTickAt` を「上限 − 60 秒」に
+      // 置くと前進後がちょうど上限になる。
+      const tickFrom = async (lastTickAtMs: number) => {
+        const { fastify, store } = await setup(
+          buildState({ lastTickAt: new Date(lastTickAtMs).toISOString() }),
+        );
+        const before = JSON.stringify(store.state());
+        const res = await fastify.inject({
+          method: "POST",
+          url: "/_control/tick",
+          payload: { pair: "btc_jpy", price: 1000 },
+        });
+        return { res, store, before };
+      };
+
+      const exact = await tickFrom(maxMs - 60_000);
+      expect(exact.res.statusCode).toBe(200);
+      expect(Date.parse(exact.store.state().lastTickAt)).toBe(maxMs);
+
+      const over = await tickFrom(maxMs - 60_000 + 1);
+      expect(over.res.statusCode).toBe(400);
+      expect(over.res.json()).toMatchObject({ error: "CLOCK_TOO_FAR_AHEAD" });
+      expect(JSON.stringify(over.store.state())).toBe(over.before);
+    });
+
+    it("tick: 足の timestamp が上限ちょうどなら通し、1 ミリ秒超えたら断る", async () => {
+      const tickWithTimestamp = async (timestamp: number) => {
+        const { fastify, store } = await setup(buildState());
+        const before = JSON.stringify(store.state());
+        const res = await fastify.inject({
+          method: "POST",
+          url: "/_control/tick",
+          payload: { pair: "btc_jpy", candle: { open: 1, high: 1, low: 1, close: 1, timestamp } },
+        });
+        return { res, store, before };
+      };
+
+      const exact = await tickWithTimestamp(maxMs);
+      expect(exact.res.statusCode).toBe(200);
+      expect(Date.parse(exact.store.state().lastTickAt)).toBe(maxMs);
+
+      const over = await tickWithTimestamp(maxMs + 1);
+      expect(over.res.statusCode).toBe(400);
+      expect(over.res.json()).toMatchObject({ error: "CANDLE_TOO_FAR_AHEAD" });
+      expect(JSON.stringify(over.store.state())).toBe(over.before);
+    });
+
+    it("clock: 上限ちょうどへは動かせて、1 ミリ秒超えたら断る", async () => {
+      const setClock = async (lastTickAt: number) => {
+        const { fastify, store } = await setup(buildState());
+        const before = JSON.stringify(store.state());
+        const res = await fastify.inject({
+          method: "POST",
+          url: "/_control/clock",
+          payload: { lastTickAt },
+        });
+        return { res, store, before };
+      };
+
+      const exact = await setClock(maxMs);
+      expect(exact.res.statusCode).toBe(200);
+      expect(Date.parse(exact.store.state().lastTickAt)).toBe(maxMs);
+
+      const over = await setClock(maxMs + 1);
+      expect(over.res.statusCode).toBe(400);
+      expect(over.res.json()).toMatchObject({ error: "CLOCK_TOO_FAR_AHEAD" });
+      expect(JSON.stringify(over.store.state())).toBe(over.before);
+    });
   });
 
   // 過去の足を流し直す用途は塞がない。上限は先の側だけに効く。
