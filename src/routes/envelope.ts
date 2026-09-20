@@ -95,6 +95,23 @@ export const ErrorCode = {
   ALREADY_EXECUTED: 50027,
   INSUFFICIENT_FUNDS: 60001,
   AMOUNT_PRECISION: 60004,
+  /**
+   * "Too many Simultaneous orders, current limit is 30."
+   * **同時に持てる未約定注文の本数の上限**を超えた新規発注に返す（`errors.md:202`。
+   * 日本語版 `errors_JP.md:202` は「同時発注制限件数(30件)を上回っています」）。
+   * 上限の値 30 は公式の文言そのもので、設定可能にしない。
+   *
+   * **適用条件は公式ドキュメントから読み取れない。** この番号と意味は `errors.md` にしか無く、
+   * `rest-api.md` / `rest-api_JP.md` の Create new order には一言も出てこない（固定コミット
+   * `0badd680` で確認）。**数える単位を口座全体にしたのは推測である**——公式の文言が
+   * "Simultaneous orders" でペアに言及しないうえ、口座全体の方が制限が強く fail-closed 側に
+   * 倒れる。判定は `src/routes/create-order.ts`（`docs/fidelity.md` の「同時未約定注文の上限」節）。
+   *
+   * **`cancel_orders` の `40015` とは別の制限。** あちらは「1 要求あたりの `order_ids` が
+   * 30 件まで」で、こちらは「口座が同時に持てる未約定注文が 30 本まで」である。
+   * **同じ 30 なので混同されやすい**が、数える対象も断る経路も違う。
+   */
+  TOO_MANY_SIMULTANEOUS_ORDERS: 60011,
   INTERNAL: 70001,
   /**
    * "Orders on pair have been suspended." **発注停止のペアへの新規発注**に返す

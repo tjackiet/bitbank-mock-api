@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OFFICIAL_PAIRS } from "../../src/engine/pairs.ts";
 import { activeOrders } from "../../src/engine/state.ts";
+import { MAX_ACTIVE_ORDERS } from "../../src/routes/create-order.ts";
 import { buildServer } from "../../src/server/http.ts";
 import { SessionStore } from "../../src/store/session.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
@@ -555,5 +556,343 @@ describe("発注停止のペア", () => {
     const body = res.json() as { success: number; data: { status: string } };
     expect(body.success).toBe(1);
     expect(body.data.status).toBe("UNFILLED");
+  });
+});
+
+/**
+ * 同時に持てる未約定注文の本数の上限（`docs/fidelity.md` の「同時未約定注文の上限」節）。
+ *
+ * 上限の値 30 は公式のエラー定義が文言に持つ（`errors.md:202` "Too many Simultaneous orders,
+ * current limit is 30."）。**適用条件は公式ドキュメントから読み取れない**——この番号は
+ * `errors.md` にしか無く、`rest-api.md` の Create new order には出てこない。**数える単位を
+ * 口座全体にしたのは推測である。**
+ *
+ * **境界の両側を見る。** 30 本ちょうどが置けることを見ないと、「全部断る」実装でも
+ * `60011` のテストだけは通ってしまう（`cancel_orders` の `40015` と同じ理由）。
+ *
+ * **`cancel_orders` の 30 件上限（`40015`）とは別の制限。** 同じ 30 だが数える対象が違い、
+ * あちらは `tests/routes/cancel-order.test.ts` が固定している。
+ */
+describe("同時未約定注文の上限", () => {
+  const build = setupBuildTestServer();
+
+  /** 上限を数えるぶんの残高を持つ状態。1 本 0.001 btc × 5,000,000 円 ≒ 5,006 円の拘束。 */
+  const richState = () => buildState({ balances: { jpy: 10_000_000, btc: 100 } });
+
+  const place = (fastify: Awaited<ReturnType<typeof build>>["fastify"], price = 5_000_000) =>
+    fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: {
+        pair: "btc_jpy",
+        amount: "0.001",
+        price: String(price),
+        side: "buy",
+        type: "limit",
+      },
+    });
+
+  const codeOf = (res: Awaited<ReturnType<typeof place>>) =>
+    (res.json() as { success: number; data: { code?: number } }).data.code;
+
+  it("上限の値は公式のエラー定義どおり 30 本である", () => {
+    expect(MAX_ACTIVE_ORDERS).toBe(30);
+  });
+
+  it(`${MAX_ACTIVE_ORDERS} 本ちょうどは置ける`, async () => {
+    const { fastify, store } = await build(richState(), {}, { fillMode: "manual" });
+    for (let i = 0; i < MAX_ACTIVE_ORDERS; i++) {
+      const res = await place(fastify);
+      expect((res.json() as { success: number }).success).toBe(1);
+    }
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+  });
+
+  it(`${MAX_ACTIVE_ORDERS + 1} 本目は 60011 で断り、状態を一切変えない`, async () => {
+    const { fastify, store } = await build(richState(), {}, { fillMode: "manual" });
+    for (let i = 0; i < MAX_ACTIVE_ORDERS; i++) await place(fastify);
+    // 「注文が増えていない」だけでなく「状態が一切変わらない」ことを見る。判定は
+    // `store.tick()` より前にあるので、採番（`nextOrderSeq`）も `updatedAt` も動かない。
+    const before = structuredClone(store.state());
+    const res = await place(fastify);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(60011);
+    expect(store.state()).toEqual(before);
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+    expect(store.state().orders).toHaveLength(MAX_ACTIVE_ORDERS);
+  });
+
+  it("1 本取り消して 29 本にすると、また置ける", async () => {
+    const { fastify, store } = await build(richState(), {}, { fillMode: "manual" });
+    for (let i = 0; i < MAX_ACTIVE_ORDERS; i++) await place(fastify);
+    expect(codeOf(await place(fastify))).toBe(60011);
+
+    const canceled = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "btc_jpy", order_id: 1 },
+    });
+    expect((canceled.json() as { success: number }).success).toBe(1);
+    // 終端（`CANCELED_UNFILLED`）は `STATUS_KIND` の `"terminal"` なので数に入らない。
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS - 1);
+    expect(store.state().orders).toHaveLength(MAX_ACTIVE_ORDERS);
+
+    expect((await place(fastify)).json()).toMatchObject({ success: 1 });
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+  });
+
+  /**
+   * **部分約定した注文は数に入る。** `PARTIALLY_FILLED` は `STATUS_KIND` の `"active"` で、
+   * `activeOrders()` が返す。数え方を `activeOrders()` に寄せたことの要点がここで、
+   * 「未約定 = `UNFILLED` だけ」と読み替えた実装ならこのテストが落ちる。
+   *
+   * 部分約定は `/_control/orders/:id/fill` で起こす（残量の一部だけを約定させる）。
+   * state を手で組むと trade 記録と `executedAmount` の整合（不変量 5）を自分で保つ必要があり、
+   * 実際の遷移を通したほうが確かである。
+   */
+  it("部分約定した注文も数に入る", async () => {
+    const { fastify, store } = await build(
+      richState(),
+      {},
+      {
+        fillMode: "manual",
+        controlEnabled: true,
+      },
+    );
+    for (let i = 0; i < MAX_ACTIVE_ORDERS; i++) await place(fastify);
+
+    const filled = await fastify.inject({
+      method: "POST",
+      url: "/_control/orders/1/fill",
+      payload: { amount: 0.0005 },
+    });
+    expect(filled.statusCode).toBe(200);
+    const target = store.state().orders.find((o) => o.id === "1");
+    expect(target?.status).toBe("PARTIALLY_FILLED");
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+
+    expect(codeOf(await place(fastify))).toBe(60011);
+
+    // 残量まで約定させて終端（`FULLY_FILLED`）にすると枠が空く。
+    const rest = await fastify.inject({
+      method: "POST",
+      url: "/_control/orders/1/fill",
+      payload: {},
+    });
+    expect(rest.statusCode).toBe(200);
+    expect(store.state().orders.find((o) => o.id === "1")?.status).toBe("FULLY_FILLED");
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS - 1);
+    expect((await place(fastify)).json()).toMatchObject({ success: 1 });
+  });
+
+  /**
+   * **`INACTIVE` は数に入らない**（`STATUS_KIND` の `"pending"`）。Plan A に `INACTIVE` へ
+   * 到達する経路は無いので、状態を直接組んで固定する。ここを `"active"` 側に読み替えた
+   * 実装はこのテストで落ちる。
+   */
+  it("INACTIVE の注文は数に入らない", async () => {
+    const orders = Array.from({ length: MAX_ACTIVE_ORDERS }, (_, i) =>
+      buildOrder({ id: String(i + 1), status: "INACTIVE" }),
+    );
+    const { fastify, store } = await build(
+      buildState({ balances: { jpy: 10_000_000 }, orders }),
+      {},
+      { fillMode: "manual" },
+    );
+    expect(activeOrders(store.state())).toHaveLength(0);
+    expect((await place(fastify)).json()).toMatchObject({ success: 1 });
+  });
+
+  /**
+   * **単位は口座全体で、ペアで分けない**（推測。`docs/fidelity.md` の
+   * 「同時未約定注文の上限」節）。公式の文言が "Simultaneous orders" でペアに言及しないうえ、
+   * 口座全体の方が制限が強く fail-closed 側に倒れる。
+   *
+   * **Plan A の契約範囲（`btc_jpy` の指値）ではこの区別は付かない**——付かないからこそ、
+   * どちらを選んだかをテストで固定しておく。
+   */
+  it("別のペアの未約定注文も同じ 1 本として数える", async () => {
+    const { fastify, store } = await build(
+      buildState({ balances: { jpy: 10_000_000, btc: 100 } }),
+      {},
+      { fillMode: "manual" },
+    );
+    for (let i = 0; i < MAX_ACTIVE_ORDERS; i++) {
+      const res = await fastify.inject({
+        method: "POST",
+        url: "/v1/user/spot/order",
+        payload: { pair: "xrp_jpy", amount: "1", price: "1", side: "buy", type: "limit" },
+      });
+      expect((res.json() as { success: number }).success).toBe(1);
+    }
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+    // `btc_jpy` は 1 本も無いが、口座全体で 30 本あるので断る。
+    expect(codeOf(await place(fastify))).toBe(60011);
+  });
+
+  /**
+   * **成行の新規発注も検査を通る。** その場で全量約定して active には残らないが、
+   * 受ける時点では 1 本の新規注文である。実 API が成行を数から除くかは分からない
+   * （`docs/fidelity.md` の「同時未約定注文の上限」節）。
+   */
+  it("上限に達していると成行も 60011 で断る", async () => {
+    const orders = Array.from({ length: MAX_ACTIVE_ORDERS }, (_, i) =>
+      buildOrder({ id: String(i + 1), price: 5_000_000, startAmount: 0.001 }),
+    );
+    const { fastify, store } = await build(
+      buildState({ balances: { jpy: 10_000_000 }, orders }),
+      {
+        btc_jpy: [
+          candle(
+            Date.parse("2026-01-01T00:01:00.000Z"),
+            5_000_000,
+            5_000_000,
+            5_000_000,
+            5_000_000,
+          ),
+        ],
+      },
+      { fillMode: "manual" },
+    );
+    const before = structuredClone(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", side: "buy", type: "market" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(60011);
+    expect(store.state()).toEqual(before);
+    expect(store.state().trades).toHaveLength(0);
+  });
+
+  /**
+   * **断ったとき market モードの約定も進まない。** 判定を `store.tick()` より前に置いた
+   * 理由そのものを固定する。
+   *
+   * 上の「状態を一切変えない」テストは `fillMode: "manual"` なので、**判定を `tick()` の
+   * 後ろへ動かしても通ってしまう**（manual の `tick()` は何もしない）。ここは market モードで
+   * **指値に当たる足を渡す**ので、判定が `tick()` の後ろにあれば 30 本が約定して状態が動く。
+   *
+   * `cancel_orders` の件数上限（`40015`）のテストも足を渡していないので、この性質を
+   * 押さえているのはここだけである。
+   */
+  it("断るとき market モードの約定も進めない（判定が tick より前）", async () => {
+    const t0 = Date.now() - 120_000;
+    const orders = Array.from({ length: MAX_ACTIVE_ORDERS }, (_, i) =>
+      buildOrder({
+        id: String(i + 1),
+        price: 5_000_000,
+        startAmount: 0.001,
+        orderedAt: new Date(t0).toISOString(),
+        updatedAt: new Date(t0).toISOString(),
+      }),
+    );
+    const { fastify, store } = await build(
+      buildState({
+        balances: { jpy: 10_000_000 },
+        lastTickAt: new Date(t0).toISOString(),
+        orders,
+      }),
+      // 安値が指値を下回るので、tick が走れば 30 本とも買いに当たる。
+      { btc_jpy: [candle(t0 + 60_000, 5_000_000, 5_000_000, 4_900_000, 4_950_000)] },
+      // fillMode は既定の "market"（渡さない）。
+    );
+    const before = structuredClone(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(60011);
+    // 1 本も約定していない（`tick()` へ到達していない）。
+    expect(store.state()).toEqual(before);
+    expect(store.state().trades).toHaveLength(0);
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+  });
+
+  /**
+   * **並行要求でも上限を超えない**（CodeRabbit の指摘で足した。PR #78 のレビュー）。
+   *
+   * 上限の判定は 1 段目を `store.tick()` より前に置いている。**その `await` をまたいで
+   * 並行要求が割り込むと、2 本とも 1 段目を通ってしまう。** 実測すると、29 本の状態へ
+   * 4 本同時に投げて **33 本**になった（`fillMode: "market"` で足取得を遅らせた隔離コピー）。
+   * だから `placeOrder()` の直前に 2 段目を置いた。`SessionStore.commit()` は `replace()` を
+   * **同期に**実行してから `persist()` を待つので、数え直しから `commit()` の呼び出しまでに
+   * `await` を挟まない限り他の要求は割り込めない。
+   *
+   * **窓を広げるために足取得を遅らせる。** 既定の速い store では 4 本投げても割り込みが
+   * 起きず、2 段目を外しても通ってしまう（実測した）。`fetchCandles` を 20ms 待たせると
+   * `tick()` の `await` が実際に待つので、2 段目を外せばこのテストが落ちる。
+   */
+  it("並行要求でも上限を超えない（tick の await をまたいでも）", async () => {
+    const orders = Array.from({ length: MAX_ACTIVE_ORDERS - 1 }, (_, i) =>
+      buildOrder({ id: String(i + 1), price: 5_000_000, startAmount: 0.001 }),
+    );
+    const store = new SessionStore(buildState({ balances: { jpy: 10_000_000 }, orders }), {
+      path: null,
+      fillMode: "market",
+      fetchCandles: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { success: true, data: [] };
+      },
+    });
+    const fastify = await buildServer({ store, logger: false, controlEnabled: false });
+    try {
+      const responses = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          fastify.inject({
+            method: "POST",
+            url: "/v1/user/spot/order",
+            payload: {
+              pair: "btc_jpy",
+              amount: "0.001",
+              price: "5000000",
+              side: "buy",
+              type: "limit",
+            },
+          }),
+        ),
+      );
+      const bodies = responses.map((r) => r.json() as { success: number; data: { code?: number } });
+      // 空いている枠は 1 つなので、通るのは 1 本だけ。残りは 60011。
+      expect(bodies.filter((b) => b.success === 1)).toHaveLength(1);
+      for (const b of bodies.filter((x) => x.success === 0)) {
+        expect(b.data.code).toBe(60011);
+      }
+      expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+    } finally {
+      await fastify.close();
+    }
+  });
+
+  /**
+   * **上限は発注だけの検査で、状態の妥当性検査ではない。** この規則より前に書かれた状態
+   * ファイルには 31 本以上の未約定注文が残り得る。読み込みも照会も取消も通す
+   * （`docs/fidelity.md` の「同時未約定注文の上限」節。停止ペアの注文を消せるようにして
+   * あるのと同じ理由で、取り除く手段を塞がない）。
+   */
+  it("31 本の未約定注文を持つ state を読み込め、取消もできる", async () => {
+    const orders = Array.from({ length: MAX_ACTIVE_ORDERS + 1 }, (_, i) =>
+      buildOrder({ id: String(i + 1), price: 5_000_000, startAmount: 0.001 }),
+    );
+    const { fastify, store } = await build(
+      buildState({ balances: { jpy: 10_000_000 }, orders }),
+      {},
+      { fillMode: "manual" },
+    );
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS + 1);
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_order",
+      payload: { pair: "btc_jpy", order_id: 31 },
+    });
+    expect((res.json() as { success: number }).success).toBe(1);
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
   });
 });

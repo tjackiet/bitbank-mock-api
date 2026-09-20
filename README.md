@@ -43,6 +43,8 @@ bitbank Private REST API に対応する互換ルートは次の 7 パス・8 �
 
 **`order_ids` の 30 件上限は `cancel_orders` にだけあります**（公式 `rest-api.md` の `cancel_orders` のパラメータ表が "Up to 30 ids can be specified" と書き、`orders_info` の表には上限の記載がありません）。超えると `40015` で断り、**1 件も取り消しません**。`orders_info` には上限を設けていません（非対称は公式どおりです。[`docs/fidelity.md`](docs/fidelity.md) の「一括取消の件数上限」の節）。
 
+**未約定の注文は口座全体で 30 本までです**（公式 `errors.md` の `60011`「Too many Simultaneous orders, current limit is 30.」）。既に 30 本あるときの新規発注は `60011` で断り、**状態を一切変えません**。**上の `cancel_orders` の「1 要求あたり 30 ID」とは別の制限です**——同じ 30 でも数える対象が違い（載せる ID の件数と、同時に持てる注文の本数）、単位を口座全体にしたのは推測です（[`docs/fidelity.md`](docs/fidelity.md) の「同時未約定注文の上限」の節）。
+
 **`trade_history` は `from_id` / `end_id` を持ちません**（公式 `rest-api.md` のパラメータ表に無いため。送られても黙って無視します。実 API は絞り込みに使うので、同じ要求で結果が変わります。経緯は [`docs/fidelity.md`](docs/fidelity.md) の「絞り込みパラメータの不正値」の節）。
 
 実際に叩く例は [`examples/scenario-plan-a.sh`](examples/scenario-plan-a.sh) にあります。`/_control/` の 5 経路は下の「[`/_control/`](#_control)」節です。
