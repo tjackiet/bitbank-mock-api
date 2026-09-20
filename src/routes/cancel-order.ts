@@ -6,6 +6,18 @@ import { ErrorCode, err, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
 
+/**
+ * `cancel_orders` の `order_ids` の上限。公式のパラメータ表が持つ値そのもの
+ * （`rest-api.md:548` "order ids. Up to 30 ids can be specified" / `rest-api_JP.md:556`
+ * 「注文ID。最大30個まで指定可能」。コミット `0badd680`）。
+ *
+ * **この上限は `cancel_orders` にだけある。** `orders_info` の `order_ids` には公式の記載が
+ * 無いので（`rest-api.md:600` / `rest-api_JP.md:608`）、`src/routes/order-info.ts` には
+ * 同じ検査を置かない。**非対称は公式の仕様なので、揃えないこと**
+ * （`docs/fidelity.md` の「一括取消の件数上限」節）。
+ */
+export const MAX_CANCEL_ORDER_IDS = 30;
+
 function terminalCancelCode(order: OrderRecord): number | null {
   if (order.status === "CANCELED_UNFILLED" || order.status === "CANCELED_PARTIALLY_FILLED") {
     return ErrorCode.ALREADY_CANCELED;
@@ -53,6 +65,17 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = CancelOrdersRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       return err(ErrorCode.INVALID_PARAMETER);
+    }
+    // 件数の上限は**状態を触る前**に見る。`store.tick()` は market モードで約定を state へ
+    // 入れるので、後ろに置くと「断ったのに状態が変わった」になる。断ったときは 1 件も
+    // 取り消さないだけでなく、約定も進めない。
+    //
+    // 位置をスキーマ検証の**後**にしたのは、`order_ids` が id の配列であることを先に
+    // 確かめてから数えるためである。**31 件のうち 1 件が不正値だったときどちらのコードが
+    // 勝つかは実測していない**（実 API で取消を測れない）。既存の（実測済みの）優先順を
+    // 動かさない位置に足した（`docs/fidelity.md` の「一括取消の件数上限」節）。
+    if (parsed.data.order_ids.length > MAX_CANCEL_ORDER_IDS) {
+      return err(ErrorCode.TOO_MANY_ORDERS);
     }
     const store = fastify.store;
     await store.tick();

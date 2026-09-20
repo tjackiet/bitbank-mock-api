@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeOrders } from "../../src/engine/state.ts";
+import { MAX_CANCEL_ORDER_IDS } from "../../src/routes/cancel-order.ts";
 import { buildOrder, buildState, buildTrade } from "../engine/helpers.ts";
 import { setupBuildTestServer } from "./helpers.ts";
 import {
@@ -100,6 +101,19 @@ describe("POST /v1/user/spot/cancel_order", () => {
     expect(body.data.code).toBe(30006);
   });
 });
+
+/** `1` から `n` までの id。件数の境界を見るテストが使う。 */
+function openOrderIds(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => String(i + 1));
+}
+
+/** 与えた id の未約定の指値買いだけを持つ状態。残高は全件の拘束を賄える額にする。 */
+function stateWithOpenOrders(ids: string[]) {
+  return buildState({
+    balances: { jpy: 10_000_000 },
+    orders: ids.map((id) => buildOrder({ id })),
+  });
+}
 
 describe("POST /v1/user/spot/cancel_orders", () => {
   const build = setupBuildTestServer();
@@ -227,6 +241,57 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     expect(body.success).toBe(0);
     expect(body.data.code).toBe(20003);
     expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+  });
+
+  /**
+   * `order_ids` の 30 件上限（`docs/fidelity.md` の「一括取消の件数上限」節）。
+   *
+   * 上限の値は公式のパラメータ表に明記されている（`rest-api.md:548` "Up to 30 ids can be
+   * specified"）。**境界の両側を見る**——30 件ちょうどが通ることを見ないと、「全部断る」
+   * 実装でも `40015` のテストだけは通ってしまう。
+   *
+   * **`orders_info` には同じ上限が無い**（公式に記載が無い）。その非対称は
+   * `tests/routes/order-info.test.ts` が 31 件を受け付ける側で固定している。
+   */
+  it("上限の値は公式のパラメータ表どおり 30 件である", () => {
+    expect(MAX_CANCEL_ORDER_IDS).toBe(30);
+  });
+
+  it(`cancels exactly ${MAX_CANCEL_ORDER_IDS} ids`, async () => {
+    const ids = openOrderIds(MAX_CANCEL_ORDER_IDS + 1);
+    const { fastify, store } = await build(stateWithOpenOrders(ids));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: ids.slice(0, MAX_CANCEL_ORDER_IDS) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { success: number; data: { orders: unknown[] } };
+    expect(body.success).toBe(1);
+    expect(body.data.orders).toHaveLength(MAX_CANCEL_ORDER_IDS);
+    // 上限ちょうどは素通しなので、残るのは超過分の 1 件だけ。
+    expect(activeOrders(store.state()).map((o) => o.id)).toEqual([
+      ids[MAX_CANCEL_ORDER_IDS] as string,
+    ]);
+  });
+
+  it(`returns 40015 for ${MAX_CANCEL_ORDER_IDS + 1} ids and changes no state`, async () => {
+    const ids = openOrderIds(MAX_CANCEL_ORDER_IDS + 1);
+    const { fastify, store } = await build(stateWithOpenOrders(ids));
+    // 「1 件も取り消さない」だけでなく「状態が一切変わらない」ことを見る。
+    // 件数の検査は `store.tick()` より前にあるので、約定も進まない。
+    const before = structuredClone(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/cancel_orders",
+      payload: { pair: "btc_jpy", order_ids: ids },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(40015);
+    expect(store.state()).toEqual(before);
+    expect(activeOrders(store.state())).toHaveLength(ids.length);
   });
 });
 

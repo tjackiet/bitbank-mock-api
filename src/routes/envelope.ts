@@ -72,6 +72,21 @@ export const ErrorCode = {
    * **空配列も弾かれる**点に注意。モックは以前 `success: 1` と空の一覧を返していた。
    */
   INVALID_ORDER_ID_ARRAY: 40014,
+  /**
+   * "Too many orders are specified." **`cancel_orders` の `order_ids` が 30 件を超えたとき**に
+   * 返す。上限そのものは公式のパラメータ表に書かれている（`rest-api.md:548`
+   * "order ids. Up to 30 ids can be specified"、`rest-api_JP.md:556`
+   * 「注文ID。最大30個まで指定可能」。いずれもコミット `0badd680`）。
+   *
+   * **超過したとき実 API がこの番号を返すことは実測していない。** 取消の実測には実弾の注文が
+   * 要るため測れず、`errors.md:111` の番号と意味（「指定された注文が多すぎる」）から選んだ。
+   *
+   * **この上限は `cancel_orders` にだけある。** `orders_info`（Fetch multiple orders）の
+   * `order_ids` には公式に上限の記載が無い（`rest-api.md:600` / `rest-api_JP.md:608` は
+   * どちらも "order ids" / 「注文ID」だけ）。揃えたくなっても足さないこと
+   * （`docs/fidelity.md` の「一括取消の件数上限」節）。
+   */
+  TOO_MANY_ORDERS: 40015,
   /** "Invalid asset." 実 API は不正なペアにこれを返す（2026-09-17 実測）。絞り込み群ではない。 */
   INVALID_ASSET: 40017,
   INVALID_SINCE: 40022, // "Invalid trading start time."
