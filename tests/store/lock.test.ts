@@ -196,13 +196,45 @@ describe("acquireStateLock", () => {
     expect((await readFile(lock.path, "utf8")).trim()).toBe(String(process.pid));
   });
 
-  it("pid が読めないロックは奪わない", async () => {
-    // 空のロックファイルは、別プロセスが wx で作った直後でまだ pid を書いていない
-    // 瞬間にも現れる。「中身が無い＝死んでいる」と扱うと、防ぎたい二重起動をここで作る。
+  /**
+   * 空のロックファイルは、別プロセスが `wx` で作った直後でまだ pid を書いていない
+   * 瞬間にも現れる。「中身が無い＝死んでいる」と扱うと、防ぎたい二重起動をここで作る。
+   *
+   * **断ることだけを見ても足りない。** `readHolderPid()` の `pid <= 0` を `< 0` に
+   * 変えると `Number("")` も `Number("   \n")` も `Number("0")` も **`0`** なので、
+   * そのまま pid として返る。すると `isAlive(0)` が `process.kill(0, 0)`（自プロセス
+   * グループへの送信）で成功して「生きている」判定になり、**それでも
+   * `StateLockedError` が出る**——エラーの型だけを見ていると気づけない（実測）。
+   *
+   * つまり「保持プロセスを特定できなかった」経路を通ったことまで見る必要がある。
+   * これは利用者向けの契約でもある: 特定できていないのに「pid 0 が使用中です」と
+   * 出すと、消していいかの判断を誤らせる。
+   */
+  it("pid が読めないロックは奪わず、保持プロセスを特定できないと伝える", async () => {
     for (const content of ["", "   \n", "not-a-pid", "-1", "0", "1.5"]) {
+      await writeFile(stateLockPath(statePath), content, "utf8");
+      const where = `content=${JSON.stringify(content)}`;
+      const e = await acquireStateLock(statePath).catch((err: unknown) => err);
+
+      expect(e, where).toBeInstanceOf(StateLockedError);
+      expect((e as StateLockedError).holderPid, where).toBeNull();
+      expect((e as StateLockedError).message, where).toContain("保持プロセスを特定できません");
+    }
+  });
+
+  it("非正の pid を生死判定へ渡さない", async () => {
+    // `process.kill(0, 0)` は自プロセスグループへ、`process.kill(-1, 0)` は送れる
+    // 全プロセスへ送る。**どちらも例外にならないので `isAlive()` は true を返す**（実測）。
+    // 存在確認のつもりが別の意味の送信になるうえ、居もしないプロセスを「生きている」と
+    // 判定する。非正の pid は `readHolderPid()` で落とし、ここへ来させない。
+    const kill = vi.spyOn(process, "kill");
+
+    for (const content of ["0", "-1", "-999", "", "   \n"]) {
       await writeFile(stateLockPath(statePath), content, "utf8");
       await expect(acquireStateLock(statePath)).rejects.toThrow(StateLockedError);
     }
+
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it("生死を判定できないときは奪わない", async () => {
