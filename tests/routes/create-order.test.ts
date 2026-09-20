@@ -770,6 +770,53 @@ describe("同時未約定注文の上限", () => {
   });
 
   /**
+   * **断ったとき market モードの約定も進まない。** 判定を `store.tick()` より前に置いた
+   * 理由そのものを固定する。
+   *
+   * 上の「状態を一切変えない」テストは `fillMode: "manual"` なので、**判定を `tick()` の
+   * 後ろへ動かしても通ってしまう**（manual の `tick()` は何もしない）。ここは market モードで
+   * **指値に当たる足を渡す**ので、判定が `tick()` の後ろにあれば 30 本が約定して状態が動く。
+   *
+   * `cancel_orders` の件数上限（`40015`）のテストも足を渡していないので、この性質を
+   * 押さえているのはここだけである。
+   */
+  it("断るとき market モードの約定も進めない（判定が tick より前）", async () => {
+    const t0 = Date.now() - 120_000;
+    const orders = Array.from({ length: MAX_ACTIVE_ORDERS }, (_, i) =>
+      buildOrder({
+        id: String(i + 1),
+        price: 5_000_000,
+        startAmount: 0.001,
+        orderedAt: new Date(t0).toISOString(),
+        updatedAt: new Date(t0).toISOString(),
+      }),
+    );
+    const { fastify, store } = await build(
+      buildState({
+        balances: { jpy: 10_000_000 },
+        lastTickAt: new Date(t0).toISOString(),
+        orders,
+      }),
+      // 安値が指値を下回るので、tick が走れば 30 本とも買いに当たる。
+      { btc_jpy: [candle(t0 + 60_000, 5_000_000, 5_000_000, 4_900_000, 4_950_000)] },
+      // fillMode は既定の "market"（渡さない）。
+    );
+    const before = structuredClone(store.state());
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: { pair: "btc_jpy", amount: "0.001", price: "5000000", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(60011);
+    // 1 本も約定していない（`tick()` へ到達していない）。
+    expect(store.state()).toEqual(before);
+    expect(store.state().trades).toHaveLength(0);
+    expect(activeOrders(store.state())).toHaveLength(MAX_ACTIVE_ORDERS);
+  });
+
+  /**
    * **上限は発注だけの検査で、状態の妥当性検査ではない。** この規則より前に書かれた状態
    * ファイルには 31 本以上の未約定注文が残り得る。読み込みも照会も取消も通す
    * （`docs/fidelity.md` の「同時未約定注文の上限」節。停止ペアの注文を消せるようにして
