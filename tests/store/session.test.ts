@@ -576,11 +576,16 @@ describe("SessionStore の足の取得の健全性", () => {
   const fetchError = (pair: string) =>
     `candles HTTP 500 for http://127.0.0.1:9/${pair}/candlestick/1min/20260101`;
 
+  /** どのペアでも必ず失敗する取得。`fetchOneDay()` が返す形の理由を載せる。 */
   const failingFetch = (): FetchCandles => async (pair) => ({
     success: false,
     error: fetchError(pair),
   });
 
+  /**
+   * `btc_jpy` の active な注文を 1 本だけ持つ store。**market では tick() が取りに行く
+   * ペアが 1 つある**状態を作るためのもので、`fillMode` と取得の実装だけを入れ替える。
+   */
   function storeWithOrder(opts: {
     fetchCandles: FetchCandles;
     fillMode?: "manual" | "market";
@@ -787,6 +792,61 @@ describe("SessionStore の足の取得の健全性", () => {
     const health = store.candlesHealth();
     expect(health.consecutiveFailures).toBe(0);
     expect(health.lastError?.message).toBe(fetchError("btc_jpy"));
+  });
+
+  /**
+   * 取得を止めたまま返す store。`release` に窓の終端ごとの解決関数が入るので、
+   * **完了の順を呼び出し側で決められる**（並行した取得が順不同に着く筋を組み立てる）。
+   */
+  function gatedStore(outcome: (toMs: number) => Awaited<ReturnType<FetchCandles>>) {
+    const release = new Map<number, () => void>();
+    const store = new SessionStore(buildState(), {
+      path: null,
+      fillMode: "manual",
+      fetchCandles: (_pair, _fromMs, toMs) =>
+        new Promise((resolve) => {
+          release.set(toMs, () => resolve(outcome(toMs)));
+        }),
+    });
+    return { store, release };
+  }
+
+  // 互換ルートは並行に叩かれるので、取得も開始の順に完了するとは限らない。素直に上書き
+  // すると「いつまで足が取れていたか」が実際より手前に見える。
+  it("後から完了した古い取得が lastSuccessAt を巻き戻さない", async () => {
+    const { store, release } = gatedStore(() => ({ success: true, data: [] }));
+    const older = store.getLatestPrice("btc_jpy", T0 + MIN);
+    const newer = store.getLatestPrice("btc_jpy", T0 + 2 * MIN);
+
+    // 後から始めた新しいほうを先に完了させる。
+    release.get(T0 + 2 * MIN)?.();
+    await newer;
+    expect(store.candlesHealth().lastSuccessAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+
+    release.get(T0 + MIN)?.();
+    await older;
+    expect(store.candlesHealth().lastSuccessAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+  });
+
+  // 同じことを失敗の側でも見る。ただし**連続失敗数は完了した順に数える**（新しいほうが
+  // 先に完了したら古い失敗を捨てる形にすると、lastError が null のままになる経路ができる）。
+  it("後から完了した古い失敗が lastError を塗り替えないが、連続失敗数には数える", async () => {
+    const { store, release } = gatedStore((toMs) => ({
+      success: false,
+      error: `candles HTTP 500 at ${toMs}`,
+    }));
+    const older = store.getLatestPrice("btc_jpy", T0 + MIN);
+    const newer = store.getLatestPrice("btc_jpy", T0 + 2 * MIN);
+
+    release.get(T0 + 2 * MIN)?.();
+    await newer;
+    release.get(T0 + MIN)?.();
+    await older;
+
+    const health = store.candlesHealth();
+    expect(health.lastError?.at).toBe(new Date(T0 + 2 * MIN).toISOString());
+    expect(health.lastError?.message).toBe(`candles HTTP 500 at ${T0 + 2 * MIN}`);
+    expect(health.consecutiveFailures).toBe(2);
   });
 
   // 失敗を互換ルートの応答へ漏らさない（実 API に無い情報であり、封筒の契約を壊す）。

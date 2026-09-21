@@ -61,7 +61,13 @@ export type CandlesHealth = {
    * **成功しても消さない**（`persist` と同じ。「一度でも失敗したか」が残る）。
    */
   lastError: { at: string; message: string } | null;
-  /** 取得が連続で失敗した回数。1 回でも成功すると 0 に戻る。 */
+  /**
+   * 取得が連続で失敗した回数。1 回でも成功すると 0 に戻る。
+   *
+   * 数えるのは**完了した順**である（互換ルートから並行に走る取得は、開始の順に完了すると
+   * は限らない）。「最後に完了した取得が失敗だったか」は正しく出るが、開始の順に数えた
+   * 回数とは限らない。下の 2 つの時刻はそうならないよう順序を見て記録する。
+   */
   consecutiveFailures: number;
   /**
    * 直近に取得へ成功した時刻。まだ一度も成功していなければ `null`。
@@ -81,6 +87,22 @@ export type CandlesHealth = {
    */
   fillMode: FillMode;
 };
+
+/**
+ * 記録済みの時刻（まだ無ければ `null`）に対して、この取得のほうが古くないか。
+ *
+ * 足の取得は互換ルートから並行に走るので、**開始の順に完了するとは限らない**——遅い要求の
+ * 応答が、後から始まって先に返った要求の後に着く。素直に上書きすると `lastSuccessAt` が
+ * 巻き戻り（「いつまで足が取れていたか」を実際より手前に見せる）、`lastError` が古い失敗で
+ * 塗り替わる。ここで弾けば、どちらも**実際にあった取得のうち最も新しいもの**を指したままに
+ * なる。比べるのは取得範囲の終端（`toMs`）で、記録済みの側は自分で作った ISO 文字列なので
+ * `Date.parse` は往復して一致する。
+ *
+ * 同じミリ秒なら通す（後から完了したほうの理由を載せる）。
+ */
+function isNotOlderThan(ms: number, recorded: string | null): boolean {
+  return recorded === null || ms >= Date.parse(recorded);
+}
 
 export type SessionStoreOptions = {
   fetchCandles?: FetchCandles;
@@ -188,6 +210,13 @@ export class SessionStore {
    *
    * 記録する時刻は取得範囲の終端（`toMs`）。どちらの呼び出し側でもその回の `nowMs` なので、
    * `lastTickAt` と同じ基準になり、並べて読める。
+   *
+   * **時刻の 2 つは巻き戻さない**（`isNotOlderThan`）。互換ルートから並行に走る取得は開始の
+   * 順に完了するとは限らないので、古い取得が後から着いても `lastSuccessAt` と `lastError` は
+   * 最も新しいものを指したままにする。**連続失敗数には同じ番人を置かない**——「新しいほうが
+   * 先に完了したら古い失敗を捨てる」形にすると、失敗を 1 件も記録しないまま
+   * `lastError` が `null` のままになる経路ができ、「一度でも失敗したか」が残るという
+   * この health の約束を破る。数えるのは完了した順のままでよい。
    */
   private async fetchCandlesTracked(
     pair: string,
@@ -196,14 +225,21 @@ export class SessionStore {
   ): Promise<Result<Candle[]>> {
     const r = await this.fetchCandles(pair, fromMs, toMs);
     const at = new Date(toMs).toISOString();
+    const health = this._candlesHealth;
     if (r.success) {
-      this._candlesHealth = { ...this._candlesHealth, consecutiveFailures: 0, lastSuccessAt: at };
+      this._candlesHealth = {
+        ...health,
+        consecutiveFailures: 0,
+        lastSuccessAt: isNotOlderThan(toMs, health.lastSuccessAt) ? at : health.lastSuccessAt,
+      };
       return r;
     }
     this._candlesHealth = {
-      ...this._candlesHealth,
-      lastError: { at, message: r.error },
-      consecutiveFailures: this._candlesHealth.consecutiveFailures + 1,
+      ...health,
+      lastError: isNotOlderThan(toMs, health.lastError?.at ?? null)
+        ? { at, message: r.error }
+        : health.lastError,
+      consecutiveFailures: health.consecutiveFailures + 1,
     };
     return r;
   }
