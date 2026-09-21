@@ -12,6 +12,7 @@ API 担当レビュー後に「確認済み／要修正」列を足す。private
 - [bitbank Private REST API](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/rest-api.md)（2026-09-11 確認）
 - [bitbank error codes](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/errors.md)（2026-09-11 確認）
 - [bitbank pair list](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/pairs.md)（2026-09-11 確認）
+- [bitbank private stream](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/private-stream.md)（2026-09-21 確認）
 
 ## v0.1.0 からの改訂
 
@@ -70,6 +71,8 @@ API 担当レビュー後に「確認済み／要修正」列を足す。private
 
 項目ごとに 1 小節。**「モックの挙動」が本文、残りの 4 列が箇条書き**である。v0.1.0 までは 1 項目 1 行の表だったが、1 行が 5,000 文字を超えて `grep` でも部分読みでも扱えなくなったため、内容を変えずに小節へ移した。
 
+**根拠の読み方**: 公式を根拠に引くときは、**フィールド表・JSON 応答例・本文の注記を全部突き合わせる。** 一致しないときは、**一致しないこと自体を記録する**——どちらかを正に選ばない。1 箇所だけを読んで断定した記述が実際に 3 件入り込んだ（注文ステータスの英日差を 1 つの節だけで判断した件、`asset_update` のキーを応答例だけで camelCase と断定した件、`spot_order_invalidation` の `params` を「公式通り配列」と書いた件。後の 2 件は下の該当節が持つ）。
+
 ### 注文照会
 
 `GET /v1/user/spot/order`（query: `pair`, `order_id`）と `POST /v1/user/spot/orders_info`（body: `pair`, `order_ids`）を実装する。ヒットした `OrderRecord` を `formatOrder()` で返す
@@ -101,20 +104,23 @@ API 担当レビュー後に「確認済み／要修正」列を足す。private
 
 `INACTIVE` を含む公式の 7 値を `OrderRecord.status` に持つ。Plan A で `INACTIVE` は到達しない
 
-**状態の集合は公式文書の中で揺れている。** 固定コミット `0badd680` の status enum を 3 節 × 2 言語で比べると、`REJECTED` を含む節と含まない節が言語版ごとに食い違う。
+**状態の集合は公式文書の中で揺れている。** 固定コミット `0badd680` の status enum を REST の 3 節と private stream の 1 節 × 2 言語で比べると、`REJECTED` を含む節と含まない節が言語版ごとに食い違う。
 
 | 節 | 英語版 | 日本語版 |
 | --- | --- | --- |
 | Fetch order information | **7 値（`REJECTED` あり）** `rest-api.md:310` | 6 値（なし） `rest-api_JP.md:318` |
 | Create new order | 6 値（なし） `rest-api.md:401` | **7 値（`REJECTED` あり）** `rest-api_JP.md:409` |
 | Cancel order | 6 値（なし） `rest-api.md:487` | 6 値（なし） `rest-api_JP.md:495` |
+| private stream `spot_order_new` | 6 値（なし） `private-stream.md:130` | 6 値（なし） `private-stream_JP.md:131` |
+
+**private stream の行は 2026-09-21 に足した 7 / 8 つ目のデータ点で、結論は変えない。** `spot_order` は「内容は `spot_order_new` と同一」と公式が明記するので（`private-stream.md:176` / `private-stream_JP.md:177`）、列挙は 1 つ分として数えている。**含まない側に 2 点増えたが、`REJECTED` の存在の根拠は動かない**——REST の 2 箇所（英語版の Fetch order information と日本語版の Create new order）が変わらず定義しており、増えたのは「どの節が列挙するか」の揺れの側である。むしろ**節の列挙の完全性を根拠に使えない**という下の留保が補強された。
 
 読み方は 3 つ。(1) **`REJECTED` は両方の言語版に現れる**ので、**状態としての存在は公式に裏付けられている**。英語版だけが定義しているのではない。(2) 食い違っているのは**どの節が列挙するか**であって、状態の存在ではない。したがって「英語版を採用して 7 値にした」という説明は誤りで、書いてはいけない。(3) Cancel order の応答表には**どちらの言語版にも無い**。
 
 **実装から到達可能な status と、公式の各節の列挙は別の話なので混同しない。** モックが `OrderRecord.status` に 7 値を持つのは状態モデルの話で、経路ごとに返し得る集合は別に写してある（`tests/routes/official-fields.ts` の `OFFICIAL_FETCH_ORDER_STATUSES` / `OFFICIAL_CREATE_ORDER_STATUSES` / `OFFICIAL_CANCEL_ORDER_STATUSES` が節ごとに 3 つの定数に分けている。広い方の 7 値で全経路を検査すると、`REJECTED` を返してはいけない経路で素通りするため）。
 
-- **根拠**: REST API の status enum（上の表の 6 箇所）。**`REJECTED` の存在は英日の両方に根拠がある**（`rest-api.md:310` と `rest-api_JP.md:409`）
-- **本物との差異**: 逆指値等は未実装。**各節が列挙する集合の完全性は公式文書内で揺れている**（上の表）。本モックは `REJECTED` を状態モデルに持ち、`/_control/` から到達させられる
+- **根拠**: REST API と private stream の status enum（上の表の 8 箇所）。**`REJECTED` の存在は英日の両方に根拠がある**（`rest-api.md:310` と `rest-api_JP.md:409`）
+- **本物との差異**: 逆指値等は未実装。**各節が列挙する集合の完全性は公式文書内で揺れている**（上の表。REST 6 箇所 + private stream 2 箇所のうち、`REJECTED` を列挙するのは 2 箇所だけ）。本モックは `REJECTED` を状態モデルに持ち、`/_control/` から到達させられる
 - **推測**: いいえ（7 値の顔ぶれと `REJECTED` の存在は公式が定義する）。**ただし留保がある**——「どの経路がどの状態を返し得るか」の公式の列挙は節ごとに食い違うので、**節の列挙の完全性を根拠に使えない**。どちらの言語版が正かは実測していない
 - **利用側への含意**: 終端状態の不変性を検証対象にする。**`REJECTED` を「英語版にしか無い状態」と扱わないこと**（日本語版の Create new order にもある）。経路ごとに返り得る状態を公式の 1 節だけから決め打たず、7 値すべてを受けられるパーサにしておくのが安全側である
 
@@ -345,7 +351,7 @@ Plan A は maker / taker 表示に関わらず**単一の料率**で計算する
 
 `formatTrade()` は公式の「Fetch trade history」の応答表のうち、現物で意味を持つ 12 フィールドを全て返す。`fee_occurred_amount_quote` は公式が「現物取引では `fee_amount_quote` と同値」と明記するので同値を返す。`fee_amount_base` は base 資産の手数料を取らないので常に `"0"`
 
-- **根拠**: REST API: Fetch trade history の応答表（`fee_occurred_amount_quote | string | quote fee occurred amount which taken later. In case of spot trading, this value is same as fee_amount_quote.`）
+- **根拠**: REST API: Fetch trade history の応答表（`rest-api.md:961`。`fee_occurred_amount_quote | string | quote fee occurred amount which taken later. In case of spot trading, this value is same as fee_amount_quote.`）。**同じ節の JSON 応答例（`rest-api.md:987-1011`）はこのフィールドを持たない**——応答表にあって例に無い（2026-09-21 に上の「根拠の読み方」で突き合わせて気づいた）。**どちらが正かは実測していない**ので、本モックは**表の側**に寄せて出している。private stream の `spot_trade` は表（`private-stream.md:251`）と例（`private-stream.md:275`）の**両方**が持つので、そちらは食い違っていない
 - **本物との差異**: `fee_amount_base` の桁の刻み方は公式に記載が無く、本モックは桁を付けない素の `"0"` を返す（`fee_amount_quote` は jpy の 4 桁）。本物が `"0.00000000"` のような固定桁を返すかは**要追加確認**
 - **推測**: はい（`fee_amount_base` の表記）。いいえ（`fee_occurred_amount_quote` の値）
 - **利用側への含意**: 利用側は quote 手数料を `fee_amount_quote` と `fee_occurred_amount_quote` のどちらから読んでも同じ値になる。`fee_amount_base` の文字列表記に桁を仮定しない
@@ -610,6 +616,57 @@ Phase 5 で PubNub ではなく素の WebSocket を提供する予定
 - **本物との差異**: Plan A では障害注入は提供しない
 - **推測**: はい
 - **利用側への含意**: 利用側は順不同・重複を許容して状態を解釈する
+
+### private stream の `asset_update` のキー
+
+**キーの命名は未確定。** 公式が同じ節の中で snake_case と camelCase に分かれており、どちらを採るかは R4 実装時に決める（R4 は未実装なので、いま決める必要が無い）
+
+| 公式の箇所 | 命名 | 行 |
+| --- | --- | --- |
+| フィールド表（英） | **snake_case** `asset` / `amount_precision` / `free_amount` / `locked_amount` / `onhand_amount` / `withdrawing_amount` | `private-stream.md:80-87` |
+| JSON 応答例（英） | **camelCase** `asset` / `amountPrecision` / `freeAmount` / `lockedAmount` / `onhandAmount` / `withdrawingAmount` | `private-stream.md:89-107` |
+| フィールド表（日） | **snake_case**（英語版と同じ 6 フィールド） | `private-stream_JP.md:80-87` |
+| JSON 応答例（日） | **camelCase**（英語版と同じ） | `private-stream_JP.md:89-107` |
+
+**英日差ではなく、各言語版の内部矛盾である。** 英語版と日本語版は表どうし・例どうしが一致しており、食い違っているのは**同じ言語版の表と例のあいだ**である。本文に注記は無い（該当節は表と例だけで、どちらが正かを述べていない）。**`asset` だけは両方で同じ綴り**なので、差が出るのは残る 5 つである
+
+**`docs/plan-lab-mock.md` 3.4 には「公式はこのメッセージだけキーが camelCase」と断定して書いてあったが、これは応答例だけを読んだ誤りだった**（2026-09-21 に訂正）。フィールド表の側は REST の `GET /v1/user/assets`（`rest-api.md:189-201`）と同じ snake_case で、6 フィールドはその 11 フィールドの**名前の部分集合**になっている
+
+- **根拠**: 公式 private stream の `asset_update` 節（上の表の 4 箇所）。**固定コミット `0badd680` で確認**
+- **本物との差異**: **R4 は未実装なので、差異になり得る挙動がまだ無い。** 実 API がどちらを送るかは**実測していない**（private stream の受信には実弾の口座と PubNub 接続が要る）
+- **推測**: 判断を保留している。**どちらかを選んでいないので推測も置いていない**
+- **利用側への含意**: **この形は未確定なので、`asset_update` のキー名を前提にしたパーサを先に書かないこと。** 両方の綴りを受けられる形にしておくか、R4 の実装が決まってから書くのが安全側である
+
+### private stream の `spot_order_invalidation`
+
+**実装しない。** 公式の発生条件が本モックでは構造的に起こり得ないため（下記）。**wire 形も公式内で食い違っており未確定**
+
+| 公式の箇所 | 内容 | 行 |
+| --- | --- | --- |
+| フィールド表（英） | `order_id \| number \| order ID`——**単数の数値** | `private-stream.md:224-226` |
+| JSON 応答例（英） | `"params"` が**オブジェクト**で、中の `"order_id"` が**配列** `[1, 2, 3]` | `private-stream.md:230-239`（`params` は 234-236） |
+| フィールド表（日） | 英語版と同じ単数 `order_id \| number \| 注文ID` | `private-stream_JP.md:225-227` |
+| JSON 応答例（日） | 英語版と同じオブジェクト + 配列 | `private-stream_JP.md:231-240`（`params` は 235-237） |
+
+**二重に食い違っている。** (1) 他の 4 メソッドは `params` が**配列**なのに、この例だけ**オブジェクト**である。(2) 表は `order_id` を**単数の数値**と書くのに、例は**配列**を入れている。本文の注記（`private-stream.md:216-223` / `private-stream_JP.md:217-223`）は形について何も述べていない
+
+**発生条件は「マッチングエンジン内の資産不足」である**（`private-stream.md:218` "This notification is sent when an order is invalidated due to asset shortages within our matching engine." / `private-stream_JP.md:219`「弊社マッチングエンジン内での資産不足等の理由により、注文が無効となった場合」）。公式は続けて「頻繁には起きない」「通常の即時キャンセルは `spot_order_new` / `spot_order` か REST のエラー応答で通知される」とも書く（英 219-220 / 日 220-221）
+
+**本モックではこの条件が起こり得ない。** 根拠は 4 つで、いずれも実装を読んで確かめた。
+
+1. **発注時に残高を検査して拘束する。** `placeOrder()` は買いなら quote を `price × amount × (1 + feeRate)`、売りなら base を `amount` だけ要求し、`availableOf()`（残高 − 拘束）が足りなければ `INSUFFICIENT_FUNDS` で断る（`src/engine/transitions.ts` の残高ガード）
+2. **約定時の引き落としが拘束額を超えない。** 買いは注文価格より不利な価格を `INVALID_PRICE` で断るので約定価格 ≤ 注文価格、売りは約定量 ≤ 残量 ≤ 発注量である。どちらも 1 で拘束した分の内側に収まる
+3. **料率が途中で変わらない。** `SessionStore.feeRate` は `readonly` で、構築時に 1 度だけ決まる（`src/store/session.ts`）。`/_control/` に変える口も無い。拘束に使った料率と引き落としに使う料率が食い違わない
+4. **不変量 6（`locked <= balance`）が起動時と全遷移で保たれる。** v3 の状態ファイルがこれを破っていれば**起動しない**（下の「不変量を破る状態ファイル」節）
+
+**1 つだけ前提が崩れる経路がある。** v1 / v2 から移行してきた状態ファイルが不変量 6 を破っている場合は、起動を止めず warn を出すだけである（同じく下の「不変量を破る状態ファイル」節）。そのときアクティブ注文の資産は実際には確保されていない。**ただしそれでも invalidation にはならない**——`fillOrder()` は残高の検査を 1 つも持たず無条件に引き落とすので、起きるのは**残高が負になること**であって「資産不足で注文を無効にする」経路ではない。**本モックに約定時の資産不足を検出する箇所は存在しない**
+
+**`rejectOrder()` を流用しない。** 名前が近いので結び付けたくなるが、`REJECTED` は注文ステータスであって「無効化されたから通知する」という意味ではなく、**本番経路から呼ばれてもいない**（`/_control/` から到達させるためだけに用意してある。上の「注文状態」節）。意味の違う 2 つを 1 つにすると、利用側が学習する契約が壊れる
+
+- **根拠**: 公式 private stream の `spot_order_invalidation` 節（上の表の 4 箇所と、本文の注記 英 216-223 / 日 217-223）。**固定コミット `0badd680` で確認**
+- **本物との差異**: **このメソッドを一切送らない。** 未実装は非目標であって欠陥ではないという既存の扱いに乗せる（上記のとおり、発生条件が構造的に起こり得ないため模す対象が無い）。**実 API が実際にどの形で送るかは実測していない**（受信には実弾の口座が要る）
+- **推測**: 一部はい。**発生条件が起こり得ないことは実装から導いた**（推測ではない）。**実 API がこの条件をどう作るかと、wire 形のどちらが正かは未確定**
+- **利用側への含意**: **このメッセージは飛んでこない。** 本番で受け取り得るので、利用側のパーサはモックで踏まないまま本番で初めて通る。**`params` の形が公式内で食い違っている**ので、配列とオブジェクトの両方を受けられるようにしておくこと。また**このモックで「invalidation は来ない」という契約を学習しないこと**
 
 ## ペア
 
