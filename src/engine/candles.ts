@@ -63,16 +63,42 @@ export function isValidCandle(c: Candle): boolean {
   return low <= open && open <= high && low <= close && close <= high;
 }
 
+/**
+ * 公式は `ohlcv` の先頭 5 要素を全部 string と定義する（`public-api.md:319`）。ここで
+ * `number | string` を受けているのは**意図した緩さ**で、公式より広い。消費側が緩いぶんには
+ * 実害が無く、公式どおりの string だけの応答もそのまま通る。狭めない。
+ */
 const numStr = z.union([z.number(), z.string().transform((s) => Number(s))]);
 
+/**
+ * 公開 API `GET /{pair}/candlestick/{candle-type}/{YYYYMMDD}` の応答（`data` の中身）。
+ * 公式のフィールド表（`public-api.md:316-320`）と応答例（`:324-346`）の両方に合わせる。
+ *
+ * `timestamp` は公式が定義する candlestick 要素の必須フィールドで（`public-api.md:320`、
+ * "published at unix timestamp (milliseconds)"）、**要素の中**にある（`:341`）。
+ * **値はどこでも使わない**——約定判定に要るのは `ohlcv` だけである。それでも宣言するのは、
+ * **公式の必須フィールドが来ていることを確かめる**ためで、zod の object は既定で余剰キーを
+ * 黙って落とすので、宣言しない限り欠落も位置違い（`data` 直下に置いた応答など）も検出できない。
+ */
 const CandlestickSchema = z.object({
   candlestick: z.array(
     z.object({
       type: z.string(),
       ohlcv: z.array(z.tuple([numStr, numStr, numStr, numStr, numStr, z.number()])),
+      timestamp: z.number(),
     }),
   ),
 });
+
+/** 応答の `candlestick` の 1 要素（1 つの足の種類ぶん）。 */
+type CandlestickEntry = z.infer<typeof CandlestickSchema>["candlestick"][number];
+
+/**
+ * 要求する足の種類。公式の enum（`public-api.md:307`）のうちモックが使うのは 1 分足だけで、
+ * `runTick` も 1 分足を前提に約定を判定する。URL の組み立てと応答の `type` の検査で同じ値を
+ * 使い、要求と検査がずれないようにする。
+ */
+const CANDLE_TYPE = "1min";
 
 const DEFAULT_BASE_URL = "https://public.bitbank.cc";
 
@@ -106,6 +132,13 @@ export function defaultFetchCandles(opts: CandlesOptions = {}): FetchCandles {
   };
 }
 
+/**
+ * 1 日（`dateStr` の JST 日付）ぶんのロウソク足を取り、`Candle[]` に直す。
+ *
+ * 失敗は 4 通り——HTTP のエラー、封筒が `success: 1` でない、スキーマ不一致、要求した種類の
+ * 足が取れない（`pickCandlestick`）——だが、**どれも throw せず `Result` の失敗で返す**。
+ * 呼び出し側（`SessionStore.tick()`）はそれを warn に落として、その回の約定を進めない。
+ */
 async function fetchOneDay(
   fetchImpl: FetchImpl,
   baseUrl: string,
@@ -117,7 +150,7 @@ async function fetchOneDay(
   // エンコードして、区切り文字も制御文字も文字そのものとして送る。
   // 入口（src/engine/state.ts の pairAssets）でも文字種を弾いているが、engine を直接
   // 呼ぶ経路に備えてここでも守る。dateStr は ymdJst が作る数字だけなのでそのまま。
-  const url = `${baseUrl}/${encodeURIComponent(pair)}/candlestick/1min/${dateStr}`;
+  const url = `${baseUrl}/${encodeURIComponent(pair)}/candlestick/${CANDLE_TYPE}/${dateStr}`;
   try {
     const res = await fetchImpl(url);
     if (!res.ok) return { success: false, error: `candles HTTP ${res.status} for ${url}` };
@@ -125,7 +158,9 @@ async function fetchOneDay(
     if (json.success !== 1) return { success: false, error: `candles non-success for ${url}` };
     const parsed = CandlestickSchema.safeParse(json.data);
     if (!parsed.success) return { success: false, error: `candles parse: ${parsed.error.message}` };
-    const ohlcv = parsed.data.candlestick[0]?.ohlcv ?? [];
+    const picked = pickCandlestick(parsed.data.candlestick, url);
+    if (!picked.success) return picked;
+    const ohlcv = picked.data;
     return {
       success: true,
       data: ohlcv.map(([open, high, low, close, vol, timestamp]) => ({
@@ -141,4 +176,45 @@ async function fetchOneDay(
     const msg = e instanceof Error ? e.message : String(e);
     return { success: false, error: `candles fetch failed: ${msg}` };
   }
+}
+
+/**
+ * 応答の `candlestick` から、要求した種類（`CANDLE_TYPE`）の足を取り出す。
+ *
+ * `type` を確かめるのは、`BITBANK_PUBLIC_BASE_URL` で取得先を差し替えられるためである。
+ * 確かめないと、差し替え先が返した 5 分足をそのまま 1 分足として約定判定に流し込める。
+ *
+ * **`candlestick` が複数要素を返し得るかは公式が明記していない**（`public-api.md:328-343`
+ * の応答例は 1 要素で、`type` の enum は定義されているが要素数には触れていない）。そこで
+ * 「1 要素であること」は要求せず、**要求した種類に一致する要素を選ぶ**ことにした。公式が
+ * 将来ほかの種類を並べて返しても、こちらは要求した足だけを見て動き続ける——消費側が緩いのは
+ * `numStr` と同じ筋で、実害が無い。ただし同じ種類が複数来たときはどれを採るかが決まらないので、
+ * 黙って 1 つを採らずに失敗させる。
+ *
+ * 空の `candlestick` は「その種類の足が無かった」として空の足を返し、`CANDLE_TYPE` が
+ * 無いことを不一致として扱わない。空の配列を返し得るかも公式は明記していない。ここは
+ * 従来どおりの扱いで、変えるなら別に判断する。
+ *
+ * 応答由来の `type` はログ（`SessionStore.tick()` の warn）まで届くので、JSON で包んで出す。
+ */
+function pickCandlestick(
+  candlestick: CandlestickEntry[],
+  url: string,
+): Result<CandlestickEntry["ohlcv"]> {
+  if (candlestick.length === 0) return { success: true, data: [] };
+  const [matched, ...duplicates] = candlestick.filter((c) => c.type === CANDLE_TYPE);
+  if (!matched) {
+    const types = JSON.stringify(candlestick.map((c) => c.type));
+    return {
+      success: false,
+      error: `candles type mismatch for ${url}: want ${CANDLE_TYPE}, got ${types}`,
+    };
+  }
+  if (duplicates.length > 0) {
+    return {
+      success: false,
+      error: `candles ambiguous: ${duplicates.length + 1} ${CANDLE_TYPE} elements for ${url}`,
+    };
+  }
+  return { success: true, data: matched.ohlcv };
 }
