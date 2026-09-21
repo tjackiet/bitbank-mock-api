@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadState } from "../../src/engine/persist.ts";
 import { activeOrders, type PaperState } from "../../src/engine/state.ts";
+import type { FetchCandles } from "../../src/engine/types.ts";
 import { loadOrInitDefault, SessionStore } from "../../src/store/session.ts";
 import { buildOrder, buildState, candle } from "../engine/helpers.ts";
 import { buildTestServer, stubFetchCandles } from "../routes/helpers.ts";
@@ -560,5 +561,325 @@ describe("SessionStore.persist", () => {
     expect(after.orders[0]?.status).toBe("CANCELED_PARTIALLY_FILLED");
     expect(after.orders[0]?.executedAmount).toBe(0.001);
     expect(after.trades).toHaveLength(1);
+  });
+});
+
+/**
+ * 足の取得の健全性（`candlesHealth()` / `GET /_control/state` の `candles`）。
+ *
+ * 市場モードで取得に失敗しても、`tick()` は warn に落として先へ進み、`lastTickAt` は
+ * そのまま現在時刻へ進む。互換ルートは成功応答を返し続けるので、**失敗はどこにも出ない**。
+ * ここが唯一の出口なので、`persist` の記録と同じ強さで固定する。
+ */
+describe("SessionStore の足の取得の健全性", () => {
+  /** 取得先の URL をそのまま含む、`fetchOneDay()` が返す形の失敗。 */
+  const fetchError = (pair: string) =>
+    `candles HTTP 500 for http://127.0.0.1:9/${pair}/candlestick/1min/20260101`;
+
+  /** どのペアでも必ず失敗する取得。`fetchOneDay()` が返す形の理由を載せる。 */
+  const failingFetch = (): FetchCandles => async (pair) => ({
+    success: false,
+    error: fetchError(pair),
+  });
+
+  /**
+   * `btc_jpy` の active な注文を 1 本だけ持つ store。**market では tick() が取りに行く
+   * ペアが 1 つある**状態を作るためのもので、`fillMode` と取得の実装だけを入れ替える。
+   */
+  function storeWithOrder(opts: {
+    fetchCandles: FetchCandles;
+    fillMode?: "manual" | "market";
+    warnings?: string[];
+  }) {
+    return new SessionStore(
+      buildState({
+        balances: { jpy: 10_000_000 },
+        orders: [buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 })],
+      }),
+      {
+        path: null,
+        fillMode: opts.fillMode ?? "market",
+        feeRate: 0,
+        fetchCandles: opts.fetchCandles,
+        logger: opts.warnings
+          ? { info: () => {}, warn: (m: string) => opts.warnings?.push(m) }
+          : undefined,
+      },
+    );
+  }
+
+  // 一度も取りに行っていない状態が「失敗なし」を表す。active な注文が無ければ market でも
+  // 取得は起きないので、これは manual と同じ形になる（だから fillMode を添えてある）。
+  it("一度も取りに行っていなければ失敗なしを表す", async () => {
+    const store = new SessionStore(buildState(), {
+      path: null,
+      fillMode: "market",
+      fetchCandles: stubFetchCandles({}),
+    });
+    await store.tick(T0 + MIN);
+    expect(store.candlesHealth()).toEqual({
+      lastError: null,
+      consecutiveFailures: 0,
+      lastSuccessAt: null,
+      fillMode: "market",
+    });
+  });
+
+  // manual では tick() が取りに行かない。初期値は「取りに行って何も起きていない」ではなく
+  // 「取りに行っていない」ことを表すので、読み分けられるよう fillMode を同じ形に入れてある。
+  it("manual では取得が起きず、fillMode でそれと読み分けられる", async () => {
+    let fetched = 0;
+    const store = storeWithOrder({
+      fillMode: "manual",
+      fetchCandles: async () => {
+        fetched += 1;
+        return { success: true, data: [] };
+      },
+    });
+    await store.tick(T0 + 2 * MIN);
+    expect(fetched).toBe(0);
+    expect(store.candlesHealth()).toEqual({
+      lastError: null,
+      consecutiveFailures: 0,
+      lastSuccessAt: null,
+      fillMode: "manual",
+    });
+  });
+
+  // 「いつまでは足が取れていたか」。lastTickAt と同じ時計で記録するので並べて読める。
+  it("取得に成功すると lastSuccessAt が tick の時計で入る", async () => {
+    const store = storeWithOrder({
+      fetchCandles: stubFetchCandles({ btc_jpy: [candle(T0 + MIN, 110, 110, 50, 105)] }),
+    });
+    await store.tick(T0 + 2 * MIN);
+    const health = store.candlesHealth();
+    expect(health.lastSuccessAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+    expect(health.lastSuccessAt).toBe(store.state().lastTickAt);
+    expect(health.lastError).toBeNull();
+    expect(health.consecutiveFailures).toBe(0);
+  });
+
+  it("失敗のたびに連続失敗数が増え、直近の失敗を覚える", async () => {
+    const store = storeWithOrder({ fetchCandles: failingFetch() });
+
+    await store.tick(T0 + 2 * MIN);
+    const first = store.candlesHealth();
+    expect(first.consecutiveFailures).toBe(1);
+    expect(first.lastError?.message).toBe(fetchError("btc_jpy"));
+    expect(first.lastError?.at).toBe(new Date(T0 + 2 * MIN).toISOString());
+    expect(first.lastSuccessAt).toBeNull();
+
+    await store.tick(T0 + 3 * MIN);
+    expect(store.candlesHealth().consecutiveFailures).toBe(2);
+    expect(store.candlesHealth().lastError?.at).toBe(new Date(T0 + 3 * MIN).toISOString());
+  });
+
+  it("取得に成功すると連続失敗数は 0 に戻るが、直近の失敗は残る", async () => {
+    let failing = true;
+    const store = storeWithOrder({
+      fetchCandles: async (pair, fromMs, toMs) => {
+        if (failing) return { success: false, error: fetchError(pair) };
+        return stubFetchCandles({ btc_jpy: [candle(T0 + MIN, 110, 110, 109, 110)] })(
+          pair,
+          fromMs,
+          toMs,
+        );
+      },
+    });
+    await store.tick(T0 + 2 * MIN);
+    expect(store.candlesHealth().consecutiveFailures).toBe(1);
+
+    failing = false;
+    await store.tick(T0 + 3 * MIN);
+
+    const health = store.candlesHealth();
+    expect(health.consecutiveFailures).toBe(0);
+    // 一度でも失敗したことは消さない（persist と同じ。その窓の足は取り直さないので、
+    // 取れていない区間があったことは実験の解釈に効く）。
+    expect(health.lastError?.message).toBe(fetchError("btc_jpy"));
+    expect(health.lastError?.at).toBe(new Date(T0 + 2 * MIN).toISOString());
+    expect(health.lastSuccessAt).toBe(new Date(T0 + 3 * MIN).toISOString());
+  });
+
+  // **取得失敗時の挙動は変えていない。** warn に落として continue し、lastTickAt は
+  // 無条件に進む（失敗した窓は二度と取りに行かない）。見えるようにしただけであることを固定する。
+  it("失敗しても tick は進み、失敗した窓は取り直さない", async () => {
+    const fetched: Array<[number, number]> = [];
+    const store = storeWithOrder({
+      fetchCandles: async (pair, fromMs, toMs) => {
+        fetched.push([fromMs, toMs]);
+        return { success: false, error: fetchError(pair) };
+      },
+    });
+    await store.tick(T0 + 2 * MIN);
+    expect(store.state().lastTickAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+    await store.tick(T0 + 3 * MIN);
+    // 2 回目の起点は 1 回目の終端。失敗した窓 (T0, T0+2MIN) は取り直さない。
+    expect(fetched).toEqual([
+      [T0, T0 + 2 * MIN],
+      [T0 + 2 * MIN, T0 + 3 * MIN],
+    ]);
+    expect(activeOrders(store.state())).toHaveLength(1);
+  });
+
+  // 失敗の理由には取得先の URL が入り、URL には BITBANK_PUBLIC_BASE_URL 由来の値が入る。
+  // ログへ出すときは JSON で包む（docs/fidelity.md の「ログに出す利用者由来の値」）。
+  it("改行を含む失敗でも警告が 1 行に収まる", async () => {
+    const warnings: string[] = [];
+    const store = storeWithOrder({
+      warnings,
+      fetchCandles: async () => ({
+        success: false,
+        error: "candles HTTP 500 for http://evil/\n2026-01-01 FAKE LOG LINE",
+      }),
+    });
+    await store.tick(T0 + 2 * MIN);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.split("\n")).toHaveLength(1);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字が出ていないことを見るのがこの検査の目的で、範囲指定そのものが意図である
+    expect(/[\u0000-\u001f]/.test(warnings[0]!)).toBe(false);
+    // health のほうは包み直さない。応答は JSON なのでシリアライザが同じ仕事をする。
+    expect(store.candlesHealth().lastError?.message).toContain("\n");
+  });
+
+  // 成行の発注が使う経路。fillMode が manual でもここは取りに行くので、記録も動く。
+  it("getLatestPrice の失敗も同じ health に記録する", async () => {
+    const store = storeWithOrder({ fillMode: "manual", fetchCandles: failingFetch() });
+    expect(await store.getLatestPrice("btc_jpy", T0 + 2 * MIN)).toBeNull();
+    expect(store.candlesHealth()).toEqual({
+      lastError: {
+        at: new Date(T0 + 2 * MIN).toISOString(),
+        message: fetchError("btc_jpy"),
+      },
+      consecutiveFailures: 1,
+      lastSuccessAt: null,
+      fillMode: "manual",
+    });
+  });
+
+  // 空振り（窓に足が 1 本も無い）は取得の失敗ではない。getLatestPrice は同じ null を
+  // 返すが、health には成功として残る——利用側はこれで 70001 の理由を見分ける。
+  it("窓が空なだけのときは失敗として記録しない", async () => {
+    const store = storeWithOrder({ fetchCandles: stubFetchCandles({}) });
+    expect(await store.getLatestPrice("btc_jpy", T0 + 2 * MIN)).toBeNull();
+    const health = store.candlesHealth();
+    expect(health.lastError).toBeNull();
+    expect(health.lastSuccessAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+  });
+
+  // ペアごとに分けず 1 つに持つことの代償。片方のペアだけ失敗し続けていても、もう片方の
+  // 成功で連続失敗数は 0 に戻る。lastError は消さないので「一度でも失敗したか」は残る。
+  it("片方のペアだけ失敗しているとき連続失敗数は 0 に戻る（1 つに持つ代償）", async () => {
+    const store = new SessionStore(
+      buildState({
+        balances: { jpy: 10_000_000 },
+        orders: [
+          buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 1, startAmount: 1 }),
+          buildOrder({ id: "2", pair: "eth_jpy", side: "buy", price: 1, startAmount: 1 }),
+        ],
+      }),
+      {
+        path: null,
+        fillMode: "market",
+        feeRate: 0,
+        fetchCandles: async (pair) =>
+          pair === "btc_jpy"
+            ? { success: false, error: fetchError(pair) }
+            : { success: true, data: [] },
+      },
+    );
+    await store.tick(T0 + 2 * MIN);
+    const health = store.candlesHealth();
+    expect(health.consecutiveFailures).toBe(0);
+    expect(health.lastError?.message).toBe(fetchError("btc_jpy"));
+  });
+
+  /**
+   * 取得を止めたまま返す store。`release` に窓の終端ごとの解決関数が入るので、
+   * **完了の順を呼び出し側で決められる**（並行した取得が順不同に着く筋を組み立てる）。
+   */
+  function gatedStore(outcome: (toMs: number) => Awaited<ReturnType<FetchCandles>>) {
+    const release = new Map<number, () => void>();
+    const store = new SessionStore(buildState(), {
+      path: null,
+      fillMode: "manual",
+      fetchCandles: (_pair, _fromMs, toMs) =>
+        new Promise((resolve) => {
+          release.set(toMs, () => resolve(outcome(toMs)));
+        }),
+    });
+    return { store, release };
+  }
+
+  // 互換ルートは並行に叩かれるので、取得も開始の順に完了するとは限らない。素直に上書き
+  // すると「いつまで足が取れていたか」が実際より手前に見える。
+  it("後から完了した古い取得が lastSuccessAt を巻き戻さない", async () => {
+    const { store, release } = gatedStore(() => ({ success: true, data: [] }));
+    const older = store.getLatestPrice("btc_jpy", T0 + MIN);
+    const newer = store.getLatestPrice("btc_jpy", T0 + 2 * MIN);
+
+    // 後から始めた新しいほうを先に完了させる。
+    release.get(T0 + 2 * MIN)?.();
+    await newer;
+    expect(store.candlesHealth().lastSuccessAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+
+    release.get(T0 + MIN)?.();
+    await older;
+    expect(store.candlesHealth().lastSuccessAt).toBe(new Date(T0 + 2 * MIN).toISOString());
+  });
+
+  // 同じことを失敗の側でも見る。ただし**連続失敗数は完了した順に数える**（新しいほうが
+  // 先に完了したら古い失敗を捨てる形にすると、lastError が null のままになる経路ができる）。
+  it("後から完了した古い失敗が lastError を塗り替えないが、連続失敗数には数える", async () => {
+    const { store, release } = gatedStore((toMs) => ({
+      success: false,
+      error: `candles HTTP 500 at ${toMs}`,
+    }));
+    const older = store.getLatestPrice("btc_jpy", T0 + MIN);
+    const newer = store.getLatestPrice("btc_jpy", T0 + 2 * MIN);
+
+    release.get(T0 + 2 * MIN)?.();
+    await newer;
+    release.get(T0 + MIN)?.();
+    await older;
+
+    const health = store.candlesHealth();
+    expect(health.lastError?.at).toBe(new Date(T0 + 2 * MIN).toISOString());
+    expect(health.lastError?.message).toBe(`candles HTTP 500 at ${T0 + 2 * MIN}`);
+    expect(health.consecutiveFailures).toBe(2);
+  });
+
+  // 失敗を互換ルートの応答へ漏らさない（実 API に無い情報であり、封筒の契約を壊す）。
+  // 見る口は `GET /_control/state` の `candles` だけである。
+  it("取得に失敗しても互換ルートは成功応答のままで、control にだけ失敗が出る", async () => {
+    const { fastify, close } = await buildTestServer(
+      buildState({
+        balances: { jpy: 10_000_000 },
+        orders: [buildOrder({ id: "1", pair: "btc_jpy", side: "buy", price: 100, startAmount: 1 })],
+      }),
+      {},
+      {
+        path: null,
+        fillMode: "market",
+        controlEnabled: true,
+        fetchCandles: failingFetch(),
+      },
+    );
+    try {
+      const active = await fastify.inject({
+        method: "GET",
+        url: "/v1/user/spot/active_orders?pair=btc_jpy",
+      });
+      expect(active.statusCode).toBe(200);
+      expect(active.json().success).toBe(1);
+      expect(active.json().data.orders).toHaveLength(1);
+      expect(active.json()).not.toHaveProperty("candles");
+
+      const state = await fastify.inject({ method: "GET", url: "/_control/state" });
+      expect(state.json().candles.consecutiveFailures).toBe(1);
+      expect(state.json().candles.lastError.message).toBe(fetchError("btc_jpy"));
+    } finally {
+      await close();
+    }
   });
 });

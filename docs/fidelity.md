@@ -53,6 +53,7 @@ API 担当レビュー後に「確認済み／要修正」列を足す。private
 - [control の fill / tick 検証](#control-の-fill--tick-検証) — 足の `timestamp` を `Date` の表現範囲から下流の加算分を引いた範囲に制限し、`tick` の `pair` と `reset` の `balances` のキーも検証する
 - [control のアクセス境界](#control-のアクセス境界) — 許可判定を TCP の対向アドレスに固定し、`X-Control-Token` はヘッダ行がちょうど 1 本のときだけ受け、一致を `timingSafeEqual` で見る
 - [`/_control/`](#_control) — `GET /_control/state` に状態ファイルへの書き出しの状況（`persist`）を添える
+- [足の取得の健全性](#足の取得の健全性) — `GET /_control/state` に足の取得の状況（`candles`）を添える（取得に失敗しても互換ルートは成功応答のまま。改訂前: 失敗は warn に出るだけで、応答からは見えなかった）
 
 ### 永続化と起動
 
@@ -502,7 +503,7 @@ Plan A は認証ヘッダを検証しない
 
 ### `/_control/`
 
-`BITBANK_MOCK_CONTROL=1` のときだけ登録する。素の JSON（bitbank 封筒ではない）。`POST /_control/orders/:id/fill`、`POST /_control/tick`、`POST /_control/clock`、`POST /_control/reset`、`GET /_control/state`（`PaperState` に、状態ファイルへの書き出しの状況 `persist` を添えて返す。`persist` は `PaperState` の一部ではないが、`PaperStateSchema` は不明なキーを落とすので、この応答をそのまま状態ファイルへ書き戻しても読み込みは通る）。無効時はルート自体を登録しないので、メソッド・パスによらず Fastify の既定 404（本文も他の未登録パスと同じ）。有効時は、非ループバックから見ると登録済みの（メソッド, パス）が 403、未登録が 404 になるので、どの口が在るかは区別できる。状態ファイルへの書き出しに失敗した後は、状態を変える口（`fill` / `tick` / `clock` / `reset`）が **503 `{"error":"PERSIST_DEGRADED"}`** になる（`GET /state` は通る。同じ表の「状態の永続化」）
+`BITBANK_MOCK_CONTROL=1` のときだけ登録する。素の JSON（bitbank 封筒ではない）。`POST /_control/orders/:id/fill`、`POST /_control/tick`、`POST /_control/clock`、`POST /_control/reset`、`GET /_control/state`（`PaperState` に、状態ファイルへの書き出しの状況 `persist` と足の取得の状況 `candles` を添えて返す。同じ表の「足の取得の健全性」節。どちらも `PaperState` の一部ではないが、`PaperStateSchema` は不明なキーを落とすので、この応答をそのまま状態ファイルへ書き戻しても読み込みは通る）。無効時はルート自体を登録しないので、メソッド・パスによらず Fastify の既定 404（本文も他の未登録パスと同じ）。有効時は、非ループバックから見ると登録済みの（メソッド, パス）が 403、未登録が 404 になるので、どの口が在るかは区別できる。状態ファイルへの書き出しに失敗した後は、状態を変える口（`fill` / `tick` / `clock` / `reset`）が **503 `{"error":"PERSIST_DEGRADED"}`** になる（`GET /state` は通る。同じ表の「状態の永続化」）
 
 - **根拠**: 本モック固有
 - **本物との差異**: bitbank API に存在しない
@@ -544,6 +545,15 @@ control 有効時の既定は `BITBANK_MOCK_FILL_MODE=manual`。`store.tick()` �
 - **本物との差異**: 本物には無い
 - **推測**: はい
 - **利用側への含意**: 実験用の部分約定は control からのみ起こす。利用側の通常経路では使わない
+
+### 足の取得の健全性
+
+`SessionStore` が足の取得の成否を覚え、`GET /_control/state` に `persist` と並べて `candles` として返す。形は `{ lastError: { at, message } | null, consecutiveFailures, lastSuccessAt, fillMode }`。`lastError` は直近の失敗（時刻と理由）で、**成功しても消さない**（`persist` と同じ。「一度でも失敗したか」が残る）。`consecutiveFailures` は連続失敗数で、1 回でも成功すると 0 に戻る。`lastSuccessAt` は直近に取得へ成功した時刻で、**`persist` には無いがこちらには持たせた**——「いつまでは足が取れていたか」が、約定が止まった時点の特定に直結するため。時刻は `tick()` の時計（取得範囲の終端）で記録するので `lastTickAt` と並べて読める。`fillMode` は `BITBANK_MOCK_FILL_MODE` の値で、**上の 3 つが初期値のままである理由を読み分けるために持つ**（`manual` なら `tick()` は足を取りに行かないので、初期値は「取りに行ったが何も起きていない」ではなく「取りに行っていない」を意味する。これが無いと、`market` でまだ active な注文が無いだけの状態と見分けが付かない）。**ペアごとには分けず、store 全体で 1 つ持つ**——取得先は `BITBANK_PUBLIC_BASE_URL` の 1 つなので失敗はふつう全ペアに同時に効き、ペアごとにすると応答のキーが状態ファイル由来のペア名になって（`persist` と並べて読める固定のキーでなくなる）注文が消えたペアの項目をいつ捨てるかも決めなければならず、どのペアで失敗したかは `lastError.message` に入る URL から読めるためである。記録するのは**足を取りに行く 2 経路の両方**で、`tick()` の窓ごとの取得と、成行の発注が使う `getLatestPrice()`（`fillMode` が `manual` でもこちらは取りに行くので、`manual` のまま失敗が記録されることはある）。`getLatestPrice()` が `null` を返す経路は 2 つ（取得の失敗と、窓に足が 1 本も無いこと）あり互換ルートはどちらも `70001` に潰すが、**どちらだったかはこの `candles` で見分けられる**（空振りは失敗として記録せず、`lastSuccessAt` だけが進む）。**取得に失敗したときの挙動は何も変えていない**: `tick()` は warn に落として次のペアへ進み、ループを抜けた後で `lastTickAt` を無条件に現在時刻へ進めるので、**失敗した窓は二度と取りに行かない**。再取得・リトライ・キャッシュ・スロットルは入れていない（要判断事項）。互換ルートは通常どおり成功応答を返し、**失敗はそちらへは漏らさない**（実 API に無い情報であり、封筒の契約を壊すため）。警告は JSON で包む（`tick: fetchCandles failed for "btc_jpy": "candles HTTP 500 for ..."`。理由には取得先の URL が入り、URL には `BITBANK_PUBLIC_BASE_URL` 由来の値と状態ファイル由来のペア名が入り得るので、包まないと改行でログ行を割られる。同じ表の「ログに出す利用者由来の値」節）。**応答のほうは包み直さない**——応答自体が JSON なので、シリアライザが改行も制御文字も逃がす（`persist.lastError.message` と同じ扱い）。`POST /_control/reset` はこの記録を消さない（`persist` と同じ。プロセスの健全性であってシナリオの状態ではないので、`PaperState` を捨てても残す）。**並行した取得は開始の順に完了するとは限らない**ので（互換ルートは並行に叩かれ、遅い要求の応答が後から始まった要求の後に着く）、`lastSuccessAt` と `lastError` は取得範囲の終端で比べて**巻き戻さない**（古い取得が後から着いても、最も新しいものを指したままにする）。`consecutiveFailures` には同じ番人を置かず、**完了した順に数える**——「新しいほうが先に完了したら古い失敗を捨てる」形にすると、失敗を 1 件も記録しないまま `lastError` が `null` のままになる経路ができ、「一度でも失敗したか」が残るという約束を破るためである
+
+- **根拠**: 本モック固有（`src/store/session.ts` の `candlesHealth()` / `src/routes/control.ts` の `GET /state`）
+- **本物との差異**: 本物には対応する概念がない（約定は取引所の中で起きるので、クライアントが価格を取りに行く経路そのものが無い）
+- **推測**: はい
+- **利用側への含意**: **約定が無いことだけからは「価格が注文に届いていない」と「足の取得に失敗している」を区別できない。この health を見ること。** `lastError` が `null` でなければ取得に失敗した窓があり、その窓は取り直さないので**約定の取りこぼしが残っている**（その実験の記録はそのぶん疑う）。今まさに失敗し続けているかは `consecutiveFailures > 0` で見る。`lastSuccessAt` を `lastTickAt` と並べれば、どこまで足が取れていたかが分かる。**分からないことが 3 つある**。(1) ペアごとに分けていないので、複数ペアのうち 1 つだけが失敗し続けていても、他のペアの成功で `consecutiveFailures` は 0 に戻る（`lastError` は消さないので「一度でも失敗したか」は残る。どのペアかは `lastError.message` の URL を読む）。(2) 失敗した窓の範囲は残らない（`lastSuccessAt` から下限は絞れるが、どの窓を取りこぼしたかは記録していない）。並行した取得が順不同に完了する場合、`consecutiveFailures` は完了した順に数えた値であって、開始の順に数えた回数とは限らない（時刻の 2 つは巻き戻さないので、そちらは最も新しい取得を指す）。(3) 取得が起きていないこと自体は失敗ではないので、`manual`（`tick()` は取りに行かない）でも、`market` で active な注文がまだ無いときでも、劣化中（`persist.lastError` が非 `null` なら `tick()` が丸ごと抜ける）でも初期値のままになる——**`candles` が初期値だからといって「足が取れている」ことにはならない。`fillMode` と `persist` と併せて読む**
 
 ### 状態の永続化
 
