@@ -236,7 +236,7 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 
 `average_price` の丸め規則: 内部では `executedNotional`（倍精度）を真値として保持し、`average_price = executedNotional / executedAmount` をペアの価格桁数（btc_jpy なら整数）に四捨五入して文字列化する。`executedAmount == 0`（`UNFILLED` / `CANCELED_UNFILLED` / `REJECTED`）のときは除算せず `"0"` を返す（現行 `formatOpenOrder` と同じ。発注 → `GET order` の初回応答で検証する）。複数回の約定で平均が価格単位に乗らない場合（例: 100 と 101 で 0.5 ずつ約定 → 100.5）は丸めが入るため、`executed_amount × average_price` と約定代金の差は `executed_amount × 価格単位 × 0.5` 以下を許容する。利用側が累計をこの積で再計算する際に同じ誤差が乗ることは対応表に記録する。内部演算を円・satoshi の整数に切り替えるかはプラン B（部分約定を実際に起こす段階）で判断する
 
-数量の量子化: 発注（`POST order`）と control の `fill` は、`amount` がペアの数量桁数（btc_jpy なら 4 桁）に収まらない値を受け付けず、公式の `40001`（発注。**2026-09-21 の改訂より前は `60004`**。`docs/fidelity.md` の「エラーコード」節）または 400（control）で拒否する。これにより `executedAmount` は常に桁数に収まった値として記録され、文字列化で丸めが入ることがない。上記の許容差は価格の丸めにのみ由来する
+数量の桁の検査: 発注（`POST order`）と control の `fill` は、`amount` がペアの数量桁数（btc_jpy なら 4 桁）に**許容差の内側で**収まらない値を受け付けず、公式の `40001`（発注。**2026-09-21 の改訂より前は `60004`**。`docs/fidelity.md` の「エラーコード」節）または 400（control）で拒否する。**これは量を格子へ載せる保証ではない。** `fitsDigits()` はスケール後の整数からのずれを `DIGIT_FIT_EPS`（`1e-8`）未満まで塵として通すだけなので、`0.1 + 0.2` のような値は `0.30000000000000004` のまま `executedAmount` に入り、`formatAmount()` の `toFixed` が文字列化のときに `"0.3000"` へ丸める（`docs/fidelity.md` の「不変量をどこで担保するか」）。上記の `average_price` の許容差が価格の丸めだけに由来する、という整理は変わらない——数量側の丸めは倍精度の塵の幅に収まり、桁の外へは出ないからである。量を本当に量子化するのは Phase 2（整数最小単位への移行）の話
 
 ### 3.3 R2: 約定を意図的に起こす仕組み（`/_control/`）
 
