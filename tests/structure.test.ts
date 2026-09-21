@@ -44,7 +44,8 @@ const SRC_WITHOUT_TEST: Record<string, string> = {
     "突き合わせて検証している",
   "routes/params.ts":
     "パラメータの解釈は wire 上の契約なので、返る error code で見る。" +
-    "`tests/routes/active-orders.test.ts` と `tests/routes/trade-history.test.ts` が経路ごとに検証している",
+    "`tests/routes/active-orders.test.ts` と `tests/routes/trade-history.test.ts`（絞り込み）と " +
+    "`tests/routes/create-order.test.ts`（発注パラメータ）が経路ごとに検証している",
   "server/http.ts":
     "`buildServer()` は組み立てだけで、見るべきは組み上がった挙動。" +
     "`tests/server/not-found.test.ts`（未登録パス）と `tests/server/degraded.test.ts`（劣化ガード）が担当する",

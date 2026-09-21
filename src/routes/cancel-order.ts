@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { isActive, type OrderRecord } from "../engine/state.ts";
 import { cancelOrder } from "../engine/transitions.ts";
 import { CancelOrderRequestSchema, CancelOrdersRequestSchema } from "../schemas/requests.ts";
-import { ErrorCode, err, ok } from "./envelope.ts";
+import { ErrorCode, type ErrorCodeValue, err, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
 import { asRecord, isMissing } from "./params.ts";
 
@@ -18,6 +18,30 @@ import { asRecord, isMissing } from "./params.ts";
  */
 export const MAX_CANCEL_ORDER_IDS = 30;
 
+/**
+ * 取消 2 経路のスキーマ検証の失敗を、落ちたフィールドの公式コードへ割り振る。
+ *
+ * **id が落ちたなら id のコード**（`cancel_order` は `40013`、`cancel_orders` は `40014`）。
+ * どちらも実 API が「読めない id」に返すことを照会側で実測してある番号で、
+ * **取消の 2 経路では未実測**（取消の実測には実弾の注文が要る）。照会側からの外挿である。
+ *
+ * **残る `pair` は `20003` に据え置く。** この 2 経路は `pair` の欠落を先に見ていないので、
+ * 落ちた `pair` が「欠落」（公式は `30009`）なのか「不正値」（公式は `40017`）なのかを
+ * ここでは決められない。**どちらかに倒すと推測でコードを割り当てることになる**ので、
+ * 「どのフィールドか特定できない不正値」の受け皿である `20003` に残す
+ * （`docs/fidelity.md` の「エラーコード」節）。
+ *
+ * id と `pair` が同時に落ちたときは id のコードが勝つ。**実 API の優先順は未実測**で、
+ * 具体的なコードを返せる側を採っただけである。
+ */
+function cancelSchemaErrorCode(
+  paths: Array<PropertyKey | undefined>,
+  idField: "order_id" | "order_ids",
+  idCode: ErrorCodeValue,
+): ErrorCodeValue {
+  return paths.includes(idField) ? idCode : ErrorCode.INVALID_PARAMETER;
+}
+
 function terminalCancelCode(order: OrderRecord): number | null {
   if (order.status === "CANCELED_UNFILLED" || order.status === "CANCELED_PARTIALLY_FILLED") {
     return ErrorCode.ALREADY_CANCELED;
@@ -30,6 +54,7 @@ function terminalCancelCode(order: OrderRecord): number | null {
 export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/v1/user/spot/cancel_order", async (request) => {
     const body = asRecord(request.body);
+    // 本文そのものが object でない。フィールドを特定できないので `20003` 据え置き。
     if (!body) {
       return err(ErrorCode.INVALID_PARAMETER);
     }
@@ -38,7 +63,13 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const parsed = CancelOrderRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return err(ErrorCode.INVALID_PARAMETER);
+      return err(
+        cancelSchemaErrorCode(
+          parsed.error.issues.map((i) => i.path[0]),
+          "order_id",
+          ErrorCode.INVALID_ORDER_ID,
+        ),
+      );
     }
     const store = fastify.store;
     await store.tick();
@@ -56,6 +87,7 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/v1/user/spot/cancel_orders", async (request) => {
     const body = asRecord(request.body);
+    // 本文そのものが object でない。フィールドを特定できないので `20003` 据え置き。
     if (!body) {
       return err(ErrorCode.INVALID_PARAMETER);
     }
@@ -64,7 +96,13 @@ export const cancelOrderRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const parsed = CancelOrdersRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return err(ErrorCode.INVALID_PARAMETER);
+      return err(
+        cancelSchemaErrorCode(
+          parsed.error.issues.map((i) => i.path[0]),
+          "order_ids",
+          ErrorCode.INVALID_ORDER_ID_ARRAY,
+        ),
+      );
     }
     // 件数の上限は**状態を触る前**に見る。`store.tick()` は market モードで約定を state へ
     // 入れるので、後ろに置くと「断ったのに状態が変わった」になる。断ったときは 1 件も

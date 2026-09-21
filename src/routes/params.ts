@@ -113,3 +113,62 @@ export function queryParamErrorCode(paths: Array<PropertyKey | undefined>): Erro
   }
   return null;
 }
+
+/**
+ * 発注パラメータの名前。**複数が同時に落ちたとき、どれのコードを返すか**の優先順でもある。
+ *
+ * 並びは同じ経路の欠落検査（`src/routes/create-order.ts` の `missingCreateOrderCode()`）が
+ * 採っている順に揃えてあり、元をたどると rest-api.md の Create new order のパラメータ表の
+ * 並びである。**新しい並びを作らない**——欠落と不正値で優先順が食い違うと、利用側は
+ * 「どちらの検査に当たったか」でしか応答を説明できなくなる。
+ *
+ * **並び順が実 API の優先順である裏は取れていない。** `missingCreateOrderCode()` が持つ
+ * 留保をそのまま引き継ぐので、読み手は複数不正時のコード選択に依存しないこと
+ * （`docs/fidelity.md` の「エラーコード」節）。
+ */
+const CREATE_ORDER_PARAM_ORDER = ["pair", "amount", "side", "type", "price"] as const;
+
+type CreateOrderParamName = (typeof CREATE_ORDER_PARAM_ORDER)[number];
+
+/**
+ * 発注パラメータの名前 → 不正値のときに返す error code。
+ *
+ * **番号は `ErrorCode`（src/routes/envelope.ts）を唯一の出典とする。ここに数値を書かない。**
+ * 鍵を `CreateOrderParamName` で締める理由も `QUERY_PARAM_CODES` と同じで、片方の表にだけ
+ * 名前を足すと走査が当たらず、そのコードが wire に出ないまま `20003` へ落ちる。
+ *
+ * **`pair` だけ既存の `40017` を指す**（他の 4 つは今回足した `4000x` / `4002x`）。この経路に
+ * 来る `pair` は必ず「あって不正」である——欠落は上流の `missingCreateOrderCode()` が
+ * `30009` で先に拾うので、`40017` と `30009` のどちらかで迷う余地が無い。
+ */
+const CREATE_ORDER_PARAM_CODES: Record<CreateOrderParamName, ErrorCodeValue> = {
+  amount: ErrorCode.INVALID_ORDER_AMOUNT,
+  pair: ErrorCode.INVALID_ASSET,
+  price: ErrorCode.INVALID_ORDER_PRICE,
+  side: ErrorCode.INVALID_ORDER_SIDE,
+  type: ErrorCode.INVALID_ORDER_TYPE,
+};
+
+/**
+ * zod の失敗から、発注パラメータ固有の error code を選ぶ。該当が無ければ `null` を返し、
+ * 呼び出し側が「どのフィールドか特定できない不正値」の受け皿である `20003` に落とす。
+ *
+ * 引き方は `queryParamErrorCode()` と同じで、**引くのは `CREATE_ORDER_PARAM_ORDER` の名前だけ**
+ * ——zod が返した名前を鍵にしないので、地図が継承値を返す経路は無い。
+ *
+ * **`null` を返す経路は今のスキーマでは踏まない。** `CreateOrderRequestSchema` の 5 つの
+ * フィールドがそのまま上の地図に載っているので、zod が落ちれば必ずどれかに当たる
+ * （本文そのものが object でない場合は、呼び出し側の `missingCreateOrderCode()` が手前で
+ * `20003` を返して終わる）。それでも `null` を残すのは、**スキーマに新しいフィールドが
+ * 増えたときに黙って別のフィールドのコードを返さない**ためで、`queryParamErrorCode()` と
+ * 同じ契約にしてある。消さないこと。
+ */
+export function createOrderParamErrorCode(
+  paths: Array<PropertyKey | undefined>,
+): ErrorCodeValue | null {
+  const bad = new Set(paths.filter((p): p is string => typeof p === "string"));
+  for (const name of CREATE_ORDER_PARAM_ORDER) {
+    if (bad.has(name)) return CREATE_ORDER_PARAM_CODES[name];
+  }
+  return null;
+}

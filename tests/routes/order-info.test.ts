@@ -532,6 +532,18 @@ describe("不正な id の error code（実測に合わせた）", () => {
     expect(await post({ pair: true, order_ids: [1] })).toBe(40017);
   });
 
+  /**
+   * `GET order` 側も同じ `40017` に揃えた（**改訂前は `20003`**）。
+   *
+   * この経路でスキーマが落とせるのは `pair` だけである——`order_id` は手前の
+   * `isOrderIdValue()` が `40013` で、欠落は `isMissing()` が `3000x` で先に拾う。
+   * 残るのは「あって文字列でない」`pair` だけなので、欠落（`30009`）と迷う余地が無い
+   * （`docs/fidelity.md` の「エラーコード」節）。
+   */
+  it("GET order: pair が同名 2 本で配列になったら 40017（20003 ではない）", async () => {
+    expect(await get("/v1/user/spot/order?pair=btc_jpy&pair=eth_jpy&order_id=1")).toBe(40017);
+  });
+
   // 欠落の 3000x を先に返す順序は実測済み。新しい検査で崩していないことを見る。
   it("欠落は今までどおり 3000x が先に出る", async () => {
     expect(await get("/v1/user/spot/order?pair=btc_jpy")).toBe(30006);

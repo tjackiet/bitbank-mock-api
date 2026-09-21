@@ -226,7 +226,10 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
   });
 
-  it("rejects an empty string id before cancelling any order", async () => {
+  // 落ちたのが `order_ids` であることは zod の issue（`path[0]`）から分かるので、
+  // 汎用の `20003` ではなく `40014`「Invalid order id array.」で断る。改訂前は `20003`
+  // だった（`docs/fidelity.md` の「エラーコード」節）。
+  it("rejects an empty string id with 40014 before cancelling any order", async () => {
     const state = buildState({
       orders: [buildOrder({ id: "2", price: 5_100_000 })],
     });
@@ -239,7 +242,7 @@ describe("POST /v1/user/spot/cancel_orders", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(20003);
+    expect(body.data.code).toBe(40014);
     expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
   });
 
@@ -394,5 +397,57 @@ describe("cancel official field set", () => {
       expect(OFFICIAL_CANCEL_ORDER_STATUSES).toContain(o.status);
       for (const f of UNIMPLEMENTED_ORDER_FIELDS) expect(o).not.toHaveProperty(f);
     }
+  });
+});
+
+/**
+ * 取消 2 経路の**不正な id** を id 用の公式コードで断ることを固定する。
+ *
+ * 照会側（`GET order` / `orders_info`）は 2026-09-17 の実測で `40013` / `40014` に
+ * 揃えてあったが、取消側だけが汎用の `20003` に潰れたままだった。**取消の実測には
+ * 実弾の注文が要るので測れない**ため、照会側からの外挿である
+ * （`docs/fidelity.md` の「エラーコード」節）。
+ *
+ * **`pair` は据え置きの `20003`。** この 2 経路は `pair` の欠落を先に見ていないので、
+ * 落ちた `pair` が欠落（`30009`）なのか不正値（`40017`）なのかを決められない。
+ */
+describe("取消の不正な id は id 用のコードで断る", () => {
+  const build = setupBuildTestServer();
+
+  type Env = { success: number; data: { code?: number } };
+  const post = async (path: string, payload: Record<string, unknown>) => {
+    const { fastify, store } = await build(
+      buildState({ orders: [buildOrder({ id: "2", price: 5_100_000 })] }),
+    );
+    const res = await fastify.inject({ method: "POST", url: `/v1/user/spot/${path}`, payload });
+    const body = res.json() as Env;
+    // 断ったなら 1 件も取り消していないこと。
+    if (body.success === 0) expect(activeOrders(store.state()).map((o) => o.id)).toEqual(["2"]);
+    return body.success === 1 ? "success:1" : body.data.code;
+  };
+
+  it("cancel_order: order_id が id として読めなければ 40013", async () => {
+    expect(await post("cancel_order", { pair: "btc_jpy", order_id: true })).toBe(40013);
+    expect(await post("cancel_order", { pair: "btc_jpy", order_id: [2] })).toBe(40013);
+  });
+
+  it("cancel_orders: order_ids が id の配列でなければ 40014", async () => {
+    expect(await post("cancel_orders", { pair: "btc_jpy", order_ids: "2" })).toBe(40014);
+    expect(await post("cancel_orders", { pair: "btc_jpy", order_ids: [] })).toBe(40014);
+  });
+
+  // `pair` 側は据え置き。id と同時に落ちたときは id のコードが勝つ（優先順は未実測で、
+  // 具体的なコードを返せる側を採っただけ）。
+  it("pair だけが落ちたときは 20003 据え置き", async () => {
+    expect(await post("cancel_order", { pair: true, order_id: 2 })).toBe(20003);
+    expect(await post("cancel_orders", { pair: true, order_ids: [2] })).toBe(20003);
+    expect(await post("cancel_order", { pair: true, order_id: true })).toBe(40013);
+    expect(await post("cancel_orders", { pair: true, order_ids: [] })).toBe(40014);
+  });
+
+  // 欠落の `3000x` は今までどおり先に出る。
+  it("欠落は今までどおり 3000x が先に出る", async () => {
+    expect(await post("cancel_order", { pair: "btc_jpy" })).toBe(30006);
+    expect(await post("cancel_orders", { pair: "btc_jpy" })).toBe(30007);
   });
 });

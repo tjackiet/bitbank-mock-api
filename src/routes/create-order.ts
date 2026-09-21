@@ -6,7 +6,7 @@ import { placeOrder, TransitionError } from "../engine/transitions.ts";
 import { CreateOrderRequestSchema } from "../schemas/requests.ts";
 import { ErrorCode, err, ok } from "./envelope.ts";
 import { formatOrder } from "./format.ts";
-import { asRecord, isMissing } from "./params.ts";
+import { asRecord, createOrderParamErrorCode, isMissing } from "./params.ts";
 
 /**
  * 同時に持てる未約定注文の本数の上限。公式のエラー定義が持つ値そのもの
@@ -40,6 +40,8 @@ export const MAX_ACTIVE_ORDERS = 30;
  */
 function missingCreateOrderCode(body: unknown): number | null {
   const b = asRecord(body);
+  // 本文そのものが object でない（配列・数値・文字列）。**どのフィールドの問題かを言えない**ので、
+  // ここは `20003` 据え置きである（`docs/fidelity.md` の「エラーコード」節）。
   if (!b) return ErrorCode.INVALID_PARAMETER;
   if (isMissing(b.pair)) return ErrorCode.MISSING_ASSET;
   if (isMissing(b.amount)) return ErrorCode.MISSING_AMOUNT;
@@ -49,15 +51,24 @@ function missingCreateOrderCode(body: unknown): number | null {
   return null;
 }
 
+/**
+ * engine の失敗を封筒の error code へ写す。
+ *
+ * **`INVALID_PRICE` / `LIMIT_PRICE_REQUIRED` は `40020`、`INVALID_AMOUNT` は `40001`。**
+ * どちらも改訂前は汎用の `20003` だったが、engine はどちらの値で落ちたかを区別して
+ * 返しているので、フィールドは特定できている（`docs/fidelity.md` の「エラーコード」節）。
+ * **`LIMIT_PRICE_REQUIRED` を価格側に寄せたのは、指値で `price` が使えないという失敗だから**で、
+ * 欠落の `30012` とは別物である（`0` や負値のように「あるが使えない」値がここへ落ちる）。
+ */
 function mapPlaceError(error: string) {
   switch (error) {
     case TransitionError.INSUFFICIENT_FUNDS:
       return err(ErrorCode.INSUFFICIENT_FUNDS);
     case TransitionError.INVALID_PRICE:
     case TransitionError.LIMIT_PRICE_REQUIRED:
-      return err(ErrorCode.INVALID_PARAMETER);
+      return err(ErrorCode.INVALID_ORDER_PRICE);
     case TransitionError.INVALID_AMOUNT:
-      return err(ErrorCode.INVALID_PARAMETER);
+      return err(ErrorCode.INVALID_ORDER_AMOUNT);
     case TransitionError.INVALID_PAIR:
       return err(ErrorCode.INVALID_ASSET);
     case TransitionError.MARKET_PRICE_REQUIRED:
@@ -75,7 +86,15 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const parsed = CreateOrderRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return err(ErrorCode.INVALID_PARAMETER);
+      // どのフィールドが落ちたかは zod の issue が持っているので、そこから公式のコードを引く
+      // （`amount` → `40001`、`side` → `40021`、`type` → `40024`、`price` → `40020`、
+      // `pair` → `40017`）。**優先順は上の `missingCreateOrderCode()` と同じ並び**で、
+      // 地図と並びは `src/routes/params.ts` が 1 か所で持つ。
+      //
+      // 引き当たらなかったときだけ `20003` に落とす。**`20003` は「どのフィールドか特定できない
+      // 不正値」の受け皿**という位置づけに変わった（`docs/fidelity.md` の「エラーコード」節）。
+      const code = createOrderParamErrorCode(parsed.error.issues.map((i) => i.path[0]));
+      return err(code ?? ErrorCode.INVALID_PARAMETER);
     }
     const { pair, side, type, amount, price } = parsed.data;
     // 2 段で弾く。文字種（`..` や `?` を外向きの足取得 URL へ入れない）と、公式一覧にあること。
@@ -100,10 +119,14 @@ export const createOrderRoutes: FastifyPluginAsync = async (fastify) => {
     // 「ペア」節）。`store.tick()` より前なので、断ったときに状態は一切変わらない。
     if (isOrderSuspendedPair(pair)) return err(ErrorCode.PAIR_ORDER_SUSPENDED);
 
+    // 桁溢れは**数量も価格も「そのフィールドの不正値」として断る**。改訂前は数量が `60004`、
+    // 価格が `20003` と 2 つのコードに割れていたが、同じ「桁が合わない」失敗である。
+    // `60004` の公式の意味は最小数量割れなので、そちらは空けた
+    // （`docs/fidelity.md` の「エラーコード」節と「数量・価格の精度」節）。
     const digits = precisionOf(pair);
-    if (!fitsDigits(amount, digits.amountDigits)) return err(ErrorCode.AMOUNT_PRECISION);
+    if (!fitsDigits(amount, digits.amountDigits)) return err(ErrorCode.INVALID_ORDER_AMOUNT);
     if (type === "limit" && price !== undefined && !fitsDigits(price, digits.priceDigits)) {
-      return err(ErrorCode.INVALID_PARAMETER);
+      return err(ErrorCode.INVALID_ORDER_PRICE);
     }
 
     const store = fastify.store;
