@@ -28,6 +28,7 @@ const FIXTURE = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8"));
 const T0 = 1735689600000;
 const MIN = 60_000;
 
+/** どの URL にも同じ本文を返す fetch。 */
 function mockFetch(body: unknown, init: { status?: number } = {}) {
   const status = init.status ?? 200;
   return vi.fn<FetchImpl>(async (_url: string) => ({
@@ -266,6 +267,7 @@ describe("defaultFetchCandles", () => {
 describe("defaultFetchCandles: 公式の応答形の検証", () => {
   const at = Date.parse("2026-01-01T01:00:00.000Z");
 
+  /** 応答の本文を 1 つ流して `Result` を受け取る（範囲は 1 日に収まるので要求は 1 本）。 */
   const run = async (body: unknown) => {
     const fc = defaultFetchCandles({
       baseUrl: "https://example.test",

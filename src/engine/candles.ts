@@ -132,6 +132,13 @@ export function defaultFetchCandles(opts: CandlesOptions = {}): FetchCandles {
   };
 }
 
+/**
+ * 1 日（`dateStr` の JST 日付）ぶんのロウソク足を取り、`Candle[]` に直す。
+ *
+ * 失敗は 4 通り——HTTP のエラー、封筒が `success: 1` でない、スキーマ不一致、要求した種類の
+ * 足が取れない（`pickCandlestick`）——だが、**どれも throw せず `Result` の失敗で返す**。
+ * 呼び出し側（`SessionStore.tick()`）はそれを warn に落として、その回の約定を進めない。
+ */
 async function fetchOneDay(
   fetchImpl: FetchImpl,
   baseUrl: string,
