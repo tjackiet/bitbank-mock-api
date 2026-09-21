@@ -4,6 +4,21 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { defaultFetchCandles, type FetchImpl, isValidCandle } from "../../src/engine/candles.ts";
 
+/**
+ * `src/engine/candles.ts`——公開 API のロウソク足を消費する側の検査。
+ *
+ * **フィクスチャ（`tests/fixtures/candlestick-btc_jpy-1min.json`）の形は公式が正で、
+ * 値は架空である。** 出典と、値に出典が無い理由は `tests/fixtures/README.md` に書いてある。
+ * 要点だけ再掲すると、構造は bitbank 公式ドキュメント `public-api.md`（固定コミット
+ * `0badd68`）の `### Candlestick` 節——応答例 `:324-346`、フィールド表 `:316-320`——に
+ * 合わせてあり、`timestamp` は `data` 直下ではなく **`candlestick` 要素の中**（`:341`）に
+ * 置く。値は公式の例がプレースホルダ（`"string"` / `0`）でパーサを通らないため、
+ * 現実的な数値文字列に差し替えた**架空の値**で、実口座・実市場の観測値ではない。
+ *
+ * 応答の検証（`type` の一致、`timestamp` の存在）は、**実装に同意するだけの検査にしない**
+ * ために、公式から外れた応答を実際に流して落ちることを見る。
+ */
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const FIXTURE_PATH = join(__dirname, "../fixtures/candlestick-btc_jpy-1min.json");
@@ -21,6 +36,46 @@ function mockFetch(body: unknown, init: { status?: number } = {}) {
     json: async () => body,
   }));
 }
+
+/** URL ごとに別の本文を返す fetch。日跨ぎで日付ごとの応答を配り分けるのに使う。 */
+function mockFetchByUrl(bodies: Record<string, unknown>) {
+  return vi.fn<FetchImpl>(async (url: string) => {
+    const hit = Object.entries(bodies).find(([fragment]) => url.includes(fragment));
+    return {
+      ok: hit !== undefined,
+      status: hit ? 200 : 404,
+      json: async () => hit?.[1] ?? {},
+    };
+  });
+}
+
+/** 公式の形の応答を 1 つ組む。`type` と足の中身だけ差し替えたいときに使う。 */
+function response(entries: Array<{ type: string; ohlcv: unknown[]; timestamp?: number }>) {
+  return {
+    success: 1,
+    data: {
+      candlestick: entries.map((e) => ({
+        type: e.type,
+        ohlcv: e.ohlcv,
+        // 公式は candlestick 要素の必須フィールドとして定義する（`public-api.md:320`）。
+        ...(e.timestamp === undefined ? {} : { timestamp: e.timestamp }),
+      })),
+    },
+  };
+}
+
+/**
+ * 公式の形の足 1 本（`[open, high, low, close, volume, timestamp]`、値は架空）。
+ * `base` を動かすと、どの応答・どの要素から来た足かを終値（`base + 5`）で見分けられる。
+ */
+const row = (ts: number, base = 100) => [
+  String(base),
+  String(base + 10),
+  String(base - 10),
+  String(base + 5),
+  "1.5",
+  ts,
+];
 
 describe("isValidCandle", () => {
   const base = { open: 1, high: 1, low: 1, close: 1, vol: 0 };
@@ -179,5 +234,137 @@ describe("defaultFetchCandles", () => {
     const r = await fc("btc_jpy", T0, T0 + MIN);
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toContain("network down");
+  });
+
+  // 日跨ぎは URL が 2 本出るだけでは足りない。**両日の応答をそれぞれ処理して束ねる**ことを見る
+  // （日付ごとに違う応答を配って、終値でどちらの日から来た足かを区別する）。
+  it("processes each day's response when the range spans two JST dates", async () => {
+    const day1 = Date.parse("2026-01-01T01:00:00.000Z"); // 2026-01-01 10:00 JST
+    const day2 = Date.parse("2026-01-01T20:00:00.000Z"); // 2026-01-02 05:00 JST
+    const fetchImpl = mockFetchByUrl({
+      "/1min/20260101": response([{ type: "1min", ohlcv: [row(day1, 100)], timestamp: day1 }]),
+      "/1min/20260102": response([{ type: "1min", ohlcv: [row(day2, 200)], timestamp: day2 }]),
+    });
+    const fc = defaultFetchCandles({ baseUrl: "https://example.test", fetchImpl });
+    const r = await fc("btc_jpy", day1, day2);
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data).toEqual([
+      { open: 100, high: 110, low: 90, close: 105, vol: 1.5, timestamp: day1 },
+      { open: 200, high: 210, low: 190, close: 205, vol: 1.5, timestamp: day2 },
+    ]);
+  });
+});
+
+/**
+ * 公式の応答形からの逸脱を落とすことを見る。
+ *
+ * ここが無いと、スキーマは**実装に同意するだけ**になる。zod の object は既定で余剰キーを
+ * 黙って落とすので、宣言していないフィールドは位置が違っても欠けていても気付けない
+ * （実際、フィクスチャが `timestamp` を `data` 直下に置いていたのを長く検出できなかった）。
+ */
+describe("defaultFetchCandles: 公式の応答形の検証", () => {
+  const at = Date.parse("2026-01-01T01:00:00.000Z");
+
+  const run = async (body: unknown) => {
+    const fc = defaultFetchCandles({
+      baseUrl: "https://example.test",
+      fetchImpl: mockFetch(body),
+    });
+    return fc("btc_jpy", at, at);
+  };
+
+  // フィクスチャが公式の形（`public-api.md:328-343`）から外れたらここで落ちる。
+  it("keeps the fixture in the official response shape", () => {
+    expect(Object.keys(FIXTURE.data)).toEqual(["candlestick"]);
+    const entry = FIXTURE.data.candlestick[0];
+    expect(Object.keys(entry)).toEqual(["type", "ohlcv", "timestamp"]);
+    expect(entry.type).toBe("1min");
+    expect(typeof entry.timestamp).toBe("number");
+    // ohlcv の先頭 5 要素は公式では全部 string（`public-api.md:319`）。
+    expect(entry.ohlcv[0].slice(0, 5).every((v: unknown) => typeof v === "string")).toBe(true);
+    expect(typeof entry.ohlcv[0][5]).toBe("number");
+  });
+
+  it.each([
+    ["candlestick が無い", { success: 1, data: {} }],
+    ["ohlcv が無い", { success: 1, data: { candlestick: [{ type: "1min", timestamp: 0 }] } }],
+    ["type が無い", { success: 1, data: { candlestick: [{ ohlcv: [row(0)], timestamp: 0 }] } }],
+    [
+      "ohlcv の要素が 6 つ無い",
+      { success: 1, data: { candlestick: [{ type: "1min", ohlcv: [["1", "1"]], timestamp: 0 }] } },
+    ],
+  ])("rejects a response with a missing required field: %s", async (_name, body) => {
+    const r = await run(body);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain("candles parse");
+  });
+
+  // 公式は candlestick 要素の必須フィールドとして定義する（`public-api.md:320` / `:341`）。
+  // 値は使わないが、来ていること自体を確かめる。
+  it("rejects a candlestick element without timestamp", async () => {
+    const r = await run(response([{ type: "1min", ohlcv: [row(at)] }]));
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain("candles parse");
+  });
+
+  // フィクスチャが誤って取っていた形——`timestamp` を `data` 直下に置く。位置が違えば
+  // 要素の中は欠けているので落ちる。
+  it("rejects timestamp placed on data instead of the candlestick element", async () => {
+    const r = await run({
+      success: 1,
+      data: { candlestick: [{ type: "1min", ohlcv: [row(at)] }], timestamp: at },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain("candles parse");
+  });
+
+  // 要求は常に 1min。`BITBANK_PUBLIC_BASE_URL` の差し替え先が別の足を返したとき、
+  // 1 分足として約定判定に流さない。
+  it("rejects a response whose type is not the requested candle type", async () => {
+    const r = await run(response([{ type: "5min", ohlcv: [row(at)], timestamp: at }]));
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toContain("candles type mismatch");
+      expect(r.error).toContain("want 1min");
+      // 応答由来の値はログまで届くので JSON で包んで出す。
+      expect(r.error).toContain('got ["5min"]');
+    }
+  });
+
+  // 複数要素を返し得るかを公式は明記していない。要求した種類に一致する要素を選ぶ
+  // （先頭決め打ちだと、並びが変わっただけで 5 分足を 1 分足として扱ってしまう）。
+  it("picks the element matching the requested candle type", async () => {
+    const r = await run(
+      response([
+        { type: "5min", ohlcv: [row(at, 900)], timestamp: at },
+        { type: "1min", ohlcv: [row(at, 100)], timestamp: at },
+      ]),
+    );
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data).toEqual([
+      { open: 100, high: 110, low: 90, close: 105, vol: 1.5, timestamp: at },
+    ]);
+  });
+
+  // 同じ種類が複数来たらどれを採るかが決まらない。黙って 1 つ選ばずに落とす。
+  it("rejects duplicated elements of the requested candle type", async () => {
+    const r = await run(
+      response([
+        { type: "1min", ohlcv: [row(at, 100)], timestamp: at },
+        { type: "1min", ohlcv: [row(at, 200)], timestamp: at },
+      ]),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toContain("candles ambiguous: 2 1min elements");
+  });
+
+  // 空の配列は「その日の足が無かった」として扱う（従来どおり。不一致にはしない）。
+  it("treats an empty candlestick array as no candles", async () => {
+    const r = await run(response([]));
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data).toEqual([]);
   });
 });
