@@ -13,6 +13,8 @@ API 担当レビュー後に「確認済み／要修正」列を足す。private
 - [bitbank error codes](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/errors.md)（2026-09-11 確認）
 - [bitbank pair list](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/pairs.md)（2026-09-11 確認）
 - [bitbank private stream](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/private-stream.md)（2026-09-21 確認）
+- [bitbank Public REST API](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/public-api.md)（2026-09-21 確認）
+- [bitbank Public REST API（日本語版）](https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/public-api_JP.md)（2026-09-21 確認）
 
 ## v0.1.0 からの改訂
 
@@ -67,6 +69,10 @@ API 担当レビュー後に「確認済み／要修正」列を足す。private
 - [不変量をどこで担保するか](#不変量をどこで担保するか)（「不変量 5 と `fillOrder` のクランプ」） — 不変量 5 の許容差を合計の大きさへ比例させた（改訂前: 固定の絶対値で、遷移関数だけを通って作った状態が起動できなくなることがあった）
 - [不変量をどこで担保するか](#不変量をどこで担保するか)（「資産キー・ペア名で引く地図は継承値を返さない」） — `constructor` のような名前で `Object.prototype` の継承値が返る経路を塞いだ
 - [ログに出す利用者由来の値](#ログに出す利用者由来の値) — 状態ファイル・環境変数・リクエスト由来の文字列を warn / info に出すとき JSON で包む
+
+### 公開 API の消費
+
+- [公開 Candlestick の消費](#公開-candlestick-の消費) — 公開 API の応答をフィールド表と応答例の両方に突き合わせて検証する。`timestamp` をスキーマで要求し、`type` が要求した `1min` と一致しなければ失敗、同じ種類が複数来ても失敗（改訂前: `candlestick[0]` を種類も見ずに採り、`timestamp` の欠落も通していた）
 
 ## 対応表
 
@@ -550,10 +556,29 @@ control 有効時の既定は `BITBANK_MOCK_FILL_MODE=manual`。`store.tick()` �
 
 `SessionStore` が足の取得の成否を覚え、`GET /_control/state` に `persist` と並べて `candles` として返す。形は `{ lastError: { at, message } | null, consecutiveFailures, lastSuccessAt, fillMode }`。`lastError` は直近の失敗（時刻と理由）で、**成功しても消さない**（`persist` と同じ。「一度でも失敗したか」が残る）。`consecutiveFailures` は連続失敗数で、1 回でも成功すると 0 に戻る。`lastSuccessAt` は直近に取得へ成功した時刻で、**`persist` には無いがこちらには持たせた**——「いつまでは足が取れていたか」が、約定が止まった時点の特定に直結するため。時刻は `tick()` の時計（取得範囲の終端）で記録するので `lastTickAt` と並べて読める。`fillMode` は `BITBANK_MOCK_FILL_MODE` の値で、**上の 3 つが初期値のままである理由を読み分けるために持つ**（`manual` なら `tick()` は足を取りに行かないので、初期値は「取りに行ったが何も起きていない」ではなく「取りに行っていない」を意味する。これが無いと、`market` でまだ active な注文が無いだけの状態と見分けが付かない）。**ペアごとには分けず、store 全体で 1 つ持つ**——取得先は `BITBANK_PUBLIC_BASE_URL` の 1 つなので失敗はふつう全ペアに同時に効き、ペアごとにすると応答のキーが状態ファイル由来のペア名になって（`persist` と並べて読める固定のキーでなくなる）注文が消えたペアの項目をいつ捨てるかも決めなければならず、どのペアで失敗したかは `lastError.message` に入る URL から読めるためである。記録するのは**足を取りに行く 2 経路の両方**で、`tick()` の窓ごとの取得と、成行の発注が使う `getLatestPrice()`（`fillMode` が `manual` でもこちらは取りに行くので、`manual` のまま失敗が記録されることはある）。`getLatestPrice()` が `null` を返す経路は 2 つ（取得の失敗と、窓に足が 1 本も無いこと）あり互換ルートはどちらも `70001` に潰すが、**どちらだったかはこの `candles` で見分けられる**（空振りは失敗として記録せず、`lastSuccessAt` だけが進む）。**取得に失敗したときの挙動は何も変えていない**: `tick()` は warn に落として次のペアへ進み、ループを抜けた後で `lastTickAt` を無条件に現在時刻へ進めるので、**失敗した窓は二度と取りに行かない**。再取得・リトライ・キャッシュ・スロットルは入れていない（要判断事項）。互換ルートは通常どおり成功応答を返し、**失敗はそちらへは漏らさない**（実 API に無い情報であり、封筒の契約を壊すため）。警告は JSON で包む（`tick: fetchCandles failed for "btc_jpy": "candles HTTP 500 for ..."`。理由には取得先の URL が入り、URL には `BITBANK_PUBLIC_BASE_URL` 由来の値と状態ファイル由来のペア名が入り得るので、包まないと改行でログ行を割られる。同じ表の「ログに出す利用者由来の値」節）。**応答のほうは包み直さない**——応答自体が JSON なので、シリアライザが改行も制御文字も逃がす（`persist.lastError.message` と同じ扱い）。`POST /_control/reset` はこの記録を消さない（`persist` と同じ。プロセスの健全性であってシナリオの状態ではないので、`PaperState` を捨てても残す）。**並行した取得は開始の順に完了するとは限らない**ので（互換ルートは並行に叩かれ、遅い要求の応答が後から始まった要求の後に着く）、`lastSuccessAt` と `lastError` は取得範囲の終端で比べて**巻き戻さない**（古い取得が後から着いても、最も新しいものを指したままにする）。`consecutiveFailures` には同じ番人を置かず、**完了した順に数える**——「新しいほうが先に完了したら古い失敗を捨てる」形にすると、失敗を 1 件も記録しないまま `lastError` が `null` のままになる経路ができ、「一度でも失敗したか」が残るという約束を破るためである
 
+**この節が書くのは `GET /_control/state` の `candles` で何が見えるかだけである。** 何をどう叩いていて、応答と失敗の扱いがどこまで公式どおりかは [公開 Candlestick の消費](#公開-candlestick-の消費) 節が持つ。
+
 - **根拠**: 本モック固有（`src/store/session.ts` の `candlesHealth()` / `src/routes/control.ts` の `GET /state`）
 - **本物との差異**: 本物には対応する概念がない（約定は取引所の中で起きるので、クライアントが価格を取りに行く経路そのものが無い）
 - **推測**: はい
 - **利用側への含意**: **約定が無いことだけからは「価格が注文に届いていない」と「足の取得に失敗している」を区別できない。この health を見ること。** `lastError` が `null` でなければ取得に失敗した窓があり、その窓は取り直さないので**約定の取りこぼしが残っている**（その実験の記録はそのぶん疑う）。今まさに失敗し続けているかは `consecutiveFailures > 0` で見る。`lastSuccessAt` を `lastTickAt` と並べれば、どこまで足が取れていたかが分かる。**分からないことが 3 つある**。(1) ペアごとに分けていないので、複数ペアのうち 1 つだけが失敗し続けていても、他のペアの成功で `consecutiveFailures` は 0 に戻る（`lastError` は消さないので「一度でも失敗したか」は残る。どのペアかは `lastError.message` の URL を読む）。(2) 失敗した窓の範囲は残らない（`lastSuccessAt` から下限は絞れるが、どの窓を取りこぼしたかは記録していない）。並行した取得が順不同に完了する場合、`consecutiveFailures` は完了した順に数えた値であって、開始の順に数えた回数とは限らない（時刻の 2 つは巻き戻さないので、そちらは最も新しい取得を指す）。(3) 取得が起きていないこと自体は失敗ではないので、`manual`（`tick()` は取りに行かない）でも、`market` で active な注文がまだ無いときでも、劣化中（`persist.lastError` が非 `null` なら `tick()` が丸ごと抜ける）でも初期値のままになる——**`candles` が初期値だからといって「足が取れている」ことにはならない。`fillMode` と `persist` と併せて読む**
+
+### 公開 Candlestick の消費
+
+`BITBANK_MOCK_FILL_MODE=market` の `SessionStore.tick()` は、**未約定注文を持つペアについて**公開 API の `GET /{pair}/candlestick/1min/{YYYYMMDD}` を叩く（`src/engine/candles.ts` の `defaultFetchCandles()`）。**取得は無条件ではない**——`tick()` は 4 つの門を先に通り、`fillMode` が `manual` なら丸ごと返り、劣化中（`persist.lastError` が非 `null` で `BITBANK_MOCK_PERSIST_FAILURE=degrade`）も丸ごと返り、`lastTickAt` が実時刻より先にあるときは全ペアで取得を飛ばし（同じ表の「control の時計」節）、文字種が不正なペア（状態ファイル由来。`pairAssets` を通らないもの）も飛ばす。**外へ要求が出るのはこの 4 つを抜けたときだけである。** ベース URL の既定は `https://public.bitbank.cc`（`public-api.md:26` / `public-api_JP.md:26`）で、`BITBANK_PUBLIC_BASE_URL` で差し替えられる。**日付は `YYYYMMDD` である**——パステンプレートは `GET /{pair}/candlestick/{candle-type}/{YYYY}`（`public-api.md:299`）だが、パラメータ表が `YYYY` を「`YYYY` 形式または `YYYYMMDD` 形式の日付」と定義し（`:308`）、直後の注記が **`1min` は `YYYYMMDD` の側**だと書き分ける（`:310-312`）。テンプレートの `{YYYY}` だけを読むと誤読する。要求する足の種類は `1min` 固定で（enum は要求側 `:307`、応答側 `:318`）、取得範囲は前回の `lastTickAt` から現在時刻まで。`defaultFetchCandles()` が取りに行くのは**始点の日と終点の日だけ**で、3 日以上空いたときの中間日は取らない（`docs/plan-lab-mock.md` の要判断事項 15。意図した clamp ではなく `Set` の副産物である）。足を取りに行く経路はもう 1 つあり、成行の発注が使う `getLatestPrice()` は `fillMode` が `manual` でも直近 5 分を取りに行く。
+
+**応答形はフィールド表（`public-api.md:316-320`）と応答例（`:324-346`）の両方に合わせてある。** `ohlcv` は `[open, high, low, close, volume, unix ミリ秒]` の配列で、**公式は先頭 5 要素を string と定義する**が（`:319` の型は `[string, string, string, string, string, number][]`。応答例 `:331-340` も `"string"` 5 本と `0`）、**モックは number でも受ける**（`numStr`）。**消費側が緩いのは意図的**で、公式どおり string だけの応答はそのまま通り、緩いぶんに実害が無いので狭めない。candlestick 要素の `timestamp`（`:320`「published at unix timestamp (milliseconds)」。応答例では要素の中 `:341`）は**スキーマで要求するが値はどこにも使わない**——約定判定に要るのは `ohlcv` だけで、宣言するのは**公式の必須フィールドが来ていることを確かめる**ためである（zod の object は余剰キーを黙って落とすので、宣言しない限り欠落も位置違いも検出できない）。`type`（`:318` / 応答例 `:330`）が**要求した `1min` と一致しなければ失敗**にする（`BITBANK_PUBLIC_BASE_URL` で取得先を差し替えられるので、確かめないと差し替え先が返した 5 分足を 1 分足として約定判定へ流し込める）。**`candlestick` が複数要素を返し得るかは公式に明記が無い**（応答例 `:328-343` は 1 要素で、`type` の enum は定義されるが要素数には触れない）ので、「1 要素であること」は要求せず**要求した種類に一致する要素を選ぶ**。同じ種類が複数来たときはどれを採るかが決まらないので、黙って 1 つを採らずに失敗させる。**空の `candlestick` は「その種類の足が無かった」として空の足を返す**（`1min` が無いことを不一致として扱わない）。空配列を返し得るかも公式は明記していない。
+
+**失敗の 4 経路——HTTP 非 2xx / 封筒が `success: 1` でない / スキーマ不一致 / 例外——はどれも throw せず `Result` の失敗で返る。** `tick()` はそれを warn に落として**その tick をそのペアの約定なしで継続し**、**互換ルートは成功応答を返す**ので失敗は応答に漏れない（成行の発注が使う `getLatestPrice()` だけは別で、取得の失敗も窓に足が無いことも封筒の `70001` に潰れる）。`lastTickAt` はループを抜けた後に無条件で現在時刻へ進むので、**失敗した窓は二度と取りに行かない**（再取得・リトライ・キャッシュ・スロットルは入れていない。`docs/plan-lab-mock.md` の要判断事項 15 / 16）。見分ける手段は `GET /_control/state` の `candles` だけである（[足の取得の健全性](#足の取得の健全性)）。
+
+**公開 API の封筒の根拠は `public-api.md:24-37` を採り、`errors.md` は採らない。** `errors.md:20` は "Here is the format of error JSON payload:" と一般的に書くが、**日本語版 `errors_JP.md:20` は「プライベートAPIでエラーが起きた場合は下記のようなレスポンスが返ります。」と private API に限定している。英日でスコープが違う**ので、どちらかを正には選ばない（食い違っていること自体を記録する）。`public-api.md:24-37` のほうは公開 API について `{ "success": 0, "data": { "code": 10000 } }` を明示的に定義している（`:28` の本文と `:30-37` の例）ので、こちらを使う。**なおその 1 行にも英日差がある**——英語版 `:28` は "Any endpoint can return an ERROR" と書き、日本語版 `public-api_JP.md:28` は「リクエストに不正がある場合、以下のようなエラーレスポンスを返します。」と不正な要求に限定する。**これもどちらかへ寄せない。** モックの扱いは封筒の形だけに依存する（`success !== 1` を一律に失敗とする）ので、この差は消費側の挙動を変えない。
+
+**レート制限について公式から分かることは限られている。** `public-api.md` の `## General API Information`（`:24-37`）に**数値の上限は書かれていない**——書いてあるのはベース URL・`4XX` の意味・エラー封筒の 3 項目だけで、日本語版（`public-api_JP.md:24-37`）も同じである。一方 `errors.md:42` は `10009`（"You sent requests too frequently. Retry later with decreased requests." / `errors_JP.md:42`「アクセス頻度が高すぎます。時間をおいてから再度リクエストしてください。」）を定義する。**取得は scheduler ではなく互換ルートの `store.tick()` から起きる**ので、**「1 分足」は要求の頻度の上限を意味しない**——未約定注文が 1 本でもあれば、利用側が互換 8 ルートのどれか（読み取りを含む）を叩くたびに、**上の 4 つの門を抜けるかぎり**取得が走る。`10009` を食っても封筒が `success: 1` でない経路として warn に落ちるだけで、区別した扱いはしない（上の 4 経路のとおり）。
+
+- **根拠**: 公開 API: Candlestick（`public-api.md:294-346` / `public-api_JP.md:294-346`。フィールド表 `:316-320`、応答例 `:324-346`、日付書式の注記 `:310-312`）。ベース URL とエラー封筒は `public-api.md:24-37`。`10009` は `errors.md:42`
+- **本物との差異**: 消費側が公式より**緩い**のが 2 点（`ohlcv` の先頭 5 要素に number を許す、`candlestick` の要素数を 1 に限らない）、**狭い**のが 2 点（`type` の不一致と、要求した種類の重複を失敗にする）。取得は 1 分足だけで、他の種類も他の公開エンドポイントも叩かない。**叩く先は実在の公開 API そのもの**で、モック側に本物との差異という概念が無い（差し替えは `BITBANK_PUBLIC_BASE_URL`）
+- **推測**: **一部はい。** 応答形と失敗の扱いは公式から導けている（フィールド表・応答例・注記のすべてと突き合わせた）。**日付のタイムゾーンは推測**——`ymdJst()` は JST（UTC+9）を日付の境界にしているが、`public-api.md:308-312` は書式しか定義せず、どのタイムゾーンで日付を切るかに触れていない。`candlestick` が複数要素・空配列を返し得るか、複数日をどう取るかも公式に明記が無い
+- **利用側への含意**: **約定が無いことだけからは「価格が注文に届いていない」と「足の取得に失敗している」を区別できない。市場モードで実験するなら `GET /_control/state` の `candles` を監視すること**（[足の取得の健全性](#足の取得の健全性)）。**モックが叩くのは実在の公開 API で、要求は利用者の環境から出る**——未約定注文が 1 本も無ければ `tick()` からの取得はゼロだが、1 本でもあれば、**市場モードで 4 つの門を抜けているかぎり、利用側のポーリング頻度がそのまま公開 API への要求頻度になる**（`manual`・劣化中・時計が先・不正なペアでは走らない）。取得先を閉じた環境へ向けたいなら `BITBANK_PUBLIC_BASE_URL` を差し替える
 
 ### 状態の永続化
 
