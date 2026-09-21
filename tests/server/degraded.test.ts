@@ -194,8 +194,14 @@ describe("劣化モード（persist に失敗した後）", () => {
       // シナリオの読み出し口。ここから状態ファイルへ書き戻して再起動するのが復帰手順。
       const state = await fastify.inject({ method: "GET", url: "/_control/state" });
       expect(state.statusCode).toBe(200);
-      expect(state.json()).toEqual({ ...memory, persist: store.persistHealth() });
+      expect(state.json()).toEqual({
+        ...memory,
+        persist: store.persistHealth(),
+        candles: store.candlesHealth(),
+      });
       expect(state.json().persist.lastError).not.toBeNull();
+      // 劣化中は tick が丸ごと抜けるので足も取りに行かない（取得の失敗ではない）。
+      expect(state.json().candles.lastError).toBeNull();
     } finally {
       await close();
     }

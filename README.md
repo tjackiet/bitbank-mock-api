@@ -123,7 +123,9 @@ bitbank API には存在しません。本番クライアントから叩かな�
 | `POST` | `/_control/tick` | `{ pair, price }` または `{ pair, candle }` で人工の足を 1 本適用 |
 | `POST` | `/_control/clock` | 時計（`lastTickAt`）を動かす。本文省略で現在時刻、`{ lastTickAt }` に ISO 文字列かエポックミリ秒。注文・約定・残高は残る（`updatedAt` は書き込み時刻として動きます） |
 | `POST` | `/_control/reset` | 状態を初期化 |
-| `GET` | `/_control/state` | `PaperState` に、状態ファイルへの書き出しの状況（`persist`）を添えて返す |
+| `GET` | `/_control/state` | `PaperState` に、状態ファイルへの書き出しの状況（`persist`）と足の取得の状況（`candles`）を添えて返す |
+
+**市場モード（`BITBANK_MOCK_FILL_MODE=market`）で足が取れているかは `GET /_control/state` の `candles` で確かめます。** 取得に失敗しても互換ルートは成功応答を返し続け、失敗した窓は取り直さないので、**約定が無いことだけからは「価格が注文に届いていない」と「足の取得に失敗している」を区別できません**。`lastError`（直近の失敗。成功しても消えません）、`consecutiveFailures`（連続失敗数。今まさに失敗し続けているか）、`lastSuccessAt`（いつまで足が取れていたか。`lastTickAt` と並べて読みます）、`fillMode`（`manual` なら `tick()` はそもそも取りに行きません）を見てください。詳細は [`docs/fidelity.md`](docs/fidelity.md) の「足の取得の健全性」の節にあります。
 
 `POST /_control/tick` が進める `lastTickAt`（control の時計）は、足の `timestamp` でも tick ごとの 60 秒の前進でも、実時刻より先へは 24 時間までしか動きません。超える要求は 400（`CANDLE_TOO_FAR_AHEAD` / `CLOCK_TOO_FAR_AHEAD`）で断り、状態は変えません。戻すのは `POST /_control/clock` です（`reset` と違って注文・約定・残高は残ります）。詳細は [`docs/fidelity.md`](docs/fidelity.md) の「control の時計」の節にあります。
 

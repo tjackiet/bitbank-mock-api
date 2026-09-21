@@ -67,17 +67,30 @@ describe("/_control routes", () => {
     const { fastify, store } = await setup();
     const res = await fastify.inject({ method: "GET", url: "/_control/state" });
     expect(res.statusCode).toBe(200);
-    // PaperState に、状態ファイルへの書き出しの状況を添えて返す。
-    expect(res.json()).toEqual({ ...store.state(), persist: store.persistHealth() });
+    // PaperState に、状態ファイルへの書き出しの状況と足の取得の状況を添えて返す。
+    expect(res.json()).toEqual({
+      ...store.state(),
+      persist: store.persistHealth(),
+      candles: store.candlesHealth(),
+    });
     expect(res.json().persist).toEqual({ lastError: null, consecutiveFailures: 0 });
+    // 一度も取りに行っていない状態。`fillMode` があるので、manual だから取りに行って
+    // いないのか、market でまだ機会が無いだけなのかを応答だけで読み分けられる。
+    expect(res.json().candles).toEqual({
+      lastError: null,
+      consecutiveFailures: 0,
+      lastSuccessAt: null,
+      fillMode: "manual",
+    });
   });
 
-  // `persist` は PaperState の一部ではない。PaperStateSchema は不明なキーを落とすので、
-  // この応答をそのまま状態ファイルへ書き戻しても読み込みは通る。
+  // `persist` と `candles` は PaperState の一部ではない。PaperStateSchema は不明なキーを
+  // 落とすので、この応答をそのまま状態ファイルへ書き戻しても読み込みは通る。
   it("応答をそのまま状態ファイルへ書き戻しても読み込める", async () => {
     const { fastify, store } = await setup();
     const res = await fastify.inject({ method: "GET", url: "/_control/state" });
     expect(res.json().persist).toBeDefined();
+    expect(res.json().candles).toBeDefined();
 
     const dir = await mkdtemp(join(tmpdir(), "bitbank-mock-control-"));
     try {

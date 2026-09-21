@@ -29,6 +29,12 @@ export type TestServerOptions = {
    * 渡し忘れていた）。
    */
   feeRate?: number;
+  /**
+   * 既定は `candlesByPair` を返すスタブ（`stubFetchCandles`）。**足の取得が失敗する筋を
+   * 見るテストだけが渡す。** 渡さない限り外向きの口には落ちない（`SessionStore` の既定は
+   * 公開 API で、`tests/network-guard.ts` がそれを落とす）。
+   */
+  fetchCandles?: FetchCandles;
 };
 
 export async function buildTestServer(
@@ -39,7 +45,7 @@ export async function buildTestServer(
   const store = new SessionStore(state, {
     path: opts.path ?? null,
     fillMode: opts.fillMode ?? "market",
-    fetchCandles: stubFetchCandles(candlesByPair),
+    fetchCandles: opts.fetchCandles ?? stubFetchCandles(candlesByPair),
     logger: opts.logger,
     feeRate: opts.feeRate,
   });

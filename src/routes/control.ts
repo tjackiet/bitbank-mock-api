@@ -114,14 +114,26 @@ export const controlRoutes: FastifyPluginAsync<ControlRouteOptions> = async (fas
   });
 
   /**
-   * `PaperState` に、状態ファイルへの書き出しの状況（`persist`）を添えて返す（デバッグ用）。
+   * `PaperState` に、状態ファイルへの書き出しの状況（`persist`）と足の取得の状況
+   * （`candles`）を添えて返す（デバッグ用）。
    *
-   * `persist` は `PaperState` の一部ではない。`PaperStateSchema` は不明なキーを落とすので、
-   * この応答をそのまま状態ファイルへ書き戻しても読み込みは通る。
+   * `persist` と `candles` はどちらも `PaperState` の一部ではない。`PaperStateSchema` は
+   * 不明なキーを落とすので、この応答をそのまま状態ファイルへ書き戻しても読み込みは通る。
+   *
+   * `candles` を並べるのは、**市場モードで足の取得に失敗しても互換ルートが成功応答を
+   * 返し続ける**ためである（失敗した窓は取り直さず、`lastTickAt` はそのまま進む）。
+   * 約定が起きないという結果だけからは「価格が届いていない」と「足が取れていない」を
+   * 区別できないので、区別する手段をここに置く（`docs/fidelity.md` の
+   * 「足の取得の健全性」）。
+   *
+   * メッセージは JSON の値として載せるだけで、ログのように包み直しはしない。応答自体が
+   * JSON なので、シリアライザが改行も制御文字も逃がす（ログで包むのは、行指向の出力では
+   * 改行が行を割るからで、`persist.lastError.message` も同じ扱い）。
    */
   fastify.get("/state", async () => ({
     ...fastify.store.state(),
     persist: fastify.store.persistHealth(),
+    candles: fastify.store.candlesHealth(),
   }));
 
   /**
