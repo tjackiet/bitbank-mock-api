@@ -243,7 +243,7 @@ describe("POST /v1/user/spot/order", () => {
     const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000, btc: 100 } }));
     for (const pair of ["xrp_jpy", "ltc_jpy"]) {
       // 価格は既定桁（btc_jpy の 0 桁）に合わせる。未登録ペアの桁を仮置きする決定は
-      // 今回変えていないので、`xrp_jpy` の価格も整数でないと 20003 で弾かれる。
+      // 今回変えていないので、`xrp_jpy` の価格も整数でないと `40020` で弾かれる。
       const res = await fastify.inject({
         method: "POST",
         url: "/v1/user/spot/order",
@@ -266,7 +266,10 @@ describe("POST /v1/user/spot/order", () => {
     expect(body.data.code).toBe(40017);
   });
 
-  it("rejects bad payload", async () => {
+  // スキーマ（`amount` の `refine((n) => n > 0)`）で落ちる経路。**落ちたのが `amount` である
+  // ことは zod の issue から分かる**ので、汎用の `20003` ではなく `40001` を返す
+  // （`docs/fidelity.md` の「エラーコード」節。改訂前は `20003`）。
+  it("rejects a negative amount with 40001", async () => {
     const { fastify } = await build();
     const res = await fastify.inject({
       method: "POST",
@@ -276,7 +279,7 @@ describe("POST /v1/user/spot/order", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(20003);
+    expect(body.data.code).toBe(40001);
   });
 
   it("returns 30001 when amount is missing", async () => {
@@ -327,8 +330,16 @@ describe("POST /v1/user/spot/order", () => {
     expect(body.data.code).toBe(30012);
   });
 
-  it("returns 60004 when amount exceeds pair digits", async () => {
-    const { fastify } = await build(buildState({ balances: { jpy: 10_000_000 } }));
+  /**
+   * 桁溢れの 2 つを**同じ形で**見る。
+   *
+   * 改訂前は数量が `60004`、価格が `20003` と 2 つのコードに割れていた。同じ「桁が合わない」
+   * 失敗なので、それぞれのフィールドの不正値コードへ寄せた（数量 `40001` / 価格 `40020`）。
+   * **`60004` の公式の意味は最小数量割れ**で桁溢れではないため、番号は空けてある
+   * （`docs/fidelity.md` の「エラーコード」節）。
+   */
+  it("returns 40001 when amount exceeds pair digits", async () => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }));
     const res = await fastify.inject({
       method: "POST",
       url: "/v1/user/spot/order",
@@ -336,7 +347,22 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(60004);
+    expect(body.data.code).toBe(40001);
+    expect(store.state().orders).toEqual([]);
+  });
+
+  it("returns 40020 when price exceeds pair digits", async () => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }));
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      // btc_jpy の価格桁は 0。小数を持つ価格は桁に乗らない。
+      payload: { pair: "btc_jpy", amount: "0.001", price: "5000000.5", side: "buy", type: "limit" },
+    });
+    const body = res.json() as { success: number; data: { code: number } };
+    expect(body.success).toBe(0);
+    expect(body.data.code).toBe(40020);
+    expect(store.state().orders).toEqual([]);
   });
 
   /**
@@ -350,13 +376,17 @@ describe("POST /v1/user/spot/order", () => {
    *
    * 欠落（`30012` / `30001`）とは別のコードになることも併せて見る。0 を「未指定」と
    * 同じ扱いに寄せると、利用側はこの 2 つを区別できなくなる。
+   *
+   * **`price` と `amount` でコードが分かれる**のがこの改訂の要点で、改訂前は 4 件とも
+   * `20003` だった。`price` の非正値は engine の `INVALID_PRICE` / `LIMIT_PRICE_REQUIRED`
+   * を通って `40020` に、`amount` の非正値はスキーマの `refine` で落ちて `40001` になる。
    */
   it.each([
-    ["price が 0", { price: 0 }],
-    ["price が負", { price: -1 }],
-    ["amount が 0", { amount: 0 }],
-    ["amount が負", { amount: -0.001 }],
-  ])("%s なら 20003 で断り、注文を作らない", async (_label, override) => {
+    ["price が 0", { price: 0 }, 40020],
+    ["price が負", { price: -1 }, 40020],
+    ["amount が 0", { amount: 0 }, 40001],
+    ["amount が負", { amount: -0.001 }, 40001],
+  ])("%s なら %d で断り、注文を作らない", async (_label, override, code) => {
     const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }));
     const res = await fastify.inject({
       method: "POST",
@@ -373,12 +403,12 @@ describe("POST /v1/user/spot/order", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(20003);
+    expect(body.data.code).toBe(code);
     // 応答だけでなく状態も見る。断ったのに注文が残っていたら意味がない。
     expect(store.state().orders).toEqual([]);
   });
 
-  it("0 と欠落は別のコードで断る（20003 と 30012 / 30001）", async () => {
+  it("0 と欠落は別のコードで断る（40020 / 40001 と 30012 / 30001）", async () => {
     const { fastify } = await build(buildState({ balances: { jpy: 10_000_000 } }));
     const post = async (payload: Record<string, unknown>) => {
       const res = await fastify.inject({ method: "POST", url: "/v1/user/spot/order", payload });
@@ -386,13 +416,13 @@ describe("POST /v1/user/spot/order", () => {
     };
     const base = { pair: "btc_jpy", side: "buy", type: "limit" };
 
-    expect(await post({ ...base, amount: 0.001, price: 0 })).toBe(20003);
+    expect(await post({ ...base, amount: 0.001, price: 0 })).toBe(40020);
     expect(await post({ ...base, amount: 0.001 })).toBe(30012);
-    expect(await post({ ...base, amount: 0, price: 5_000_000 })).toBe(20003);
+    expect(await post({ ...base, amount: 0, price: 5_000_000 })).toBe(40001);
     expect(await post({ ...base, price: 5_000_000 })).toBe(30001);
   });
 
-  it("market の 0 数量も 20003 で断る（価格は市場から取る経路）", async () => {
+  it("market の 0 数量も 40001 で断る（価格は市場から取る経路）", async () => {
     // market は `price` を送らず `marketPrice` を使うので、`amount` 側だけが残る。
     const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000 } }), {
       btc_jpy: [
@@ -406,8 +436,106 @@ describe("POST /v1/user/spot/order", () => {
     });
     const body = res.json() as { success: number; data: { code: number } };
     expect(body.success).toBe(0);
-    expect(body.data.code).toBe(20003);
+    expect(body.data.code).toBe(40001);
     expect(store.state().orders).toEqual([]);
+  });
+});
+
+/**
+ * **不正値のフィールドごとに公式のコードを返す**ことを wire の応答で固定する。
+ *
+ * 改訂前はこの群がすべて汎用の `20003`（数量の桁溢れだけ `60004`）に潰れており、
+ * 利用側はコードから「どのフィールドが悪いのか」を読み取れなかった。公式 `errors.md`
+ * （コミット `0badd680`）には該当する番号が揃っている——`40001` "Invalid order quantity."、
+ * `40020` "Invalid order price."、`40021` "Invalid order side."、`40024` "Invalid order type."。
+ *
+ * **実 API がこれらを返すことは実測していない**（発注は実弾になる）。意味から選んだ推測で、
+ * 改訂前の `20003` / `60004` も実測ではなかった（`docs/fidelity.md` の「エラーコード」節）。
+ */
+describe("発注パラメータの不正値は公式のコードで断る", () => {
+  const build = setupBuildTestServer();
+
+  /** 1 本投げて error code を返す。成功したら `"success:1"` を返して取り違えを防ぐ。 */
+  const post = async (payload: Record<string, unknown>) => {
+    const { fastify, store } = await build(buildState({ balances: { jpy: 10_000_000, btc: 1 } }));
+    const res = await fastify.inject({ method: "POST", url: "/v1/user/spot/order", payload });
+    const body = res.json() as { success: number; data: { code?: number } };
+    // 断ったときは状態を変えない。コードだけ見て「断った」と思い込まないための対照。
+    if (body.success === 0) expect(store.state().orders).toEqual([]);
+    return body.success === 1 ? "success:1" : body.data.code;
+  };
+
+  const base = { pair: "btc_jpy", amount: "0.001", price: "5000000", side: "buy", type: "limit" };
+
+  it("side が buy / sell のどちらでもなければ 40021", async () => {
+    expect(await post({ ...base, side: "long" })).toBe(40021);
+    expect(await post({ ...base, side: 1 })).toBe(40021);
+  });
+
+  it("type が limit / market のどちらでもなければ 40024", async () => {
+    expect(await post({ ...base, type: "stop_limit" })).toBe(40024);
+    expect(await post({ ...base, type: true })).toBe(40024);
+  });
+
+  it("amount が数値として読めなければ 40001", async () => {
+    expect(await post({ ...base, amount: "abc" })).toBe(40001);
+    expect(await post({ ...base, amount: {} })).toBe(40001);
+  });
+
+  it("price が数値として読めなければ 40020", async () => {
+    expect(await post({ ...base, price: "abc" })).toBe(40020);
+    expect(await post({ ...base, price: {} })).toBe(40020);
+  });
+
+  // `pair` がスキーマで落ちる経路は「あって文字列でない」だけである（欠落は上流の
+  // `missingCreateOrderCode()` が `30009` で先に拾う）。だから `40017` に寄せられる。
+  it("pair が文字列でなければ 40017", async () => {
+    expect(await post({ ...base, pair: true })).toBe(40017);
+    expect(await post({ ...base, pair: ["btc_jpy"] })).toBe(40017);
+  });
+
+  /**
+   * **複数のフィールドが同時に落ちたときの優先順**を固定する。
+   *
+   * 並びは同じ経路の欠落検査（`missingCreateOrderCode()`）と同じ
+   * `pair` → `amount` → `side` → `type` → `price` で、`src/routes/params.ts` の
+   * `CREATE_ORDER_PARAM_ORDER` が唯一の出典である。**実 API の優先順は未実測**なので、
+   * 利用側はこの選択に依存しないこと。ここで固定するのは「欠落と不正値で並びが食い違わない」
+   * という設計判断のほうである。
+   */
+  it("同時に落ちたときは pair → amount → side → type → price の順", async () => {
+    expect(await post({ ...base, pair: true, amount: "x", side: "x", type: "x", price: "x" })).toBe(
+      40017,
+    );
+    expect(await post({ ...base, amount: "x", side: "x", type: "x", price: "x" })).toBe(40001);
+    expect(await post({ ...base, side: "x", type: "x", price: "x" })).toBe(40021);
+    expect(await post({ ...base, type: "x", price: "x" })).toBe(40024);
+    expect(await post({ ...base, price: "x" })).toBe(40020);
+  });
+
+  // 欠落の `3000x` は不正値より先に出る。**実測されているのは欠落そのものに返るコード**で
+  // （`pair` の欠落 → `30009` を 3 経路で確認。`docs/fidelity.md` の「エラーコード」節）、
+  // **欠落と不正値が同時にあるときどちらが勝つかは実測していない**。ここで固定するのは
+  // モックの設計判断——欠落の検査をスキーマ検証より前に置く——であって、実 API の
+  // 優先順の再現ではない。今回の改訂でその判断を崩していないことを見る。
+  it("欠落は今までどおり 3000x が先に出る", async () => {
+    expect(await post({ ...base, pair: undefined, side: "x" })).toBe(30009);
+    expect(await post({ ...base, amount: undefined, side: "x" })).toBe(30001);
+    expect(await post({ ...base, side: undefined, type: "x" })).toBe(30013);
+    expect(await post({ ...base, type: undefined })).toBe(30015);
+    expect(await post({ ...base, price: undefined })).toBe(30012);
+  });
+
+  // 本文そのものが object でないときは、どのフィールドの問題かを言えない。
+  // **`20003` 据え置き**（`docs/fidelity.md` の「エラーコード」節）。
+  it("本文が object でなければ 20003 に落ちる", async () => {
+    const { fastify } = await build();
+    const res = await fastify.inject({
+      method: "POST",
+      url: "/v1/user/spot/order",
+      payload: [1, 2, 3],
+    });
+    expect(res.json()).toEqual({ success: 0, data: { code: 20003 } });
   });
 });
 

@@ -25,7 +25,7 @@ export function err(code: number): Envelope<never> {
 
 // 出典: https://github.com/bitbankinc/bitbank-api-docs/blob/0badd68019646171826625b074cfef4235c3e713/errors.md
 // 公式と違う意味に流用しているコードは docs/fidelity.md の「エラーコード」節に記録する
-// （20003 / 60004）。errors.md に定義の無い番号は置かない。
+// （**`20003` だけ**。`60004` の流用は廃止した）。errors.md に定義の無い番号は置かない。
 export const ErrorCode = {
   /**
    * "Url not found."
@@ -47,6 +47,17 @@ export const ErrorCode = {
   MISSING_PRICE: 30012,
   MISSING_SIDE: 30013,
   MISSING_TYPE: 30015,
+  /**
+   * "Invalid order quantity."（`errors.md:104`、コミット `0badd680`）。**`amount` の不正値**に返す。
+   * 負・`0`・有限でない値・数値として読めない値・ペアの数量桁に収まらない値が、すべてここへ落ちる
+   * （欠落だけは `30001` で別）。公式の "order quantity" は rest-api.md のパラメータ名 `amount` に当たる。
+   *
+   * **実 API がこの番号を返すことは実測していない**——発注は実弾になるため測れない。
+   * errors.md の意味から選んだ**推測**である。ただし**改訂前の `20003`（桁溢れだけ `60004`）も
+   * 実測ではなかった**ので、どちらも推測のまま公式の意味に近い方へ寄せた、という整理になる
+   * （`docs/fidelity.md` の「エラーコード」節）。
+   */
+  INVALID_ORDER_AMOUNT: 40001,
   // 絞り込みパラメータごとの不正値コード（40006 / 40007 / 40008 / 40009 / 40022 の 5 つ。
   // 間に挟まる 40017 はペアのコードでこの群ではない）。**汎用の 20003 ではなくこれらを
   // 返すことを実 API で実測した**（docs/fidelity.md の「絞り込みパラメータの不正値」）。
@@ -89,12 +100,37 @@ export const ErrorCode = {
   TOO_MANY_ORDERS: 40015,
   /** "Invalid asset." 実 API は不正なペアにこれを返す（2026-09-17 実測）。絞り込み群ではない。 */
   INVALID_ASSET: 40017,
+  /**
+   * "Invalid order price."（`errors.md:113`）。**`price` の不正値**に返す。非正・有限でない値・
+   * 数値として読めない値・ペアの価格桁に収まらない値、それに指値なのに価格が使えない場合
+   * （`LIMIT_PRICE_REQUIRED`）がここへ落ちる（欠落だけは `30012` で別）。
+   *
+   * **実測していない**。根拠と留保は `INVALID_ORDER_AMOUNT` と同じで、改訂前の `20003` も
+   * 実測ではなかった（`docs/fidelity.md` の「エラーコード」節）。
+   */
+  INVALID_ORDER_PRICE: 40020,
+  /**
+   * "Invalid order side."（`errors.md:114`）。**`side` が `buy` / `sell` のどちらでもない**ときに返す
+   * （欠落だけは `30013` で別）。**実測していない**（留保は `INVALID_ORDER_AMOUNT` と同じ）。
+   */
+  INVALID_ORDER_SIDE: 40021,
   INVALID_SINCE: 40022, // "Invalid trading start time."
+  /**
+   * "Invalid order type."（`errors.md:116`）。**`type` が `limit` / `market` のどちらでもない**ときに
+   * 返す（欠落だけは `30015` で別）。本モックは `stop` / `stop_limit` を実装しないので、それらも
+   * ここへ落ちる。**実測していない**（留保は `INVALID_ORDER_AMOUNT` と同じ）。
+   */
+  INVALID_ORDER_TYPE: 40024,
   ORDER_NOT_FOUND: 50009,
   ALREADY_CANCELED: 50026,
   ALREADY_EXECUTED: 50027,
   INSUFFICIENT_FUNDS: 60001,
-  AMOUNT_PRECISION: 60004,
+  // `60004`「Order quantity has exceeded the lower threshold.」＝**最小数量割れ**は、
+  // ここに**意図して置いていない**。改訂前は数量の桁溢れに流用していたが、桁溢れは
+  // `40001`（"Invalid order quantity."）へ移して番号を空けた。`/spot/pairs` の `unit_amount` を
+  // 取得して最小数量の検査を入れるときに、**公式本来の意味で**使うためである。
+  // **別の意味で埋め直さないこと**（`docs/fidelity.md` の「エラーコード」節）。
+
   /**
    * "Too many Simultaneous orders, current limit is 30."
    * **同時に持てる未約定注文の本数の上限**を超えた新規発注に返す（`errors.md:202`。
