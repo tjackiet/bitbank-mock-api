@@ -170,14 +170,14 @@ export const remainingOf = (o) => o.startAmount - o.executedAmount;
 **状態遷移を 1 か所に集める**（`src/engine/transitions.ts`、新設）:
 
 ```ts
-placeOrder(state, input, now, marketPrice?) → { state, order, trade? }
+placeOrder(state, input, now, marketPrice?, feeRate?) → { state, order, trade? }
    // limit は UNFILLED で止まる。market は呼び出し側（ルート）が SessionStore.getLatestPrice() で
    // 解決した価格を marketPrice に渡し、内部で fillOrder(remaining, marketPrice) まで進める。
    // market で marketPrice 未指定なら Result.error（価格が取れないときは 70001 を返す現行挙動を踏襲）
    // 戻り値の形は全遷移で共通: { state, order, trade? }（TransitionOk）。state は次の永続化対象。
    // **touchedAssets は #34 で削除済み**（4 生成点・0 読み手の dead code。11.1 に記録がある）。
    // asset_update の発火情報をどこから取るかは 14.2 の要判断事項 13 で、まだ決めていない
-fillOrder(state, orderId, price, amount, at) → { state, order, trade }
+fillOrder(state, orderId, price, amount, at, feeRate?) → { state, order, trade }
    // amount < remaining なら PARTIALLY_FILLED、== remaining なら FULLY_FILLED
    // 呼び出し側が amount = remaining を渡せば全約定になる。**「常に remaining」ではない**——
    // POST /_control/orders/:order_id/fill は部分約定量も受け付ける（src/routes/control.ts）
@@ -186,6 +186,13 @@ cancelOrder(state, orderId, at)           → { state, order }
    // 終端状態なら Result.error（呼び出し側が 50026 / 50027 に変換）
 rejectOrder(state, orderId, at)           → REJECTED（プラン A では到達させない。関数だけ用意）
 ```
+
+**`feeRate` は `placeOrder` / `fillOrder` の末尾にある省略可能な引数**で、既定は
+`DEFAULT_TAKER_FEE_RATE`（0.0012）。拘束額と手数料の計算に使う。渡すのは `SessionStore.feeRate` を
+持つ呼び出し側で、`src/routes/create-order.ts` と `src/routes/control.ts` の fill が明示的に渡し、
+それ以外は既定のまま呼ぶ。**拘束に使う料率と引き落としに使う料率が食い違わない**のはこの形による
+（`SessionStore.feeRate` は `readonly` で構築時に 1 度だけ決まる。14.1 の (1)）。`cancelOrder` と
+`rejectOrder` は残高を動かさないので受け取らない。
 
 `applyFill()` / `runTick()` は内部で `fillOrder()` を呼ぶ薄いラッパにする。`runTick()` の 1 分足判定ロジック自体は変えない。
 
@@ -815,7 +822,7 @@ R4（private stream）に着手する前のギャップ分析。**この節は�
 
 | メソッド | REST との関係 | 共有できるか |
 |---|---|---|
-| `spot_trade` | REST の Fetch trade history の応答表（`rest-api.md:948-964`）と private の表（`private-stream.md:245-261`）が**同じ 15 フィールド**。並び順は違うが集合は一致する | **`formatTrade()` をそのまま共有できる** |
+| `spot_trade` | REST の Fetch trade history の応答表（`rest-api.md:948-964`）と private の表（`private-stream.md:245-261`）が**同じ 15 フィールド**。並び順は違うが集合は一致する。**うち 3 つ（`position_side` / `profit_loss` / `interest`）は公式が `\| undefined` と定義する信用取引の条件付きフィールド**で、`formatTrade()` は残る**現物の 12 フィールド**を出す（`tests/routes/official-fields.ts` の `UNIMPLEMENTED_TRADE_FIELDS`） | **`formatTrade()` をそのまま共有できる。** 現物のペイロードとしては 12 フィールドで過不足が無いので、R4 のために `formatTrade()` を変える必要は無い（**信用取引を扱うようになったら別の判断**） |
 | `spot_order_new` / `spot_order` | REST の Fetch order information（`rest-api.md:292-310`、17 フィールド）に対する**スーパーセット**（`executed_at` / `is_just_triggered` が追加。`canceled_at` は REST の Fetch order information の表に無いが本モックは既に出している——`docs/fidelity.md` の「注文の `canceled_at`」節） | **共通部分のみ共有**。分け方は未決 |
 | `asset_update` | private のフィールド表の 6 つは REST の assets（`rest-api.md:189-201`、11 フィールド）の**名前の部分集合**。**ただし private の応答例は camelCase** | **命名が未確定なので決められない** |
 | `spot_order_invalidation` | REST に対応物が無い | 実装しないので不要 |
