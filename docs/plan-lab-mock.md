@@ -170,20 +170,29 @@ export const remainingOf = (o) => o.startAmount - o.executedAmount;
 **状態遷移を 1 か所に集める**（`src/engine/transitions.ts`、新設）:
 
 ```ts
-placeOrder(state, input, now, marketPrice?) → { state, order, trade?, touchedAssets }
+placeOrder(state, input, now, marketPrice?, feeRate?) → { state, order, trade? }
    // limit は UNFILLED で止まる。market は呼び出し側（ルート）が SessionStore.getLatestPrice() で
    // 解決した価格を marketPrice に渡し、内部で fillOrder(remaining, marketPrice) まで進める。
    // market で marketPrice 未指定なら Result.error（価格が取れないときは 70001 を返す現行挙動を踏襲）
-   // 戻り値の形は全遷移で共通: { state, order, trade?, touchedAssets: string[] }。
-   // state は次の永続化対象、touchedAssets は残高が動いた資産（asset_update の発火に使う）
-fillOrder(state, orderId, price, amount, at) → { state, order, trade }
+   // 戻り値の形は全遷移で共通: { state, order, trade? }（TransitionOk）。state は次の永続化対象。
+   // **touchedAssets は #34 で削除済み**（4 生成点・0 読み手の dead code。11.1 に記録がある）。
+   // asset_update の発火情報をどこから取るかは 14.2 の要判断事項 13 で、まだ決めていない
+fillOrder(state, orderId, price, amount, at, feeRate?) → { state, order, trade }
    // amount < remaining なら PARTIALLY_FILLED、== remaining なら FULLY_FILLED
-   // プラン A では呼び出し側が常に amount = remaining を渡す（部分約定は起こさない）
+   // 呼び出し側が amount = remaining を渡せば全約定になる。**「常に remaining」ではない**——
+   // POST /_control/orders/:order_id/fill は部分約定量も受け付ける（src/routes/control.ts）
 cancelOrder(state, orderId, at)           → { state, order }
    // UNFILLED → CANCELED_UNFILLED、PARTIALLY_FILLED → CANCELED_PARTIALLY_FILLED
    // 終端状態なら Result.error（呼び出し側が 50026 / 50027 に変換）
 rejectOrder(state, orderId, at)           → REJECTED（プラン A では到達させない。関数だけ用意）
 ```
+
+**`feeRate` は `placeOrder` / `fillOrder` の末尾にある省略可能な引数**で、既定は
+`DEFAULT_TAKER_FEE_RATE`（0.0012）。拘束額と手数料の計算に使う。渡すのは `SessionStore.feeRate` を
+持つ呼び出し側で、`src/routes/create-order.ts` と `src/routes/control.ts` の fill が明示的に渡し、
+それ以外は既定のまま呼ぶ。**拘束に使う料率と引き落としに使う料率が食い違わない**のはこの形による
+（`SessionStore.feeRate` は `readonly` で構築時に 1 度だけ決まる。14.1 の (1)）。`cancelOrder` と
+`rejectOrder` は残高を動かさないので受け取らない。
 
 `applyFill()` / `runTick()` は内部で `fillOrder()` を呼ぶ薄いラッパにする。`runTick()` の 1 分足判定ロジック自体は変えない。
 
@@ -283,13 +292,14 @@ rejectOrder(state, orderId, at)           → REJECTED（プラン A では到�
 設計だけ先に決めておく。
 
 - **トランスポート（決定済み、2026-09-11）**: PubNub を模倣せず、素の WebSocket（`@fastify/websocket`）を `ws://host/_stream/private` で提供する。`GET /v1/user/subscribe` は公式通りの形で `pubnub_channel` / `pubnub_token` を返し、値はダミー。README に「PubNub SDK ではなく WebSocket で受ける」と明記する。理由: PubNub のプロトコル互換を作る労力に対して、利用側で必要なのはメッセージ本体の互換だけ
-- **メッセージ**: 公式と同じ `{ message: { method, params } }`。`params` は公式通り配列。イベントごとに整形関数を分ける
-  - `spot_order_new`（発注時）/ `spot_order`（更新時）: `params: [formatOrder(order)]`。注文のスナップショット
-  - `spot_trade`: `params: [formatTrade(trade)]`。REST の `trade_history` と同じ形
-  - `asset_update`: `params: [formatAssetUpdate(asset)]`。変化した資産だけを載せる。**公式はこのメッセージだけキーが camelCase**（`freeAmount` / `lockedAmount` / `onhandAmount` / `amountPrecision` / `withdrawingAmount`）なので、REST の `formatAssets` とは別の整形関数にする
-- **発火点**: 3.1 の遷移関数の共通戻り値 `{ state, order, trade?, touchedAssets }` のうち `order` / `trade` / `touchedAssets` を使い、`SessionStore` が `order` / `trade` / `assets` の 3 種のイベントを emit する。REST 経路も control 経路も同じ遷移関数を通るため、発火漏れが無い
+- **メッセージ**: 公式と同じ `{ message: { method, params } }`。**`params` の形はメソッドで揃っていない**——4 つは配列だが、**`spot_order_invalidation` だけ公式の応答例が `params` をオブジェクトにしている**（`private-stream.md:234-236` / `private-stream_JP.md:235-237`。中の `order_id` が配列）。しかも同じ節のフィールド表は `order_id` を**単数の数値**と書いており、表と例が食い違う。詳しくは `docs/fidelity.md` の「private stream の `spot_order_invalidation`」節。イベントごとに整形関数を分ける
+  - `spot_order_new`（発注時）/ `spot_order`（更新時）: 注文のスナップショット。**公式が「内容は `spot_order_new` と同一」と明記している**ので（`private-stream.md:176` / `private-stream_JP.md:177`）、**整形関数を 2 本作る必要は無い**
+  - **その注文ペイロードは REST のスーパーセットで、`formatOrder()` のままでは足りない。** 公式のフィールド表（`private-stream.md:115-136` / `private-stream_JP.md:116-137`）は REST の Fetch order information の応答表（`rest-api.md:292-310`）に対して **`executed_at` と `is_just_triggered`** を追加で持ち、`formatOrder()` はどちらも持たない。**共通部分は共有できるが、そのままでは足りない**。どう分けるかは 14.1 の (2) に調査結果だけ置いてあり、**決めていない**
+  - `spot_trade`: `params: [formatTrade(trade)]`。**REST の `trade_history` と同じ形**（応答表どうしを突き合わせて確認した。14.1 の (2)）
+  - `asset_update`: 変化した資産だけを載せる。**キーの命名は公式内で矛盾しており未確定**——フィールド表は snake_case、JSON 応答例は camelCase である（英日とも同じ構造）。**どちらを採るかは R4 実装時に決める**ので、整形関数を分けるかどうかもいま決めない（`docs/fidelity.md` の「private stream の `asset_update` のキー」節）
+- **発火点**: `TransitionOk`（`{ state, order, trade? }`）から `order` と `trade` は取れる。**`asset_update` の発火情報は現在どこからも取れない**——`touchedAssets` は #34 で削除済みである（11.1）。また**「REST 経路も control 経路も同じ遷移関数を通るため発火漏れが無い」とは言えない**: `POST /_control/reset` と `POST /_control/clock` は遷移関数を通らず、`SessionStore.tick()` は `commit()` を経由せず、一括取消は n 件の結果を畳んで `commit()` を 1 回だけ呼ぶ（経路の一覧は 14.1 の (3)）。**扱いは 14.2 の要判断事項 13 へ送る**
 - **障害注入の余地**: emit と WebSocket 送信の間に `DeliveryPolicy` インタフェース（`deliver(events) => events`）を 1 つ挟む。プラン A では恒等写像。プラン B で重複・順序入替・欠落を差し込む
-- **テスト**: `ws` クライアントで接続し、注文を 2 本発注し、1 本を `/_control/` で約定、もう 1 本を取消する流れで `spot_order_new`（2 回）/ `spot_order`（FULLY_FILLED と CANCELED_UNFILLED）/ `spot_trade` / `asset_update`（camelCase キー）の 4 種すべての形を検証する
+- **テスト**: 範囲内のメソッドは **5 つ**（`asset_update` / `spot_order_new` / `spot_order` / `spot_order_invalidation` / `spot_trade`）。`ws` クライアントで接続し、注文を 2 本発注し、1 本を `/_control/` で約定、もう 1 本を取消する流れで `spot_order_new`（2 回）/ `spot_order`（FULLY_FILLED と CANCELED_UNFILLED）/ `spot_trade` / `asset_update` の形を検証する。**`asset_update` のキーの検証は命名が決まってから書く**（上記）。**`spot_order_invalidation` は受入条件に入れない**——公式の発生条件（マッチングエンジン内の資産不足）が本モックでは構造的に起こり得ないため（`docs/fidelity.md` の「private stream の `spot_order_invalidation`」節）
 
 ---
 
@@ -764,3 +774,137 @@ temporarily restricted.」）の置き場所。**プラン A では実装しな�
 
 **この節は記録であって決定ではない。** プラン B に着手するときに 9 節・10.5・11.2・12.2 と
 同じ形で要判断事項として起こし直すこと。
+
+---
+
+## 14. R4: private stream の実装前調査（2026-09-21、記録のみ）
+
+R4（private stream）に着手する前のギャップ分析。**この節は調査結果であって決定ではない。**
+決まっていないものは 14.2 の要判断事項に送ってある。**`src/` は 1 行も触っていない。**
+
+範囲は公式 `private-stream.md` / `private-stream_JP.md`（固定コミット `0badd680`）が定義する
+11 メソッドのうち**現物の 5 つ**（`asset_update` / `spot_order_new` / `spot_order` /
+`spot_order_invalidation` / `spot_trade`）。残る 6 つ（`dealer_order_new` / `withdrawal` /
+`deposit` / `margin_position_update` / `margin_payable_update` / `margin_notice_update`）は
+ディーラー・入出金・信用取引で、プラン A の契約範囲の外なので見ていない。
+
+**この調査で 3.1 / 3.4 の記述を 8 箇所直した。** 計画が、実装が既に変えた構造の上に載っていた
+（`touchedAssets` の削除・部分約定の受付・`params` の形・注文ペイロードの差・`asset_update` の
+キー・発火漏れの主張・メソッド数）。**訂正は実装に合わせただけで、新しい設計は書いていない。**
+
+### 14.1 調査で確かめたこと（根拠として残す）
+
+#### (1) メソッド × フィールドの構成可能性
+
+現在の `PaperState` / `OrderRecord` / `TradeRecord` から公式のペイロードを作れるか。
+
+| メソッド | 値は作れるか | 足りないもの |
+|---|---|---|
+| `asset_update` | **作れる。** 6 フィールド（`asset` / 精度 / free / locked / onhand / withdrawing）はすべて `state.balances` と `computeLocked()` から出る。`formatAssets()` が既に同じ値を計算している | **「どの資産が変わったか」という発火情報**。`withdrawing_amount` は出金を模さないので常に `0`（REST 側と同じ扱い） |
+| `spot_order_new` / `spot_order` | **ほぼ作れる。** `OrderRecord` から `formatOrder()` が 15 フィールドを出す。信用・逆指値のフィールド（`position_side` / `trigger_price` / `triggered_at`）は公式が `\| undefined` と定義し、本モックは該当機能を持たないので出さない（`docs/fidelity.md` の「信用取引・逆指値の項目」節と同じ扱い） | **`executed_at`** と **`is_just_triggered`**（下記） |
+| `spot_order_invalidation` | 値は `order_id` だけなので自明に作れる | **発生条件そのもの。** 起こり得ないので実装しない（`docs/fidelity.md` の「private stream の `spot_order_invalidation`」節） |
+| `spot_trade` | **作れる。** `TradeRecord` から `formatTrade()` が現物で意味を持つ 12 フィールドを全て出す | 無し |
+
+**結論: 値はほぼ揃っており、足りないのは「どの資産・どの注文について通知するか」という
+発火情報である。** フィールドの不足は下の 2 つだけで、どちらも構造の問題ではない。
+
+- **`executed_at`**（`private-stream.md:120` / `private-stream_JP.md:121`）は
+  `TradeRecord.executedAt` から**導出できる**（注文 id で trades を引けばよい）。ただし
+  **公式は「最初 / 最後 / 直近のどの約定時刻か」を書いていない**——フィールド表の説明は
+  "order executed at unix timestamp (milliseconds)" だけで、応答例も型しか示さない。
+  **`OrderRecord` にフィールドを足す根拠はまだ無い。** 導出の規則が決まれば
+  `formatOrder()` の外側で足せる
+- **`is_just_triggered`**（`private-stream.md:136` / `private-stream_JP.md:137`）は公式の型が
+  `boolean`（`\| undefined` が付かない）ので常に出る。本モックに逆指値のトリガという概念が
+  無いので**載せる値を決める必要がある**が、**ここでは決めない**
+
+#### (2) 整形関数の分類
+
+| メソッド | REST との関係 | 共有できるか |
+|---|---|---|
+| `spot_trade` | REST の Fetch trade history の応答表（`rest-api.md:948-964`）と private の表（`private-stream.md:245-261`）が**同じ 15 フィールド**。並び順は違うが集合は一致する。**うち 3 つ（`position_side` / `profit_loss` / `interest`）は公式が `\| undefined` と定義する信用取引の条件付きフィールド**で、`formatTrade()` は残る**現物の 12 フィールド**を出す（`tests/routes/official-fields.ts` の `UNIMPLEMENTED_TRADE_FIELDS`） | **`formatTrade()` をそのまま共有できる。** 現物のペイロードとしては 12 フィールドで過不足が無いので、R4 のために `formatTrade()` を変える必要は無い（**信用取引を扱うようになったら別の判断**） |
+| `spot_order_new` / `spot_order` | REST の Fetch order information（`rest-api.md:292-310`、17 フィールド）に対する**スーパーセット**（`executed_at` / `is_just_triggered` が追加。`canceled_at` は REST の Fetch order information の表に無いが本モックは既に出している——`docs/fidelity.md` の「注文の `canceled_at`」節） | **共通部分のみ共有**。分け方は未決 |
+| `asset_update` | private のフィールド表の 6 つは REST の assets（`rest-api.md:189-201`、11 フィールド）の**名前の部分集合**。**ただし private の応答例は camelCase** | **命名が未確定なので決められない** |
+| `spot_order_invalidation` | REST に対応物が無い | 実装しないので不要 |
+
+**突き合わせで公式の食い違いがもう 1 つ出た。** REST の Fetch trade history は応答表に
+`fee_occurred_amount_quote` を持つのに（`rest-api.md:961`）、**同じ節の JSON 応答例
+（`rest-api.md:987-1011`）はそれを持たない**。private の `spot_trade` は表（`:251`）と
+例（`:275`）の**両方**が持つ。本モックは従来どおり表の側に寄せてあり、**挙動は変えていない**
+（`docs/fidelity.md` の「約定の固定フィールド」節に記録した）。
+
+#### (3) 状態が変わる経路の一覧
+
+「同じ遷移関数を通るので発火漏れが無い」という 3.4 の主張が成り立たないことの根拠。
+
+**遷移関数を通る経路。**
+
+| 経路 | 通る遷移関数 | 状態の反映 |
+|---|---|---|
+| `POST /v1/user/spot/order`（指値） | `placeOrder` | `commit()` 1 回 |
+| `POST /v1/user/spot/order`（成行） | `placeOrder` → `fillOrder` | `commit()` 1 回（注文 1 + 約定 1） |
+| `POST /v1/user/spot/cancel_order` | `cancelOrder` | `commit()` 1 回 |
+| `POST /v1/user/spot/cancel_orders` | `cancelOrder` × n | **`commit()` 1 回。** n 件の結果を畳んで次状態だけを渡すので、**注文ごとの結果が `commit()` の引数に残らない**（`commit(next: PaperState)` は次状態しか受け取らない。`src/store/session.ts`） |
+| `POST /_control/orders/:order_id/fill` | `fillOrder` | `commit()` 1 回 |
+| `POST /_control/tick` | `runTick` → `applyFill` → `fillOrder` | `commit()` 1 回（約定は 0 件以上） |
+| `SessionStore.tick()`（market モード） | `runTick` → `applyFill` → `fillOrder` | **`commit()` を通らない。** `_state` を直接差し替えて `persist()` を呼ぶ（`src/store/session.ts`）。約定が 0 件なら書き出しもしない |
+
+**遷移関数を通らない経路。**
+
+| 経路 | 何が変わるか |
+|---|---|
+| `POST /_control/reset` | `freshState()` で**状態を丸ごと差し替える**（注文・約定・残高・採番のすべて。`src/routes/control.ts`） |
+| `POST /_control/clock` | `lastTickAt` と `updatedAt` **だけ**を動かす（注文・約定・残高は触らない） |
+| `SessionStore.tick()` の末尾 | 約定が 1 件も無くても `lastTickAt` / `updatedAt` を上書きする |
+| 起動時の読み込み | 状態ファイルから読む。v1 / v2 なら `migrateToLatest()` が形を変える |
+
+**この一覧から言えるのは 2 つだけである。** (a) 遷移関数の戻り値だけを見る発火では
+`/_control/reset` と `/_control/clock` を取りこぼす。(b) 一括取消と `SessionStore.tick()` は
+`commit()` の引数から個々の注文・約定を復元できない。**どう扱うかは 14.2 の要判断事項 13 へ送る。**
+
+### 14.2 要判断事項（12.2 の続き。**いずれも未決定**）
+
+**ここに決定は書かない。** 論点と選択肢と代償だけを置く。R4 に着手するときに 9 節・10.5 /
+11.2 / 12.2 と同じ形で決めて、決定を追記すること。
+
+#### 13. 読み取り要求が private stream のイベントを起こしてよいか
+
+**互換 8 ルートすべてがハンドラの先頭で `await store.tick()` を呼ぶ**
+（`active-orders` / `assets` / `cancel-order` ×2 / `create-order` / `order-info` ×2 /
+`trade-history`）。**11.2 の決定 11 で「テストで固定する。フックへは移さない」と決めた構造**
+である。
+
+market モードでは、**`GET /v1/user/assets` を叩いただけで約定が起き得る。** R4 後はそれが
+`spot_trade` / `asset_update` として飛ぶので、利用側からは**「何もしていないのにイベントが
+来る」**ように見える。
+
+| 選択肢 | 代償 |
+|---|---|
+| そのまま発火させる | 実 API に近いのはこちら（本物でも約定は勝手に起きる）。ただし**発火の契機がモック固有**——本物は市場が動いたときに飛ぶが、モックは「誰かが読んだとき」に飛ぶ。読まない限り静かなので、利用側が「イベントが来ないから約定していない」と学習し得る |
+| 読み取り由来の tick では発火させない | 実装は単純（発火の可否をハンドラから渡すだけ）。ただし**状態と stream がずれる**——`GET /v1/user/assets` の応答には出ている約定が、stream には流れない。このモックが一番避けたい種類の食い違いである |
+| `fillMode: manual` を既定にして自動約定自体を避ける | 読み取りが約定を起こさなくなるので論点が消える。ただし**既定の変更**であり（control 無効時は今 `market`）、「起動しただけで板が動く」という既存の体験を変える。README と対応表の書き換えも要る |
+
+**`asset_update` の発火情報をどこから取るかも、この項目に含める**（14.1 の (1) のとおり、
+値は作れるが「どの資産が変わったか」が無い）。
+
+| 案 | 代償 |
+|---|---|
+| `commit()` の前後で資産を比較する | **`src/` の変更が `SessionStore` に閉じる。** ただし `SessionStore.tick()` は `commit()` を通らないので（14.1 の (3)）、そこは別に手当てが要る。また全資産の比較になるため、資産が増えると比較のコストが乗る |
+| 遷移の戻り値に変化資産を戻す | 発火情報が正確になる。ただし **`TransitionOk` / `applyFill` / `runTick` / 一括取消の畳み込みまで波及する**。#34 で `touchedAssets` を「4 生成点・0 読み手」として削除した経緯があるので、**戻すなら読み手を同じ PR で入れること**（また dead code にしない） |
+
+#### 14. 永続化に失敗したとき、イベントと HTTP 応答が食い違ってよいか
+
+書き込みに失敗したとき、**状態は先にメモリへ反映され、HTTP 応答だけが失敗に差し替わる**
+（劣化モード。`docs/fidelity.md` の「状態の永続化」節。`commit()` は `replace()` を同期に
+実行してから `persist()` を待ち、`persist()` は失敗しても throw しない）。
+
+イベントを commit 時に出すと「**HTTP は失敗、stream は成功**」が起きる。
+
+| 出す時点 | 性質 |
+|---|---|
+| commit 時（メモリへ反映した直後） | stream はメモリの状態と常に一致する。**HTTP が `70001` を返した要求のイベントが流れる**ので、利用側は「失敗したのに約定が来た」を見る |
+| 永続化の成功後 | HTTP と stream が揃う。ただし**劣化後は状態が動いてもイベントが 1 つも流れない**（メモリ上は進んでいるのに stream が止まる）。`SessionStore.tick()` は約定が 0 件なら書き出さないので、**書き出しの有無が発火の有無になる**という別の食い違いも入る |
+| HTTP 応答を返した後 | 「応答を見てから stream を待つ」利用側の順序期待に合う。ただし**発火が要求の寿命の外に出る**ので、応答を返した後で落ちたぶんは消える。`/_control/` 経路と `SessionStore.tick()`（要求に紐づかない）の扱いを別に決める必要がある |
+
+**決めない。** 劣化モードそのものの扱い（10.5）と、`SessionStore.tick()` が `commit()` を
+通らないこと（14.1 の (3)）の両方に跨がるので、R4 に着手するときに 13 と合わせて決める。
