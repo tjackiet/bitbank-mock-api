@@ -29,7 +29,8 @@
 **`package.json` の `version` は現在の挙動を表しません**（理由と扱いは [`docs/plan-a-readiness.md`](docs/plan-a-readiness.md) の「7. 版と改訂の所在」）。`v0.1.0` タグは実在しますが、**そこから挙動を変える改訂が入り続けています**。
 
 - **渡すのは commit SHA です。** タグでもブランチ名でもありません（`v0.1.0` は現在の挙動と違い、`main` は動くので同じ名前が後から別の挙動を指します）
-- **その SHA は `git rev-parse origin/main` で分かります。** 受け取った側が同じ SHA を `git checkout` すれば、挙動と [`docs/fidelity.md`](docs/fidelity.md) の記述がそろいます（対応表が書き表すのは、いま読んでいるリビジョンの挙動です）
+- **SHA は渡すチェックアウトそのものから取ります**——`git rev-parse HEAD`。最新の `main` を渡すなら**先に `git fetch origin main` してから** `git rev-parse origin/main`（remote-tracking ref は fetch するまで古いままなので、そうしないと渡した SHA と手元の内容がずれます）
+- 受け取った側が同じ SHA を `git checkout` すれば、挙動と [`docs/fidelity.md`](docs/fidelity.md) の記述がそろいます（対応表が書き表すのは、いま読んでいるリビジョンの挙動です）
 - **`v0.1.0` から何が変わったか**は [`docs/fidelity.md` の「v0.1.0 からの改訂」](docs/fidelity.md#v010-からの改訂) に索引があります
 
 ## 実装しているエンドポイント
