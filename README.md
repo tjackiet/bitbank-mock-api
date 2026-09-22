@@ -16,13 +16,21 @@
 
 ## これは何
 
-Plan A（v0.1.0）で実装しているのは次の 3 つです。
+**Plan A** は [`docs/plan-lab-mock.md`](docs/plan-lab-mock.md) が定める**計画の段階名**で、リリースの版数ではありません。この段階で実装しているのは次の 3 つです。
 
 - **R3** 注文レコード（`OrderRecord`）を単一の真実とする状態モデル
 - **R1** `GET /v1/user/spot/order` と `POST /v1/user/spot/orders_info` による照会
 - **R2** 実験用の `/_control/`（市場に依存せず約定を起こす）
 
 注文状態の照合（リコンサイル）は `orders_info` を主経路にします。private stream（R4）は未実装です。
+
+### どのリビジョンを渡すか
+
+**`package.json` の `version` は現在の挙動を表しません**（理由と扱いは [`docs/plan-a-readiness.md`](docs/plan-a-readiness.md) の「7. 版と改訂の所在」）。`v0.1.0` タグは実在しますが、**そこから挙動を変える改訂が入り続けています**。
+
+- **渡すのは commit SHA です。** タグでもブランチ名でもありません（`v0.1.0` は現在の挙動と違い、`main` は動くので同じ名前が後から別の挙動を指します）
+- **その SHA は `git rev-parse origin/main` で分かります。** 受け取った側が同じ SHA を `git checkout` すれば、挙動と [`docs/fidelity.md`](docs/fidelity.md) の記述がそろいます（対応表が書き表すのは、いま読んでいるリビジョンの挙動です）
+- **`v0.1.0` から何が変わったか**は [`docs/fidelity.md` の「v0.1.0 からの改訂」](docs/fidelity.md#v010-からの改訂) に索引があります
 
 ## 実装しているエンドポイント
 
