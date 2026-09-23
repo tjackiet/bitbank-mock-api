@@ -786,7 +786,7 @@ R4（private stream）に着手する前のギャップ分析。**この節は�
 11 メソッドのうち**現物の 5 つ**（`asset_update` / `spot_order_new` / `spot_order` /
 `spot_order_invalidation` / `spot_trade`）。残る 6 つ（`dealer_order_new` / `withdrawal` /
 `deposit` / `margin_position_update` / `margin_payable_update` / `margin_notice_update`）は
-ディーラー・入出金・信用取引で、プラン A の契約範囲の外なので見ていない。
+ディーラー・入出金・信用取引で、プラン A で互換を主張する範囲の外なので見ていない。
 
 **この調査で 3.1 / 3.4 の記述を 8 箇所直した。** 計画が、実装が既に変えた構造の上に載っていた
 （`touchedAssets` の削除・部分約定の受付・`params` の形・注文ペイロードの差・`asset_update` の
