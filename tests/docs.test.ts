@@ -274,6 +274,67 @@ describe("docs/fidelity.md 対応表の形", () => {
       .map((c) => `${c.item}: ${c.text}`);
     expect(notQuestion, `問いの形にする: ${notQuestion.join(" / ")}`).toEqual([]);
   });
+
+  /**
+   * 索引（`docs/fidelity.md` の `## 実 API への問い`）と、小節の確認先が実 API の箇条を突き合わせる。
+   * 索引は小節とは別の場所にあるので、**片方だけ直すと黙って食い違う**。
+   * `tests/structure.test.ts` の許可リストと同じく、両方向を見る。
+   *
+   * **何を数えるか**:
+   *
+   * - **索引の項目**は、`## 実 API への問い` の中の `### 優先度 高` / `中` / `低` の下にある
+   *   `- [<小節名>](#<アンカー>) — <問い>` の行 1 本
+   * - 索引の中で `- ` で始まる行は、この形で優先度の見出しの下に無ければ落とす
+   *   （形を崩した行を黙って数から外さないため）
+   * - 同一性は**小節名と問いの組**で見る。1 つの小節が問いを複数持つので、小節名だけでは足りない
+   * - リンク先の実在と、リンクの文字列が見出しを名指ししていることは、下の
+   *   「docs/fidelity.md の見出しを指すリンク」が見るので、ここでは重ねない
+   */
+  const index = (() => {
+    const lines = FIDELITY.split("\n");
+    const start = lines.indexOf("## 実 API への問い");
+    const end = lines.findIndex((l, i) => i > start && l.startsWith("## "));
+    const entries: Array<{ key: string; line: string }> = [];
+    const malformed: string[] = [];
+    let priority: string | undefined;
+    for (const l of start < 0 ? [] : lines.slice(start + 1, end)) {
+      if (l.startsWith("### ")) priority = /^### 優先度 (高|中|低)$/.exec(l)?.[1];
+      if (!l.startsWith("- ")) continue;
+      const m = /^- \[(.+?)\]\(#[^)]+\) — (.+)$/.exec(l);
+      if (m === null || priority === undefined) malformed.push(l);
+      else entries.push({ key: `${m[1]}\u0000${m[2]}`, line: l });
+    }
+    return { entries, malformed };
+  })();
+
+  const questions = confirmItems
+    .filter((c) => c.kind === "実 API")
+    .map((c) => `${c.item}\u0000${c.text}`);
+
+  const show = (key: string) => key.replace("\u0000", ": ");
+
+  it("索引を拾えている（導出が空振りしていない）", () => {
+    expect(index.entries.length).toBeGreaterThan(20);
+    expect(index.malformed, `形か置き場所が違う: ${index.malformed.join(" / ")}`).toEqual([]);
+  });
+
+  it("確認先が実 API の問いは、すべて索引にある", () => {
+    const listed = new Set(index.entries.map((e) => e.key));
+    const missing = questions.filter((q) => !listed.has(q)).map(show);
+    expect(missing, `「実 API への問い」へ足す: ${missing.join(" / ")}`).toEqual([]);
+  });
+
+  it("索引の問いは、すべて小節に実 API の確認先としてある", () => {
+    const asked = new Set(questions);
+    const stale = index.entries.filter((e) => !asked.has(e.key)).map((e) => show(e.key));
+    expect(stale, `小節に無いので索引から消すか直す: ${stale.join(" / ")}`).toEqual([]);
+  });
+
+  it("索引に同じ問いを 2 度載せていない", () => {
+    const seen = new Set<string>();
+    const dup = index.entries.filter((e) => seen.size === seen.add(e.key).size).map((e) => e.line);
+    expect(dup, `重複: ${dup.join(" / ")}`).toEqual([]);
+  });
 });
 
 /**
