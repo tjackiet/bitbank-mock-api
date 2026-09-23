@@ -141,6 +141,9 @@ describe("docs/fidelity.md 対応表の形", () => {
    */
   const REQUIRED = ["根拠", "本物との差異", "推測", "利用側への含意"];
 
+  /** 「推測」の下の確認先の区分。意味は `docs/fidelity.md` の「確認先」の段落。 */
+  const CONFIRM_KINDS = ["実 API", "利用側と合意", "モックの設計判断"];
+
   const sections = (() => {
     const lines = FIDELITY.split("\n");
     const start = lines.indexOf("## 対応表");
@@ -194,6 +197,82 @@ describe("docs/fidelity.md 対応表の形", () => {
       if ((line?.replace("- **推測**: ", "") ?? "").trim() === "") empty.push(item);
     }
     expect(empty, `推測かどうかが書かれていない: ${empty.join(" / ")}`).toEqual([]);
+  });
+
+  /**
+   * 「推測」の下の確認先の箇条（区分の意味は `docs/fidelity.md` の「確認先」の段落が持つ）。
+   *
+   * **何を数えるか**を先に決めておく。ここが曖昧だと、書き足した人が形を少し崩しただけで
+   * 黙って数から漏れる。
+   *
+   * - **小節**は `## 対応表` の中の `### ` 見出し 1 つ（上の `sections`）。`## ペア` や
+   *   `## 状態の不変量（PaperState v3）` の下は対応表の小節ではないので見ない
+   * - **確認先の箇条**は、`- **推測**: ` の行の**直後に続く**、字下げ 2 つの箇条
+   *   （行頭が空白 2 つと `- `）。別の行が挟まったところで終わる
+   * - 箇条は `確認先 **<区分>**: <文>` の形だけを認め、区分は `CONFIRM_KINDS` の 3 つに限る
+   * - 「推測」の値が `いいえ` で始まる小節は確認先を持たなくてよい。それ以外は 1 つ以上持つ
+   */
+  const confirmItems = sections.flatMap(({ item, body }) => {
+    const at = body.findIndex((l) => l.startsWith("- **推測**: "));
+    const block: string[] = [];
+    for (let i = at + 1; at >= 0 && i < body.length && body[i].startsWith("  - "); i++) {
+      block.push(body[i]);
+    }
+    return block.map((line) => {
+      const m = /^ {2}- 確認先 \*\*(.+?)\*\*: (.+)$/.exec(line);
+      return { item, line, kind: m?.[1], text: m?.[2] };
+    });
+  });
+
+  it("確認先の箇条を拾えている（導出が空振りしていない）", () => {
+    expect(confirmItems.filter((c) => c.kind === "実 API").length).toBeGreaterThan(20);
+    for (const kind of CONFIRM_KINDS) {
+      expect(
+        confirmItems.some((c) => c.kind === kind),
+        `${kind} が 1 つも無い`,
+      ).toBe(true);
+    }
+  });
+
+  it("確認先の箇条は決めた形と 3 つの区分に収まっている", () => {
+    const bad = confirmItems
+      .filter((c) => c.kind === undefined || !CONFIRM_KINDS.includes(c.kind))
+      .map((c) => `${c.item}: ${c.line.trim()}`);
+    expect(bad, `形か区分が違う: ${bad.join(" / ")}`).toEqual([]);
+  });
+
+  it("確認先は「推測」の直下にだけ置いている", () => {
+    // 直下の外に置くと上の `confirmItems` から漏れ、数えられない確認先になる。
+    const counted = new Set(confirmItems.map((c) => `${c.item}\u0000${c.line}`));
+    const stray = sections.flatMap(({ item, body }) =>
+      body
+        .filter((l) => /^\s*- 確認先 /.test(l) && !counted.has(`${item}\u0000${l}`))
+        .map((l) => `${item}: ${l.trim()}`),
+    );
+    expect(stray, `「推測」の直下へ移す: ${stray.join(" / ")}`).toEqual([]);
+  });
+
+  it("「推測」が いいえ で始まらない小節は確認先を持つ", () => {
+    const withConfirm = new Set(confirmItems.map((c) => c.item));
+    const missing = sections
+      .filter(({ body }) => {
+        const value = body.find((l) => l.startsWith("- **推測**: "))?.replace("- **推測**: ", "");
+        return !(value ?? "").startsWith("いいえ");
+      })
+      .map(({ item }) => item)
+      .filter((item) => !withConfirm.has(item));
+    expect(missing, `誰が答えられるかが書かれていない: ${missing.join(" / ")}`).toEqual([]);
+  });
+
+  /**
+   * 実 API への確認は、答える人がその場で答えられる**問い**にする。「…を推測で決めた」の形だと
+   * 何を聞かれているかが分からない。形の近似として、文が「か」で終わることを見る。
+   */
+  it("確認先が実 API の箇条は問いの形で終わる", () => {
+    const notQuestion = confirmItems
+      .filter((c) => c.kind === "実 API" && !c.text?.endsWith("か"))
+      .map((c) => `${c.item}: ${c.text}`);
+    expect(notQuestion, `問いの形にする: ${notQuestion.join(" / ")}`).toEqual([]);
   });
 });
 
