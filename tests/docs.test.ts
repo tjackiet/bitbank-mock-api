@@ -210,7 +210,8 @@ describe("docs/fidelity.md 対応表の形", () => {
    * - **確認先の箇条**は、`- **推測**: ` の行の**直後に続く**、字下げ 2 つの箇条
    *   （行頭が空白 2 つと `- `）。別の行が挟まったところで終わる
    * - 箇条は `確認先 **<区分>**: <文>` の形だけを認め、区分は `CONFIRM_KINDS` の 3 つに限る
-   * - 「推測」の値が `いいえ` で始まる小節は確認先を持たなくてよい。それ以外は 1 つ以上持つ
+   * - 「推測」の値が `いいえ` で始まり、`はい` も `留保` も含まない小節は確認先を持たない。
+   *   それ以外は 1 つ以上持つ（下の「確認先の有無が「推測」の値と合っている」）
    */
   const confirmItems = sections.flatMap(({ item, body }) => {
     const at = body.findIndex((l) => l.startsWith("- **推測**: "));
@@ -252,16 +253,27 @@ describe("docs/fidelity.md 対応表の形", () => {
     expect(stray, `「推測」の直下へ移す: ${stray.join(" / ")}`).toEqual([]);
   });
 
-  it("「推測」が いいえ で始まらない小節は確認先を持つ", () => {
+  /**
+   * 「推測」の値が `いいえ` で始まっても、値の中に `はい`（一部が推測）か `留保` を書いていれば
+   * **条件付きのいいえ**として扱い、確認先を 1 つ以上要求する。条件の付かない `いいえ` は逆に
+   * 確認先を持ってはいけない（答えを待つ事項が無いのに、聞くべきことが残っているように読める）。
+   */
+  it("確認先の有無が「推測」の値と合っている", () => {
     const withConfirm = new Set(confirmItems.map((c) => c.item));
-    const missing = sections
-      .filter(({ body }) => {
-        const value = body.find((l) => l.startsWith("- **推測**: "))?.replace("- **推測**: ", "");
-        return !(value ?? "").startsWith("いいえ");
-      })
-      .map(({ item }) => item)
-      .filter((item) => !withConfirm.has(item));
+    const missing: string[] = [];
+    const extra: string[] = [];
+    for (const { item, body } of sections) {
+      const value =
+        body.find((l) => l.startsWith("- **推測**: "))?.replace("- **推測**: ", "") ?? "";
+      const plainNo = value.startsWith("いいえ") && !/はい|留保/.test(value);
+      if (!plainNo && !withConfirm.has(item)) missing.push(item);
+      if (plainNo && withConfirm.has(item)) extra.push(item);
+    }
     expect(missing, `誰が答えられるかが書かれていない: ${missing.join(" / ")}`).toEqual([]);
+    expect(
+      extra,
+      `条件の付かない「いいえ」に確認先がある（留保を「推測」に書くか、確認先を外す）: ${extra.join(" / ")}`,
+    ).toEqual([]);
   });
 
   /**
