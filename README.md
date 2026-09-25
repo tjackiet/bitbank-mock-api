@@ -16,13 +16,31 @@
 
 ## これは何
 
-**Plan A** は [`docs/plan-lab-mock.md`](docs/plan-lab-mock.md) が定める**計画の段階名**で、リリースの版数ではありません。この段階で実装しているのは次の 3 つです。
+bitbank Private REST API と同じパスで、**発注・約定・取消・注文照会・残高照会**ができるモックサーバです。どれも 1 つの状態（注文・約定・仮想残高）を共有しているので、発注すると残高が拘束され、約定すると約定履歴と残高に反映され、取り消すと拘束が外れます。固定の応答を返すスタブではありません。状態はファイルに書き出し、再起動後も引き継ぎます（書き出しに失敗したときの扱いは「[環境変数](#環境変数)」節）。
 
-- **R3** 注文レコード（`OrderRecord`）を単一の真実とする状態モデル
-- **R1** `GET /v1/user/spot/order` と `POST /v1/user/spot/orders_info` による照会
-- **R2** 実験用の `/_control/`（市場に依存せず約定を起こす）
+発注から約定、残高の変化までの一連は [`examples/scenario-plan-a.sh`](examples/scenario-plan-a.sh) で確かめられます。何がどこまでできるかを根拠つきで確かめるなら [`docs/plan-a-readiness.md`](docs/plan-a-readiness.md) の「2. このモックで何ができるか」を読んでください。
 
-注文状態の照合（リコンサイル）は `orders_info` を主経路にします。private stream（R4）は未実装です。
+### 約定エンジン
+
+約定の判定は `src/engine/` の約定エンジンが行います。**板は持たず、1 分足で判定します。** 発注以降に始まった足のうち、買いは安値が指値以下、売りは高値が指値以上になったものがあれば、残量全部を指値の価格で約定させます。足の入手元は `BITBANK_MOCK_FILL_MODE` で選びます。
+
+- **`market`**: bitbank 公式 public API の 1 分足を取得して約定させます。裏で常時監視するのではなく、互換ルートへの要求を受けるたびに、前回からの足をまとめて確かめます
+- **`manual`**: 自動では約定しません。`POST /_control/tick` で足を 1 本ずつ与えるか、`POST /_control/orders/:order_id/fill` で注文を指定して約定させます（数量を指定すれば部分約定）。市場の値動きに左右されず、同じシナリオを再現するためのモードです
+
+既定は、`/_control/` を有効にしたとき（`BITBANK_MOCK_CONTROL=1`）が `manual`、無効なら `market` です。成行注文だけはモードによらず、公式 public API から直近の終値を取ってその場で全量約定させます（`manual` でも外へ取りに行きます）。
+
+### 無いもの
+
+- **private stream**: 約定や注文の変化を push で受け取る口はまだありません。注文の状態は `POST /v1/user/spot/orders_info` で問い合わせて照合してください
+- **認証ヘッダの検証**: どんなヘッダでも、無くても通ります。本物の API キーを向けないでください
+- **レート制限**: どれだけ叩いても 429（`10009`）は返りません
+- **注文訂正**: 発注後に価格や数量を変える口はありません
+
+意図して実装していないものの一覧は「[非目標（Plan A）](#非目標plan-a)」、本物との差分（手数料が単一の料率であることなど）は [`docs/fidelity.md`](docs/fidelity.md) にあります。
+
+### Plan A とは
+
+**Plan A** は [`docs/plan-lab-mock.md`](docs/plan-lab-mock.md) が定める**計画の段階名**で、リリースの版数ではありません。計画文書と `docs/fidelity.md` に出てくる `R` と `Phase` の番号は、それぞれ計画側の要件番号と着手の順です。たとえば private stream は要件 `R4` にあたり、`Phase 5` で着手する予定です。README ではどちらの番号も使いません。
 
 ### どのリビジョンを渡すか
 
@@ -35,7 +53,7 @@
 
 ## 実装しているエンドポイント
 
-bitbank Private REST API に対応する互換ルートは次の 7 パス・8 経路です。本文を取る経路は `content-type: application/json` で送ってください。
+bitbank Private REST API に対応する互換ルートは次のとおりです。本文を取る経路は `content-type: application/json` で送ってください。
 
 | メソッド | パス | パラメータ |
 | --- | --- | --- |
@@ -56,7 +74,7 @@ bitbank Private REST API に対応する互換ルートは次の 7 パス・8 �
 
 **`trade_history` は `from_id` / `end_id` を持ちません**（公式 `rest-api.md` のパラメータ表に無いため。送られても黙って無視します。実 API は絞り込みに使うので、同じ要求で結果が変わります。経緯は [`docs/fidelity.md`](docs/fidelity.md) の「絞り込みパラメータの不正値」の節）。
 
-実際に叩く例は [`examples/scenario-plan-a.sh`](examples/scenario-plan-a.sh) にあります。`/_control/` の 5 経路は下の「[`/_control/`](#_control)」節です。
+実際に叩く例は [`examples/scenario-plan-a.sh`](examples/scenario-plan-a.sh) にあります。`/_control/` の経路は下の「[`/_control/`](#_control)」節です。
 
 ## `mock-bitbankcc` との棲み分け
 
@@ -144,7 +162,7 @@ bitbank API には存在しません。本番クライアントから叩かな�
 
 - 公式 testnet / 動作保証 / 全 error code の網羅
 - 認証ヘッダの検証、レート制限、注文訂正
-- ダッシュボード、public REST の網羅、private stream（Phase 5）
+- ダッシュボード、public REST の網羅、private stream
 - 障害注入（重複・順序入替）
 
 計画の詳細は [`docs/plan-lab-mock.md`](docs/plan-lab-mock.md) です。
